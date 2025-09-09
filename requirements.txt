@@ -1,0 +1,13 @@
+aiogram==3.*
+pydantic==2.*
+pydantic-settings==2.*
+SQLAlchemy==2.*
+asyncpg==0.29.*
+alembic==1.*
+redis==5.*
+yookassa==3.*
+fastapi==0.115.*
+uvicorn==0.30.*
+python-dotenv==1.*
+loguru==0.7.*
+aiohttp==3.*
