@@ -1,0 +1,108 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Python Tests
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Сервисы для тестов (PostgreSQL и Redis)
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_DB: crs_vpn_test
+          POSTGRES_USER: crs_user
+          POSTGRES_PASSWORD: crs_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc postgresql-client
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Set up test environment variables
+      run: |
+        echo "BOT_TOKEN=test_token_123456789" >> $GITHUB_ENV
+        echo "ADMINS=123456789" >> $GITHUB_ENV
+        echo "DATABASE_URL=postgresql://crs_user:crs_pass@localhost:5432/crs_vpn_test" >> $GITHUB_ENV
+        echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
+        echo "PYTHONPATH=src" >> $GITHUB_ENV
+
+    - name: Wait for PostgreSQL
+      run: |
+        until pg_isready -h localhost -p 5432 -U crs_user; do
+          echo "Waiting for PostgreSQL..."
+          sleep 2
+        done
+
+    - name: Wait for Redis
+      run: |
+        until redis-cli -h localhost ping; do
+          echo "Waiting for Redis..."
+          sleep 2
+        done
+
+    - name: Apply database migrations
+      run: |
+        PYTHONPATH=src python -m alembic upgrade head
+      env:
+        DATABASE_URL: postgresql://crs_user:crs_pass@localhost:5432/crs_vpn_test
+
+    - name: Test with pytest
+      run: |
+        PYTHONPATH=src pytest -v --tb=short
+      env:
+        DATABASE_URL: postgresql://crs_user:crs_pass@localhost:5432/crs_vpn_test
+        REDIS_URL: redis://localhost:6379/0
+        BOT_TOKEN: test_token_123456789
+        ADMINS: 123456789
+
+    - name: Check connections script
+      run: |
+        PYTHONPATH=src python -m app.scripts.check_connections
+      env:
+        DATABASE_URL: postgresql://crs_user:crs_pass@localhost:5432/crs_vpn_test
+        REDIS_URL: redis://localhost:6379/0
+        BOT_TOKEN: test_token_123456789
+        ADMINS: 123456789
+
