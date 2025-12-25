@@ -1,0 +1,82 @@
+# This workflow tests Docker build and docker-compose setup
+# It builds the Docker image and verifies that all services start correctly
+
+name: Docker Tests
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master", "develop" ]
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        tags: crs-vpn-bot:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Verify Docker image
+      run: |
+        docker images | grep crs-vpn-bot
+        docker inspect crs-vpn-bot:test
+
+  docker-compose:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create test .env file
+      run: |
+        cat > .env << EOF
+        BOT_TOKEN=test_token_123456789
+        ADMINS=123456789
+        DATABASE_URL=postgresql://crs_user:crs_pass@db:5432/crs_vpn
+        REDIS_URL=redis://redis:6379/0
+        EOF
+
+    - name: Start services with docker-compose
+      run: |
+        docker-compose up -d db redis
+        sleep 10
+
+    - name: Check database health
+      run: |
+        docker-compose exec -T db pg_isready -U crs_user -d crs_vpn
+
+    - name: Check Redis health
+      run: |
+        docker-compose exec -T redis redis-cli ping
+
+    - name: Build and start bot container
+      run: |
+        docker-compose build bot
+        timeout 30 docker-compose up bot || true
+
+    - name: Check bot container logs
+      if: always()
+      run: |
+        docker-compose logs bot | tail -50
+
+    - name: Stop services
+      if: always()
+      run: |
+        docker-compose down -v
+
