@@ -1,0 +1,41 @@
+# Пример конфигурации Nginx для pay.crs-projects.com
+# Скопируйте этот файл в /etc/nginx/sites-available/crs-vpn-bot
+# и адаптируйте под ваши нужды
+
+server {
+    listen 80;
+    server_name pay.crs-projects.com;
+
+    # Логирование
+    access_log /var/log/nginx/crs-vpn-bot-access.log;
+    error_log /var/log/nginx/crs-vpn-bot-error.log;
+
+    # Проксирование на FastAPI (порт 8001)
+    location /webhook/yookassa {
+        proxy_pass http://localhost:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Таймауты для webhook'ов
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health check и другие эндпоинты
+    location / {
+        proxy_pass http://localhost:8001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+

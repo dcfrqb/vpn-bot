@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+bot.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+README.md
+LAUNCH_INSTRUCTIONS.md
+QUICK_START.md
+
+# Build artifacts
+*.zip
+*.tar.gz
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bot specific
+bot.pid
+screenshots/
+
+
+
+

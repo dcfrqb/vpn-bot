@@ -1,0 +1,90 @@
+services:
+  db:
+    image: postgres:14
+    container_name: crs_vpn_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crs_vpn}
+      POSTGRES_USER: ${POSTGRES_USER:-crs_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crs_pass}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crs_user} -d ${POSTGRES_DB:-crs_vpn}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: crs_vpn_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crs_vpn_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+        echo '📦 Применение миграций базы данных...' &&
+        PYTHONPATH=/app/src python3 -m alembic upgrade head &&
+        echo '🚀 Запуск Telegram бота...' &&
+        PYTHONPATH=/app/src python3 -m app.main
+      "
+
+  webhook-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crs_vpn_webhook_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - WEBHOOK_API_PORT=${WEBHOOK_API_PORT:-8001}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bot:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "${WEBHOOK_API_PORT:-8001}:8001"
+    command: >
+      sh -c "
+        echo '🚀 Запуск FastAPI webhook сервера...' &&
+        PYTHONPATH=/app/src python3 -m app.api.server
+      "
+
+volumes:
+  db_data:
