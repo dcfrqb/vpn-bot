@@ -103,7 +103,13 @@ def webhook_data_succeeded():
 async def test_create_payment_success(mock_payment_object):
     """Тест успешного создания платежа"""
     with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
-         patch('app.services.payments.yookassa.SessionLocal') as mock_session_local:
+         patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+         patch('app.services.payments.yookassa.settings') as mock_settings:
+        
+        # Мокируем настройки YooKassa
+        mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
+        mock_settings.YOOKASSA_API_KEY = "test_api_key"
+        mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
         
         # Настройка моков
         mock_payment_class.create.return_value = mock_payment_object
@@ -135,7 +141,13 @@ async def test_create_payment_success(mock_payment_object):
 async def test_create_payment_without_db(mock_payment_object):
     """Тест создания платежа без БД"""
     with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
-         patch('app.services.payments.yookassa.SessionLocal', None):
+         patch('app.services.payments.yookassa.SessionLocal', None), \
+         patch('app.services.payments.yookassa.settings') as mock_settings:
+        
+        # Мокируем настройки YooKassa
+        mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
+        mock_settings.YOOKASSA_API_KEY = "test_api_key"
+        mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
         
         mock_payment_class.create.return_value = mock_payment_object
         
@@ -295,7 +307,13 @@ async def test_process_payment_webhook_empty_data():
 @pytest.mark.asyncio
 async def test_check_payment_status_success(mock_succeeded_payment):
     """Тест проверки статуса платежа"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class:
+    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+         patch('app.services.payments.yookassa.settings') as mock_settings:
+        
+        # Мокируем настройки YooKassa
+        mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
+        mock_settings.YOOKASSA_API_KEY = "test_api_key"
+        
         mock_payment_class.find_one.return_value = mock_succeeded_payment
         
         result = await check_payment_status("test_payment_456")
