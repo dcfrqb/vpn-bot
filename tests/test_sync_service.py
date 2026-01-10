@@ -35,21 +35,25 @@ def mock_session():
     session.__aexit__ = AsyncMock(return_value=None)
     return session
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_session_local(mock_session):
-    """Мок SessionLocal как async context manager factory"""
+    """Автоматически мокает SessionLocal для всех тестов"""
     from contextlib import asynccontextmanager
+    from unittest.mock import patch
     
     @asynccontextmanager
     async def _session_context():
         yield mock_session
     
-    def session_local_factory():
-        return _session_context()
+    class SessionLocalFactory:
+        def __call__(self):
+            return _session_context()
+        
+        def __bool__(self):
+            return True
     
-    # SessionLocal должен быть truthy для проверки `if not SessionLocal:`
-    session_local_factory.__bool__ = lambda self: True
-    return session_local_factory
+    with patch('app.services.sync_service.SessionLocal', SessionLocalFactory()):
+        yield
 
 
 @pytest.mark.asyncio
@@ -80,24 +84,7 @@ async def test_sync_existing_user_with_active_subscription(sync_service, mock_re
     )
     
     # Мок репозиториев
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    # Создаем factory, который возвращает async context manager
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()
@@ -161,23 +148,7 @@ async def test_sync_existing_user_with_expired_subscription(sync_service, mock_r
         return_value=(remna_user, remna_subscription)
     )
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()
@@ -220,23 +191,7 @@ async def test_sync_new_user_creation(sync_service, mock_remna_client, mock_sess
     )
     mock_remna_client.create_user_with_name = AsyncMock(return_value=created_remna_user)
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()
@@ -293,23 +248,7 @@ async def test_sync_race_condition_retry(sync_service, mock_remna_client, mock_s
     mock_remna_client.create_user_with_name = AsyncMock(side_effect=create_error)
     mock_remna_client.get_user_by_telegram_id = AsyncMock(return_value=existing_remna_user)
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()
@@ -365,23 +304,7 @@ async def test_sync_remna_unavailable_with_fallback(sync_service, mock_remna_cli
         side_effect=network_error
     )
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         # Мок пользователя в БД
@@ -431,23 +354,7 @@ async def test_sync_user_not_found_in_remna(sync_service, mock_remna_client, moc
     )
     mock_remna_client.create_user_with_name = AsyncMock(return_value=created_remna_user)
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()
@@ -613,23 +520,7 @@ async def test_force_remna_deleted_subscription_returns_none(sync_service, mock_
         return_value=(remna_user, None)
     )
     
-    # SessionLocal должен быть callable и возвращать async context manager
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def _session_context():
-        yield mock_session
-    
-    class SessionLocalFactory:
-        def __call__(self):
-            return _session_context()
-        
-        def __bool__(self):
-            return True
-    
-    session_local_factory = SessionLocalFactory()
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
+    with patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
          patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class:
         
         mock_user_repo = AsyncMock()

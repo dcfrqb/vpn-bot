@@ -96,7 +96,7 @@ async def test_start_handler_fast_response(mock_message):
         
         # Мокируем ViewModel
         from app.ui.viewmodels.main_menu import MainMenuViewModel
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=12345)
         
         # Выполняем handler
         await cmd_start(mock_message)

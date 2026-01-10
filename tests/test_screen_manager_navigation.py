@@ -46,16 +46,16 @@ async def test_back_action_with_backstack(screen_manager, mock_callback_query):
     
     # Мокаем необходимые зависимости
     mock_main_menu_screen = MagicMock()
-    mock_main_menu_screen.create_viewmodel = AsyncMock(return_value=MainMenuViewModel())
+    mock_main_menu_screen.create_viewmodel = AsyncMock(return_value=MainMenuViewModel(user_id=user_id))
     mock_main_menu_screen.render = AsyncMock(return_value="Main Menu")
     mock_main_menu_screen.build_keyboard = AsyncMock(return_value=MagicMock())
     
     with patch.object(screen_manager, 'get_screen', return_value=mock_main_menu_screen), \
          patch.object(screen_manager, 'show_screen', new_callable=AsyncMock) as mock_show, \
-         patch('app.ui.screen_manager.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm:
+         patch('app.ui.helpers.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm:
         
         mock_show.return_value = True
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=user_id)
         
         # Вызываем handle_action с действием "back"
         result = await screen_manager.handle_action(
@@ -79,10 +79,10 @@ async def test_back_action_without_backstack(screen_manager, mock_callback_query
     # Устанавливаем текущий экран, но backstack пуст
     screen_manager._set_current_screen(user_id, ScreenID.SUBSCRIPTION_PLANS)
     
-    with patch('app.ui.screen_manager.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm, \
+    with patch('app.ui.helpers.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm, \
          patch.object(screen_manager, 'show_screen', new_callable=AsyncMock) as mock_show:
         
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=user_id)
         mock_show.return_value = True
         
         result = await screen_manager.handle_action(
@@ -172,15 +172,15 @@ async def test_refresh_action_edits_message(screen_manager, mock_callback_query)
     
     # Мокаем экран MAIN_MENU
     mock_main_menu_screen = MagicMock()
-    mock_main_menu_screen.create_viewmodel = AsyncMock(return_value=MainMenuViewModel())
+    mock_main_menu_screen.create_viewmodel = AsyncMock(return_value=MainMenuViewModel(user_id=user_id))
     mock_main_menu_screen.render = AsyncMock(return_value="Main Menu")
     mock_main_menu_screen.build_keyboard = AsyncMock(return_value=MagicMock())
     
     with patch.object(screen_manager, 'get_screen', return_value=mock_main_menu_screen), \
-         patch('app.ui.screen_manager.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm, \
+         patch('app.ui.helpers.get_main_menu_viewmodel', new_callable=AsyncMock) as mock_get_vm, \
          patch.object(screen_manager, 'show_screen', new_callable=AsyncMock) as mock_show:
         
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=user_id)
         mock_show.return_value = True
         
         result = await screen_manager.handle_action(

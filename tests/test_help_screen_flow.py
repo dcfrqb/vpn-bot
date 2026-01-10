@@ -21,6 +21,7 @@ def mock_callback():
     callback.from_user.username = "testuser"
     callback.data = "ui:help:open:-"
     callback.message = MagicMock(spec=types.Message)
+    callback.message.chat = MagicMock()
     callback.message.chat.id = 12345
     callback.message.message_id = 100
     callback.message.edit_text = AsyncMock()
