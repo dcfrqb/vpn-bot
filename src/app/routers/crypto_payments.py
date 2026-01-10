@@ -912,8 +912,7 @@ async def help_from_crypto(callback: types.CallbackQuery):
     # Показываем помощь через ScreenManager (новый экран)
     from app.ui.screen_manager import get_screen_manager
     # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
-            # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
-            from app.ui.screens import ScreenID
+    from app.ui.screens import ScreenID
     
     screen_manager = get_screen_manager()
     await screen_manager.handle_action(
