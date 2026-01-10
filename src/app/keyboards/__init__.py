@@ -1,16 +1,32 @@
-"""Модуль для создания клавиатур бота"""
+"""
+LEGACY KEYBOARD MODULE - DEPRECATED
+
+DO NOT USE. UI must be rendered via ScreenManager.
+
+This module is kept for backward compatibility with payment flows.
+All new UI code MUST use ui/keyboards/* and ScreenManager.
+
+This module will be removed in a future version.
+"""
+import warnings
 from aiogram import types
 from typing import Optional
 from app.config import is_admin
+
+# Show deprecation warning
+warnings.warn(
+    "app.keyboards is deprecated. Use ui.keyboards and ScreenManager instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def get_main_menu_keyboard(user_id: Optional[int] = None, has_subscription: bool = False) -> types.InlineKeyboardMarkup:
     """Главное меню бота"""
     keyboard = []
     
-    # Для активного пользователя (с подпиской) - кнопка "Подключиться"
-    if has_subscription:
-        keyboard.append([types.InlineKeyboardButton(text="🚀 Подключиться", callback_data="connect_vpn")])
+    # Кнопка "Подключиться" - всегда видна
+    keyboard.append([types.InlineKeyboardButton(text="🚀 Подключиться", callback_data="connect_vpn")])
     
     # Кнопка "Подписка" - всегда есть
     keyboard.append([types.InlineKeyboardButton(text="💳 Подписка", callback_data="buy_subscription")])
@@ -125,6 +141,7 @@ def get_admin_panel_keyboard() -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [types.InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
         [types.InlineKeyboardButton(text="💳 Платежи", callback_data="admin_payments")],
+        [types.InlineKeyboardButton(text="🔗 Панель", url="https://panel.crs-projects.com")],
         [types.InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_main")]
     ])
 
@@ -133,6 +150,15 @@ def get_admin_back_keyboard() -> types.InlineKeyboardMarkup:
     """Клавиатура возврата в админ-панель"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_back")]
+    ])
+
+
+def get_inactive_subscription_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура для сообщения о неактивной подписке"""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📋 Подписка", callback_data="buy_subscription")],
+        [types.InlineKeyboardButton(text="✍️ Написать администратору", url="https://t.me/dcfrq")],
+        [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
     ])
 
 
@@ -197,4 +223,53 @@ def get_subscription_link_keyboard() -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text="🔗 Получить ссылку", callback_data="get_subscription_link")],
         [types.InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_to_main")]
     ])
+
+
+def get_friend_request_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура для подтверждения запроса на доступ"""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Да", callback_data="friend_request_yes")],
+        [types.InlineKeyboardButton(text="❌ Нет", callback_data="friend_request_no")]
+    ])
+
+
+def get_admin_access_request_keyboard(request_id: int) -> types.InlineKeyboardMarkup:
+    """
+    Клавиатура для администратора при обработке запроса на доступ
+    
+    Args:
+        request_id: ID запроса на доступ
+        
+    Returns:
+        InlineKeyboardMarkup с кнопками выбора тарифа и периода
+    """
+    keyboard = [
+        [
+            types.InlineKeyboardButton(
+                text="✅ Basic · 1 месяц",
+                callback_data=f"admin_grant_{request_id}_basic_1"
+            ),
+            types.InlineKeyboardButton(
+                text="⭐ Premium · 1 месяц",
+                callback_data=f"admin_grant_{request_id}_premium_1"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="✅ Basic · 3 месяца",
+                callback_data=f"admin_grant_{request_id}_basic_3"
+            ),
+            types.InlineKeyboardButton(
+                text="⭐ Premium · 3 месяца",
+                callback_data=f"admin_grant_{request_id}_premium_3"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="❌ Отклонить",
+                callback_data=f"admin_reject_{request_id}"
+            )
+        ]
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 

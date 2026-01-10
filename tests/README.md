@@ -5,7 +5,7 @@
 Для запуска всех операций одной командой:
 
 ```bash
-./run_all.sh all
+./scripts/run_all.sh all
 ```
 
 Это выполнит:
@@ -29,7 +29,7 @@ Unit тесты находятся в `tests/test_*.py` и тестируют о
 
 Запуск:
 ```bash
-./run_all.sh test-unit
+./scripts/run_all.sh test-unit
 # или
 make test-unit
 # или
@@ -62,7 +62,7 @@ docker compose exec bot python3 -m pytest tests/ -v -m "not integration"
 
 Запуск:
 ```bash
-./run_all.sh test-integration
+./scripts/run_all.sh test-integration
 # или
 make test-integration
 ```
@@ -109,7 +109,7 @@ docker compose -f docker-compose.test.yml down
 - Порт: `5433` (на хосте), `5432` (внутри Docker сети)
 - Хост: `db_test` (внутри Docker), `localhost` (на хосте)
 
-Тестовая БД создается автоматически при запуске интеграционных тестов через `./run_all.sh test-integration` или `make test-integration`. Миграции применяются автоматически при первом запуске.
+Тестовая БД создается автоматически при запуске интеграционных тестов через `./scripts/run_all.sh test-integration` или `make test-integration`. Миграции применяются автоматически при первом запуске.
 
 Для ручного управления тестовой БД:
 

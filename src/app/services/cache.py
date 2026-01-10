@@ -35,11 +35,13 @@ def get_redis_client():
 
 # Ключи кэша
 CACHE_TTL = 300  # Время жизни кэша в секундах (5 минут) - увеличено для лучшей производительности
+SYNC_CACHE_TTL = 450  # TTL для кэша синхронизации (7.5 минут) - баланс между актуальностью и производительностью
 USER_CACHE_PREFIX = "user:"
 SUBSCRIPTION_CACHE_PREFIX = "sub:"
 USER_SUB_CACHE_PREFIX = "user_sub:"
 PLANS_CACHE_PREFIX = "plans:"
 CONFIG_CACHE_PREFIX = "config:"
+SYNC_CACHE_PREFIX = "sync:user:"  # Кэш результатов синхронизации
 
 
 async def get_cached_user(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -199,6 +201,76 @@ async def set_cached_plans(plans_data: Dict[str, Any], ttl: int = CACHE_TTL):
         logger.debug(f"Ошибка сохранения тарифов в кэш: {e}")
 
 
+async def get_cached_sync_result(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Получает результат синхронизации из кэша.
+    
+    Returns:
+        Dict с полями: telegram_id, remna_uuid, has_subscription, status, expires_at, updated_at
+        или None если кэш пуст
+    """
+    client = get_redis_client()
+    if not client:
+        return None
+    
+    try:
+        key = f"{SYNC_CACHE_PREFIX}{telegram_id}"
+        data = await client.get(key)
+        if data:
+            result = pickle.loads(data)
+            logger.debug(f"SyncResult получен из кэша для пользователя {telegram_id}")
+            return result
+    except Exception as e:
+        logger.debug(f"Ошибка получения SyncResult из кэша для {telegram_id}: {e}")
+    
+    return None
+
+
+async def set_cached_sync_result(telegram_id: int, sync_data: Dict[str, Any], ttl: int = SYNC_CACHE_TTL):
+    """
+    Сохраняет результат синхронизации в кэш.
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        sync_data: Dict с полями: telegram_id, remna_uuid, has_subscription, status, expires_at, updated_at
+        ttl: Время жизни кэша в секундах
+    """
+    client = get_redis_client()
+    if not client:
+        return
+    
+    try:
+        key = f"{SYNC_CACHE_PREFIX}{telegram_id}"
+        # Убеждаемся, что все datetime объекты сериализуемы
+        cache_data = sync_data.copy()
+        if 'expires_at' in cache_data and cache_data['expires_at']:
+            if hasattr(cache_data['expires_at'], 'isoformat'):
+                cache_data['expires_at'] = cache_data['expires_at'].isoformat()
+        if 'updated_at' in cache_data and cache_data['updated_at']:
+            if hasattr(cache_data['updated_at'], 'isoformat'):
+                cache_data['updated_at'] = cache_data['updated_at'].isoformat()
+        
+        data = pickle.dumps(cache_data)
+        await client.setex(key, ttl, data)
+        logger.debug(f"SyncResult сохранен в кэш для пользователя {telegram_id} (TTL: {ttl}с)")
+    except Exception as e:
+        logger.debug(f"Ошибка сохранения SyncResult в кэш для {telegram_id}: {e}")
+
+
+async def invalidate_sync_cache(telegram_id: int):
+    """Инвалидирует кэш синхронизации для пользователя"""
+    client = get_redis_client()
+    if not client:
+        return
+    
+    try:
+        key = f"{SYNC_CACHE_PREFIX}{telegram_id}"
+        await client.delete(key)
+        logger.debug(f"Кэш синхронизации инвалидирован для пользователя {telegram_id}")
+    except Exception as e:
+        logger.debug(f"Ошибка инвалидации кэша синхронизации для {telegram_id}: {e}")
+
+
 async def get_cache_stats() -> Dict[str, Any]:
     """Получает статистику кэша"""
     client = get_redis_client()
@@ -209,6 +281,7 @@ async def get_cache_stats() -> Dict[str, Any]:
         # Подсчитываем ключи кэша
         sub_keys = 0
         user_keys = 0
+        sync_keys = 0
         cursor = 0
         
         while True:
@@ -224,11 +297,19 @@ async def get_cache_stats() -> Dict[str, Any]:
             if cursor == 0:
                 break
         
+        cursor = 0
+        while True:
+            cursor, keys = await client.scan(cursor, match=f"{SYNC_CACHE_PREFIX}*", count=100)
+            sync_keys += len(keys)
+            if cursor == 0:
+                break
+        
         return {
             "enabled": True,
             "subscription_keys": sub_keys,
             "user_keys": user_keys,
-            "total_keys": sub_keys + user_keys
+            "sync_keys": sync_keys,
+            "total_keys": sub_keys + user_keys + sync_keys
         }
     except Exception as e:
         logger.debug(f"Ошибка при получении статистики кэша: {e}")

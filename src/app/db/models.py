@@ -217,3 +217,68 @@ class Node(Base):
         server_onupdate=func.now()
     )
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AccessRequest(Base):
+    """Запросы на выдачу VPN-доступа администратором"""
+    __tablename__ = "access_requests"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    
+    # Связь с пользователем
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Telegram ID пользователя, запросившего доступ"
+    )
+    
+    # Данные пользователя на момент запроса
+    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="Имя пользователя")
+    username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="Username пользователя")
+    
+    # Статус запроса
+    status: Mapped[str] = mapped_column(
+        String(16), 
+        default="pending", 
+        nullable=False, 
+        index=True,
+        comment="Статус: pending, approved, rejected"
+    )
+    
+    # Временные метки
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime, 
+        default=func.now(), 
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="Время создания запроса"
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, 
+        nullable=True,
+        comment="Время одобрения/отклонения запроса"
+    )
+    
+    # Администратор, обработавший запрос
+    approved_by: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        nullable=True,
+        index=True,
+        comment="Telegram ID администратора, обработавшего запрос"
+    )
+    
+    # Метаданные
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+        server_onupdate=func.now()
+    )
+    
+    # Связи
+    telegram_user: Mapped["TelegramUser"] = relationship("TelegramUser", foreign_keys=[telegram_id])

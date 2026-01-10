@@ -22,12 +22,12 @@ async def get_squad_name_for_plan(plan_code: Optional[str]) -> Optional[str]:
     
     plan_code_lower = plan_code.lower()
     if plan_code_lower == 'basic':
-        return 'base'
+        return 'basic'  # Исправлено: было 'base', должно быть 'basic'
     elif plan_code_lower == 'premium':
         return 'premium'
     elif plan_code_lower == 'trial':
         # Пробный период использует базовый сквад
-        return 'base'
+        return 'basic'  # Исправлено: было 'base', должно быть 'basic'
     
     return None
 
@@ -293,12 +293,14 @@ async def handle_successful_payment(
     description: str,
     bot
 ) -> None:
-    # Инвалидируем кэш подписки при успешном платеже
+    # Инвалидируем кэш подписки и синхронизации при успешном платеже
     try:
-        from app.services.cache import invalidate_subscription_cache
+        from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
         await invalidate_subscription_cache(telegram_user_id)
-    except:
-        pass
+        await invalidate_sync_cache(telegram_user_id)
+        logger.debug(f"Кэш инвалидирован для пользователя {telegram_user_id} после успешного платежа")
+    except Exception as e:
+        logger.debug(f"Ошибка инвалидации кэша: {e}")
     """Обрабатывает успешный платеж создает подписку и отправляет пользователю ссылку"""
     try:
         # Сначала пытаемся получить тариф и период из payment_metadata
@@ -508,6 +510,22 @@ async def get_or_create_remna_user_and_get_subscription_url(
             
             try:
                 if telegram_user.remna_user_id:
+                    # Если пользователь уже существует, обновляем сквад согласно текущей подписке
+                    squad_name = await get_squad_name_for_plan(subscription.plan_code)
+                    if squad_name:
+                        try:
+                            squad = await client.get_squad_by_name(squad_name)
+                            if squad:
+                                squad_uuid = squad.get('uuid')
+                                logger.info(f"📝 Обновляю сквад для существующего пользователя {telegram_user.remna_user_id}: {squad_name}")
+                                try:
+                                    await client.update_user(str(telegram_user.remna_user_id), activeInternalSquads=[squad_uuid])
+                                    logger.info(f"✅ Сквад обновлен в Remna для пользователя {telegram_user.remna_user_id}")
+                                except Exception as squad_update_e:
+                                    logger.warning(f"⚠️ Не удалось обновить сквад для пользователя {telegram_user.remna_user_id}: {squad_update_e}")
+                        except Exception as squad_e:
+                            logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
+                    
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
                     if subscription_url:
                         # Закрываем клиент перед возвратом

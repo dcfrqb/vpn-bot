@@ -19,11 +19,8 @@ router = Router(name="payments")
 @router.callback_query(F.data.startswith("pay_yookassa_"))
 async def handle_yookassa_payment(callback: types.CallbackQuery):
     """Обработчик выбора оплаты через Yookassa"""
-    # Отвечаем сразу
-    await callback.answer()
-    
-    # Показываем сообщение о создании платежа
-    loading_msg = await callback.message.edit_text("⏳ Создаю платеж...")
+    # Мгновенный фидбек через callback.answer()
+    await callback.answer("⏳ Создаю платеж...")
     
     try:
         # Парсим callback_data: pay_yookassa_{plan_code}_{period_months}_{amount}
@@ -43,13 +40,13 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
                 amount_rub = 199
                 period_months = 1
             else:
-                await loading_msg.edit_text(
+                await callback.message.edit_text(
                     "❌ Неизвестный тариф",
                     reply_markup=get_back_to_plans_keyboard()
                 )
                 return
         else:
-            await loading_msg.edit_text(
+            await callback.message.edit_text(
                 "❌ Неверный формат данных",
                 reply_markup=get_back_to_plans_keyboard()
             )
@@ -61,7 +58,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         elif plan_code == "premium":
             plan_name = "Премиум тариф"
         else:
-            await loading_msg.edit_text(
+            await callback.message.edit_text(
                 "❌ Неизвестный тариф",
                 reply_markup=get_back_to_plans_keyboard()
             )
@@ -75,7 +72,8 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
             user_id=callback.from_user.id
         )
         
-        await loading_msg.edit_text(
+        # Обновляем сообщение с результатом (без мусорных loading сообщений)
+        await callback.message.edit_text(
             f"💳 <b>{plan_name} - {period_text}</b>\n"
             f"💰 <b>Сумма:</b> {amount_rub}₽\n\n"
             "🔗 <b>Для оплаты перейдите по ссылке:</b>\n"
@@ -106,7 +104,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
                 "Попробуйте позже или обратитесь в поддержку."
             )
         
-        await loading_msg.edit_text(
+        await callback.message.edit_text(
             user_message,
             reply_markup=get_back_to_plans_keyboard()
         )
@@ -114,7 +112,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         logger.error(f"Ошибка создания платежа Yookassa: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-        await loading_msg.edit_text(
+        await callback.message.edit_text(
             "❌ <b>Ошибка создания платежа</b>\n\n"
             "Произошла ошибка при создании платежа. Попробуйте позже или обратитесь в поддержку.",
             reply_markup=get_back_to_plans_keyboard()
@@ -125,7 +123,8 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
 async def get_subscription_link(callback: types.CallbackQuery):
     """Обработчик кнопки получения ссылки подписки"""
     logger.info(f"Пользователь {callback.from_user.id} запросил ссылку подписки")
-    await callback.answer()  # Отвечаем сразу
+    # Даем мгновенный фидбек через callback.answer()
+    await callback.answer("⏳ Получаем ссылку подписки...")
     
     try:
         # Используем кэш для быстрого ответа
@@ -309,24 +308,34 @@ async def get_subscription_link(callback: types.CallbackQuery):
                     logger.error(f"❌ Ошибка при восстановлении из БД: {e}")
         
         if subscription_url and subscription_url.strip():
+            from app.utils.html import escape_html
             message_text = (
                 "🚀 <b>Ссылка для подключения VPN</b>\n\n"
                 "Используйте эту ссылку для настройки VPN на вашем устройстве:\n\n"
-                f"<code>{subscription_url}</code>\n\n"
+                f"<code>{escape_html(subscription_url)}</code>\n\n"
                 "💡 <b>Как использовать:</b>\n\n"
                 "<b>Вариант 1:</b>\n"
+                "<blockquote>\n"
                 "1. Откройте ссылку\n"
                 "2. Скачайте подходящий VPN клиент\n"
-                "3. Импортируйте подписку\n\n"
+                "3. Импортируйте подписку\n"
+                "</blockquote>\n\n"
                 "<b>Вариант 2:</b>\n"
+                "<blockquote>\n"
                 "1. Скопируйте ссылку подписки\n"
-                "2. Вставьте ее в VPN клиент"
+                "2. Вставьте ее в VPN клиент\n"
+                "</blockquote>"
             )
             
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            from app.ui.callbacks import build_cb
+            from app.ui.screens import ScreenID
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Открыть ссылку", url=subscription_url)],
-                [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_to_main")]
+                [InlineKeyboardButton(
+                    text="⬅️ В главное меню",
+                    callback_data=build_cb(ScreenID.CONNECT, "back")
+                )]
             ])
             
             await callback.message.edit_text(

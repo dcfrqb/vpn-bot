@@ -59,11 +59,17 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     from app.routers.payments import router as payments_router
     from app.routers.admin import router as admin_router
     from app.routers.crypto_payments import router as crypto_payments_router
+    from app.routers.ui import router as ui_router
+    from app.routers.legacy_callbacks import router as legacy_router
     
+    # UI router должен быть первым для обработки ui: callbacks
+    dp.include_router(ui_router)
+    # Legacy router должен быть последним (catch-all для старых форматов)
     dp.include_router(start_router)
     dp.include_router(payments_router)
     dp.include_router(crypto_payments_router)
     dp.include_router(admin_router)
+    dp.include_router(legacy_router)  # В конце для обратной совместимости
     logger.info("Роутеры подключены")
 
     return dp

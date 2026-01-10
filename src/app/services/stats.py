@@ -84,7 +84,14 @@ async def get_statistics() -> Dict[str, Any]:
 
 
 async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
-    """Получает список пользователей с пагинацией"""
+    """
+    Получает список пользователей с пагинацией
+    
+    ОПТИМИЗАЦИЯ: Использует LEFT JOIN для избежания N+1 запросов
+    """
+    import time
+    query_start = time.monotonic()
+    
     if not SessionLocal:
         return {
             "users": [],
@@ -95,45 +102,74 @@ async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
         }
     
     async with SessionLocal() as session:
+        now = datetime.utcnow()
+        
+        # Оптимизация: один запрос с LEFT JOIN вместо N+1
+        # Используем подзапрос для получения последней активной подписки каждого пользователя
+        from sqlalchemy import outerjoin
+        
+        # Подзапрос для получения последней активной подписки каждого пользователя
+        subquery = (
+            select(
+                Subscription.telegram_user_id,
+                Subscription.plan_code,
+                Subscription.created_at,
+                func.row_number().over(
+                    partition_by=Subscription.telegram_user_id,
+                    order_by=Subscription.created_at.desc()
+                ).label('rn')
+            )
+            .where(
+                Subscription.active == True,
+                (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now)
+            )
+            .subquery()
+        )
+        
+        # Основной запрос с LEFT JOIN
         total_result = await session.execute(
             select(func.count(TelegramUser.telegram_id))
         )
         total = total_result.scalar() or 0
         
         offset = (page - 1) * page_size
-        users_result = await session.execute(
-            select(TelegramUser)
+        
+        # Запрос пользователей с подписками одним JOIN
+        users_with_subs = (
+            select(
+                TelegramUser,
+                subquery.c.plan_code.label('subscription_plan')
+            )
+            .outerjoin(
+                subquery,
+                and_(
+                    TelegramUser.telegram_id == subquery.c.telegram_user_id,
+                    subquery.c.rn == 1
+                )
+            )
             .order_by(TelegramUser.created_at.desc())
             .limit(page_size)
             .offset(offset)
         )
-        users = users_result.scalars().all()
+        
+        result = await session.execute(users_with_subs)
+        rows = result.all()
         
         users_data = []
-        for user in users:
-            now = datetime.utcnow()
-            sub_result = await session.execute(
-                select(Subscription)
-                .where(
-                    Subscription.telegram_user_id == user.telegram_id,
-                    Subscription.active == True,
-                    (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now)
-                )
-                .order_by(Subscription.created_at.desc())
-                .limit(1)
-            )
-            active_sub = sub_result.scalar_one_or_none()
-            
+        for user, subscription_plan in rows:
             users_data.append({
                 "telegram_id": user.telegram_id,
                 "username": user.username or "без username",
                 "first_name": user.first_name or "",
                 "is_admin": user.is_admin,
-                "has_active_subscription": active_sub is not None,
-                "subscription_plan": active_sub.plan_code if active_sub else None,
+                "has_active_subscription": subscription_plan is not None,
+                "subscription_plan": subscription_plan,
                 "created_at": user.created_at,
                 "last_activity": user.last_activity_at
             })
+        
+        query_duration = (time.monotonic() - query_start) * 1000
+        logger.debug(f"[PERF] get_users_list page={page} duration={query_duration:.2f}ms users={len(users_data)}")
         
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
         
@@ -147,7 +183,14 @@ async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
 
 
 async def get_payments_list(page: int = 1, page_size: int = 10, status: str = None) -> Dict[str, Any]:
-    """Получает список платежей с пагинацией и фильтрацией"""
+    """
+    Получает список платежей с пагинацией и фильтрацией
+    
+    ОПТИМИЗАЦИЯ: Использует JOIN для избежания N+1 запросов
+    """
+    import time
+    query_start = time.monotonic()
+    
     if not SessionLocal:
         return {
             "payments": [],
@@ -158,7 +201,11 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
         }
     
     async with SessionLocal() as session:
-        base_query = select(Payment)
+        # Оптимизация: JOIN вместо N+1 запросов
+        base_query = (
+            select(Payment, TelegramUser.username)
+            .outerjoin(TelegramUser, Payment.telegram_user_id == TelegramUser.telegram_id)
+        )
         
         if status:
             base_query = base_query.where(Payment.status == status)
@@ -177,19 +224,14 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
             .limit(page_size)
             .offset(offset)
         )
-        payments = payments_result.scalars().all()
+        rows = payments_result.all()
         
         payments_data = []
-        for payment in payments:
-            user_result = await session.execute(
-                select(TelegramUser).where(TelegramUser.telegram_id == payment.telegram_user_id)
-            )
-            user = user_result.scalar_one_or_none()
-            
+        for payment, username in rows:
             payments_data.append({
                 "id": payment.id,
                 "telegram_user_id": payment.telegram_user_id,
-                "username": user.username if user else "неизвестно",
+                "username": username if username else "неизвестно",
                 "amount": float(payment.amount),
                 "currency": payment.currency,
                 "status": payment.status,
@@ -200,6 +242,9 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
                 "paid_at": payment.paid_at
             })
         
+        query_duration = (time.monotonic() - query_start) * 1000
+        logger.debug(f"[PERF] get_payments_list page={page} status={status} duration={query_duration:.2f}ms payments={len(payments_data)}")
+        
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
         
         return {
@@ -209,5 +254,46 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
             "page_size": page_size,
             "total_pages": total_pages,
             "status_filter": status
+        }
+
+
+async def get_user_payment_stats(telegram_id: int) -> Dict[str, Any]:
+    """
+    Получает статистику платежей пользователя
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        
+    Returns:
+        Dict с ключами:
+        - total_payments: количество успешных платежей
+        - total_spent: общая сумма потраченных средств
+    """
+    if not SessionLocal:
+        return {
+            "total_payments": 0,
+            "total_spent": 0.0
+        }
+    
+    async with SessionLocal() as session:
+        payments_result = await session.execute(
+            select(func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0))
+            .where(
+                Payment.telegram_user_id == telegram_id,
+                Payment.status == "succeeded"
+            )
+        )
+        result = payments_result.first()
+        
+        if result:
+            total_payments = result[0] or 0
+            total_spent = float(result[1] or 0)
+        else:
+            total_payments = 0
+            total_spent = 0.0
+        
+        return {
+            "total_payments": total_payments,
+            "total_spent": total_spent
         }
 

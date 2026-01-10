@@ -45,27 +45,25 @@ async def test_get_users_list():
         mock_session_local.return_value.__aenter__.return_value = mock_session
         
         # Мокируем пользователей
-        user1 = TelegramUser(telegram_id=1, username="user1")
-        user2 = TelegramUser(telegram_id=2, username="user2")
+        user1 = TelegramUser(telegram_id=1, username="user1", first_name="User", is_admin=False)
+        user2 = TelegramUser(telegram_id=2, username="user2", first_name="User2", is_admin=False)
         
+        # Мокируем результаты запросов
+        # Первый запрос - count
         mock_total_result = MagicMock()
         mock_total_result.scalar.return_value = 2
         
+        # Второй запрос - users_with_subs (JOIN запрос возвращает кортежи (user, subscription_plan))
         mock_users_result = MagicMock()
-        mock_users_result.scalars.return_value.all.return_value = [user1, user2]
-        
-        # Мокируем подписки для каждого пользователя
-        mock_sub_result = MagicMock()
-        mock_sub_result.scalar_one_or_none.side_effect = [
-            None,  # для user1 нет подписки
-            Subscription(plan_code="premium", active=True)  # для user2 есть подписка
+        # JOIN возвращает кортежи: (TelegramUser, subscription_plan)
+        mock_users_result.all.return_value = [
+            (user1, None),  # user1 без подписки
+            (user2, "premium")  # user2 с подпиской premium
         ]
         
         mock_session.execute.side_effect = [
-            mock_total_result,  # count
-            mock_users_result,  # users
-            mock_sub_result,    # subscription для user1
-            mock_sub_result,    # subscription для user2
+            mock_total_result,  # count запрос
+            mock_users_result,  # users_with_subs JOIN запрос
         ]
         
         result = await get_users_list(page=1, page_size=10)
@@ -74,6 +72,8 @@ async def test_get_users_list():
         assert len(result["users"]) == 2
         assert result["page"] == 1
         assert result["users"][0]["telegram_id"] == 1
+        assert result["users"][0]["has_active_subscription"] is False
+        assert result["users"][1]["telegram_id"] == 2
         assert result["users"][1]["has_active_subscription"] is True
 
 
@@ -104,23 +104,22 @@ async def test_get_payments_list():
             external_id="test_2"
         )
         
-        user1 = TelegramUser(telegram_id=123456789, username="user1")
-        user2 = TelegramUser(telegram_id=987654321, username="user2")
-        
+        # Мокируем результаты запросов
+        # Первый запрос - count
         mock_total_result = MagicMock()
         mock_total_result.scalar.return_value = 2
         
+        # Второй запрос - payments_with_users (JOIN запрос возвращает кортежи (payment, username))
         mock_payments_result = MagicMock()
-        mock_payments_result.scalars.return_value.all.return_value = [payment1, payment2]
-        
-        mock_user_result = MagicMock()
-        mock_user_result.scalar_one_or_none.side_effect = [user1, user2]
+        # JOIN возвращает кортежи: (Payment, username)
+        mock_payments_result.all.return_value = [
+            (payment1, "user1"),  # payment1 с username
+            (payment2, "user2")   # payment2 с username
+        ]
         
         mock_session.execute.side_effect = [
-            mock_total_result,      # count
-            mock_payments_result,   # payments
-            mock_user_result,       # user для payment1
-            mock_user_result,       # user для payment2
+            mock_total_result,      # count запрос
+            mock_payments_result,   # payments_with_users JOIN запрос
         ]
         
         result = await get_payments_list(page=1, page_size=10)
@@ -129,7 +128,9 @@ async def test_get_payments_list():
         assert len(result["payments"]) == 2
         assert result["payments"][0]["amount"] == 99.0
         assert result["payments"][0]["status"] == "succeeded"
+        assert result["payments"][0]["username"] == "user1"
         assert result["payments"][1]["status"] == "pending"
+        assert result["payments"][1]["username"] == "user2"
 
 
 @pytest.mark.asyncio
@@ -149,21 +150,19 @@ async def test_get_payments_list_with_filter():
             external_id="test_1"
         )
         
-        user = TelegramUser(telegram_id=123456789, username="user1")
-        
+        # Мокируем результаты запросов
         mock_total_result = MagicMock()
         mock_total_result.scalar.return_value = 1
         
+        # JOIN запрос возвращает кортежи (payment, username)
         mock_payments_result = MagicMock()
-        mock_payments_result.scalars.return_value.all.return_value = [payment]
-        
-        mock_user_result = MagicMock()
-        mock_user_result.scalar_one_or_none.return_value = user
+        mock_payments_result.all.return_value = [
+            (payment, "user1")
+        ]
         
         mock_session.execute.side_effect = [
-            mock_total_result,
-            mock_payments_result,
-            mock_user_result,
+            mock_total_result,      # count запрос
+            mock_payments_result,   # payments_with_users JOIN запрос
         ]
         
         result = await get_payments_list(page=1, page_size=10, status="succeeded")
@@ -171,6 +170,7 @@ async def test_get_payments_list_with_filter():
         assert result["total"] == 1
         assert result["status_filter"] == "succeeded"
         assert result["payments"][0]["status"] == "succeeded"
+        assert result["payments"][0]["username"] == "user1"
 
 
 

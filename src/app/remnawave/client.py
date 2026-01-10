@@ -1,20 +1,92 @@
 import asyncio
 import httpx
 from typing import Optional, Dict, Any
+from datetime import datetime
+from dataclasses import dataclass
 from app.config import settings
 from app.logger import logger
 
 
+@dataclass
+class RemnaUser:
+    """DTO для пользователя Remna"""
+    uuid: str  # remna_id
+    telegram_id: Optional[int]
+    username: Optional[str]
+    name: Optional[str]  # display name или username
+    raw_data: Dict[str, Any]  # полные данные из API
+
+
+@dataclass
+class RemnaSubscription:
+    """DTO для подписки Remna"""
+    active: bool
+    expires_at: Optional[datetime]  # expireAt из API
+    plan: Optional[str]  # тариф, если доступен
+    raw_data: Dict[str, Any]  # полные данные из API
+
+
+# Глобальный переиспользуемый HTTP клиент для connection pooling
+_shared_http_client: Optional[httpx.AsyncClient] = None
+
+
+def get_shared_http_client() -> httpx.AsyncClient:
+    """Получает переиспользуемый HTTP клиент с connection pooling"""
+    global _shared_http_client
+    if _shared_http_client is None:
+        # Используем connection pooling для лучшей производительности
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        _shared_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),  # 30s общий, 10s на подключение
+            limits=limits
+            # HTTP/2 отключен (требует пакет h2, не критично для работы)
+        )
+        logger.info("Создан переиспользуемый HTTP клиент для Remna API с connection pooling")
+    return _shared_http_client
+
+
+async def close_shared_http_client():
+    """Закрывает глобальный HTTP клиент (для cleanup)"""
+    global _shared_http_client
+    if _shared_http_client:
+        await _shared_http_client.aclose()
+        _shared_http_client = None
+        logger.info("Закрыт переиспользуемый HTTP клиент для Remna API")
+
+
 class RemnaClient:
-    def __init__(self, max_retries: int = 3, initial_delay: float = 1.0, max_delay: float = 60.0):
-        """Инициализирует клиент Remna API"""
+    def __init__(self, max_retries: int = 3, initial_delay: float = 1.0, max_delay: float = 60.0, 
+                 use_shared_client: bool = True):
+        """
+        Инициализирует клиент Remna API
+        
+        Args:
+            max_retries: Максимальное количество повторных попыток
+            initial_delay: Начальная задержка между попытками (секунды)
+            max_delay: Максимальная задержка между попытками (секунды)
+            use_shared_client: Использовать ли переиспользуемый HTTP клиент (connection pooling)
+        """
         base_url = settings.remna_base_url or settings.REMNA_API_BASE
         self.base_url = str(base_url).rstrip("/") if base_url else None
         self.api_key = settings.remna_api_token or settings.REMNA_API_KEY
-        self.client = httpx.AsyncClient(timeout=30.0)
         self.max_retries = max_retries
         self.initial_delay = initial_delay
         self.max_delay = max_delay
+        self.use_shared_client = use_shared_client
+        self._own_client: Optional[httpx.AsyncClient] = None
+    
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """Получает HTTP клиент (переиспользуемый или собственный)"""
+        if self.use_shared_client:
+            return get_shared_http_client()
+        else:
+            if self._own_client is None:
+                self._own_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(30.0, connect=10.0),
+                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+                )
+            return self._own_client
 
     async def request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Выполняет HTTP запрос к API Remna с использованием API токена и retry механизмом"""
@@ -74,15 +146,26 @@ class RemnaClient:
                     continue
                 else:
                     logger.error(f"Ошибка запроса после {self.max_retries} попыток: {e}")
-                    raise
+                    # Используем InfraError для сетевых ошибок и таймаутов
+                    raise InfraError(
+                        message=f"Ошибка подключения к Remna API: {str(e)}",
+                        service="remna",
+                        details=f"URL: {url}, Attempts: {self.max_retries + 1}"
+                    ) from e
         
         if last_exception:
-            raise last_exception
+            raise InfraError(
+                message=f"Ошибка подключения к Remna API после {self.max_retries + 1} попыток",
+                service="remna",
+                details=str(last_exception)
+            ) from last_exception
         raise RuntimeError("Неожиданная ошибка в retry механизме")
 
     async def close(self):
-        """Закрывает HTTP клиент"""
-        await self.client.aclose()
+        """Закрывает HTTP клиент (только если это собственный клиент)"""
+        if not self.use_shared_client and self._own_client:
+            await self._own_client.aclose()
+            self._own_client = None
 
     async def get_api_tokens(self) -> Dict[str, Any]:
         """Получить список API токенов"""
@@ -126,6 +209,82 @@ class RemnaClient:
             payload["activeInternalSquads"] = active_internal_squads
         return await self.request("POST", "/api/users", json=payload)
 
+    async def create_user_with_name(self, telegram_id: int, name: str) -> RemnaUser:
+        """
+        Создать пользователя в Remna с telegram_id и именем.
+        Генерирует username и password автоматически.
+        
+        Returns:
+            RemnaUser созданного пользователя
+            
+        Raises:
+            httpx.HTTPStatusError: если пользователь уже существует или другая ошибка API
+        """
+        # Генерируем username из telegram_id (уникальный)
+        username = f"tg_{telegram_id}"
+        # Генерируем случайный пароль (Remna требует пароль)
+        import secrets
+        password = secrets.token_urlsafe(16)
+        
+        try:
+            response = await self.create_user(
+                username=username,
+                password=password,
+                telegram_id=telegram_id
+            )
+            
+            logger.debug(f"Ответ Remna API при создании пользователя {telegram_id}: {type(response)}, keys: {list(response.keys()) if isinstance(response, dict) else 'not dict'}")
+            
+            # Извлекаем данные созданного пользователя
+            user_data = response.get('response', response) if isinstance(response, dict) else response
+            
+            if not isinstance(user_data, dict):
+                logger.error(f"Неожиданный формат ответа от Remna API: {type(user_data)}, значение: {user_data}")
+                raise ValueError(f"Неожиданный формат ответа от Remna API: ожидался dict, получен {type(user_data)}")
+            
+            uuid = user_data.get('uuid') or user_data.get('id') or user_data.get('_id')
+            if not uuid:
+                logger.error(f"Не удалось получить uuid из ответа Remna API. Ответ: {response}, user_data: {user_data}")
+                raise ValueError(f"Не удалось получить uuid созданного пользователя из ответа: {response}")
+            
+            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, username={username}")
+            
+            return RemnaUser(
+                uuid=str(uuid),
+                telegram_id=telegram_id,
+                username=username,
+                name=name,
+                raw_data=user_data
+            )
+            
+        except httpx.HTTPStatusError as e:
+            # Если пользователь уже существует (409 или подобное)
+            if e.response.status_code in (409, 400):
+                error_text = e.response.text.lower()
+                if 'already exists' in error_text or 'duplicate' in error_text or 'exists' in error_text:
+                    # Пытаемся найти существующего пользователя
+                    logger.warning(f"Пользователь с telegram_id={telegram_id} уже существует, ищем его...")
+                    try:
+                        existing_user = await self.get_user_by_telegram_id(telegram_id)
+                        if existing_user:
+                            logger.info(f"Найден существующий пользователь: uuid={existing_user.uuid}")
+                            return existing_user
+                        else:
+                            logger.warning(f"Пользователь не найден после конфликта, пробрасываем ошибку")
+                    except Exception as find_error:
+                        logger.error(f"Ошибка при поиске пользователя после конфликта: {find_error}")
+            # Пробрасываем ошибку дальше
+            logger.error(f"HTTP ошибка при создании пользователя {telegram_id}: {e.response.status_code}, текст: {e.response.text}")
+            raise
+        except Exception as e:
+            # Логируем любые другие ошибки
+            import traceback
+            logger.error(
+                f"Неожиданная ошибка при создании пользователя {telegram_id}: {e}\n"
+                f"Traceback: {traceback.format_exc()}"
+            )
+            raise
+
     async def delete_user(self, user_id: str) -> Dict[str, Any]:
         """Удалить пользователя"""
         return await self.request("DELETE", f"/api/users/{user_id}")
@@ -133,6 +292,171 @@ class RemnaClient:
     async def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """Получить пользователя по ID"""
         return await self.request("GET", f"/api/users/{user_id}")
+
+    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[RemnaUser]:
+        """
+        Получить пользователя Remna по telegram_id.
+        Ищет через /api/users, перебирая все страницы.
+        
+        Returns:
+            RemnaUser если найден, None если не найден
+        """
+        try:
+            page_size = 100
+            start = 1
+            total_checked = 0
+            max_pages = 50  # Ограничиваем поиск 50 страницами (5000 пользователей)
+            
+            logger.info(f"🔍 Начинаю поиск пользователя с telegram_id={telegram_id} в Remna API...")
+            
+            while start <= max_pages * page_size:
+                try:
+                    response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
+                    
+                    # Обрабатываем разные форматы ответа
+                    users = []
+                    if isinstance(response, list):
+                        users = response
+                    elif isinstance(response, dict):
+                        response_obj = response.get('response', {})
+                        users = response_obj.get('users', 
+                            response_obj.get('items', 
+                                response.get('items', 
+                                    response.get('data', []))))
+                    
+                    total_checked += len(users)
+                    page_num = (start - 1) // page_size + 1
+                    
+                    # Логируем только первую страницу кратко (без детального списка всех пользователей)
+                    if page_num == 1 and len(users) > 0:
+                        all_telegram_ids = []
+                        for u in users:
+                            tg_id = u.get('telegramId') or u.get('telegram_id')
+                            if tg_id:
+                                all_telegram_ids.append(int(tg_id))
+                        logger.debug(f"📄 Страница {page_num}: {len(users)} пользователей, {len(all_telegram_ids)} с telegramId")
+                        # Логируем только если искомый ID найден в списке
+                        if telegram_id in all_telegram_ids:
+                            logger.info(f"✅ Искомый telegram_id={telegram_id} найден в списке на странице {page_num}")
+                    
+                    # Ищем пользователя по telegramId - проверяем ВСЕХ пользователей
+                    for idx, user_data in enumerate(users):
+                        user_telegram_id = user_data.get('telegramId') or user_data.get('telegram_id')
+                        
+                        if user_telegram_id is not None:
+                            try:
+                                # Приводим к int для сравнения
+                                user_tg_id_int = int(user_telegram_id)
+                                if user_tg_id_int == telegram_id:
+                                    # Нашли пользователя!
+                                    uuid = user_data.get('uuid') or user_data.get('id') or user_data.get('_id')
+                                    if not uuid:
+                                        logger.warning(f"⚠️ Найден пользователь с telegram_id={telegram_id}, но нет uuid: {user_data}")
+                                        continue
+                                    
+                                    username = user_data.get('username')
+                                    name = user_data.get('name') or user_data.get('displayName') or username
+                                    
+                                    logger.info(f"✅ Найден пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, username={username}, страница={page_num}, позиция={idx+1}")
+                                    return RemnaUser(
+                                        uuid=str(uuid),
+                                        telegram_id=telegram_id,
+                                        username=username,
+                                        name=name,
+                                        raw_data=user_data
+                                    )
+                            except (ValueError, TypeError) as e:
+                                logger.debug(f"Ошибка парсинга telegram_id: {e}, user_telegram_id={user_telegram_id}")
+                    
+                    # Если список пуст - больше страниц нет
+                    if not users:
+                        logger.debug(f"📄 Страница {page_num} пуста, завершаю поиск")
+                        break
+                    
+                    # Если список меньше page_size - это последняя страница
+                    if len(users) < page_size:
+                        logger.debug(f"📄 Страница {page_num} содержит {len(users)} пользователей (меньше {page_size}), это последняя страница")
+                        break
+                    
+                    start += page_size
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        logger.debug(f"📄 Страница {start} не найдена (404), завершаю поиск")
+                        break
+                    raise
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при поиске пользователя по telegram_id={telegram_id} на странице {start}: {e}")
+                    raise
+            
+            pages_checked = (start - 1) // page_size if start > 1 else 0
+            logger.warning(f"❌ Пользователь с telegram_id={telegram_id} не найден в Remna после проверки {total_checked} пользователей на {pages_checked + 1} страницах")
+            return None
+            
+        except httpx.RequestError as e:
+            logger.error(f"Ошибка сети при поиске пользователя по telegram_id={telegram_id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при поиске пользователя по telegram_id={telegram_id}: {e}")
+            raise
+
+    async def get_user_with_subscription_by_telegram_id(self, telegram_id: int) -> Optional[tuple[RemnaUser, Optional[RemnaSubscription]]]:
+        """
+        Получить пользователя Remna и его подписку по telegram_id.
+        Возвращает кортеж (RemnaUser, RemnaSubscription | None).
+        """
+        remna_user = await self.get_user_by_telegram_id(telegram_id)
+        if not remna_user:
+            return None
+        
+        # Извлекаем информацию о подписке из raw_data пользователя
+        subscription = None
+        raw_data = remna_user.raw_data
+        
+        # Проверяем наличие подписки в данных пользователя
+        expire_at_raw = raw_data.get('expireAt') or raw_data.get('expires_at') or raw_data.get('valid_until')
+        expire_dt = None
+        is_active = False
+        
+        if expire_at_raw:
+            try:
+                # Парсим дату (может быть ISO строка или timestamp)
+                if isinstance(expire_at_raw, str):
+                    # Убираем Z и заменяем на +00:00 для fromisoformat
+                    expire_str = expire_at_raw.replace('Z', '+00:00')
+                    # Если нет таймзоны, добавляем UTC
+                    if '+' not in expire_str and '-' not in expire_str[-6:]:
+                        expire_str += '+00:00'
+                    expire_dt = datetime.fromisoformat(expire_str)
+                    # Конвертируем в UTC если нужно
+                    if expire_dt.tzinfo:
+                        expire_dt = expire_dt.replace(tzinfo=None)
+                elif isinstance(expire_at_raw, (int, float)):
+                    expire_dt = datetime.fromtimestamp(expire_at_raw)
+                elif isinstance(expire_at_raw, datetime):
+                    expire_dt = expire_at_raw
+                    if expire_dt.tzinfo:
+                        expire_dt = expire_dt.replace(tzinfo=None)
+                
+                # Подписка активна, если expireAt в будущем
+                if expire_dt:
+                    is_active = expire_dt > datetime.utcnow()
+            except Exception as e:
+                logger.warning(f"Ошибка парсинга expireAt для пользователя {remna_user.uuid}: {e}")
+                expire_dt = None
+        
+        # Если есть информация о подписке
+        if expire_dt or raw_data.get('subscription') or raw_data.get('active'):
+            plan = raw_data.get('plan') or raw_data.get('planCode') or raw_data.get('plan_code')
+            
+            subscription = RemnaSubscription(
+                active=is_active,
+                expires_at=expire_dt,
+                plan=plan,
+                raw_data=raw_data.get('subscription', raw_data)
+            )
+        
+        return (remna_user, subscription)
 
     async def update_user(self, user_id: str, **kwargs) -> Dict[str, Any]:
         """Обновить данные пользователя"""

@@ -873,32 +873,17 @@ async def help_from_crypto(callback: types.CallbackQuery):
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение: {e}")
     
-    # Показываем помощь (используем тот же текст что и в главном меню)
-    help_text = (
-        "ℹ️ <b>Справка по CRS-VPN</b>\n\n"
-        "🔐 <b>Что такое VPN?</b>\n"
-        "VPN (Virtual Private Network) - это технология, которая создает безопасное соединение между вашим устройством и интернетом.\n\n"
-        "✅ <b>Преимущества VPN:</b>\n"
-        "• Защита ваших данных от хакеров\n"
-        "• Анонимность в интернете\n"
-        "• Доступ к заблокированным сайтам\n"
-        "• Безопасный Wi-Fi в общественных местах\n\n"
-        "📱 <b>Как использовать:</b>\n"
-        "1. Выберите и оплатите подписку\n"
-        "2. Получите ссылку конфигурации\n"
-        "3. Установите VPN клиент (Clash, Shadowrocket и др.)\n"
-        "4. Импортируйте конфигурацию\n"
-        "5. Включите VPN и наслаждайтесь!\n\n"
-        "🆘 <b>Нужна помощь?</b>\n"
-        "Обратитесь к администратору: @dcfrq"
-    )
+    # Показываем помощь через ScreenManager (новый экран)
+    from app.ui.screen_manager import get_screen_manager
+    from app.ui.screens import ScreenID
     
-    from app.keyboards import get_help_keyboard
-    await callback.bot.send_message(
-        chat_id=callback.from_user.id,
-        text=help_text,
-        reply_markup=get_help_keyboard(),
-        parse_mode="HTML"
+    screen_manager = get_screen_manager()
+    await screen_manager.handle_action(
+        screen_id=ScreenID.HELP,
+        action="open",
+        payload="-",
+        message_or_callback=callback,
+        user_id=callback.from_user.id
     )
 
 @router.callback_query(F.data == "vpn_instructions")
