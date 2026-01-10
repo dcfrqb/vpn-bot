@@ -86,9 +86,11 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
                 amount_rub = 199
                 period_months = 1
             else:
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.answer("Неизвестный тариф", show_alert=True)
                 return
         else:
+            # UI EXCEPTION: быстрый ответ на неверный формат callback_data
             await callback.answer("Неверный формат данных", show_alert=True)
             return
         
@@ -98,14 +100,17 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         elif plan_code == "premium":
             plan_name = "Премиум тариф"
         else:
+            # UI EXCEPTION: быстрый ответ на неизвестный тариф
             await callback.answer("Неизвестный тариф", show_alert=True)
             return
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         
+        # UI EXCEPTION: быстрый ответ о начале создания платежа
         await callback.answer("Создаю платеж...")
         
         if not settings.CRYPTO_USDT_TRC20_ADDRESS:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ <b>Ошибка</b>\n\n"
                 "Криптовалютные платежи не настроены. Обратитесь к администратору: @dcfrq",
@@ -118,6 +123,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         
         # Получаем адрес для оплаты (НЕ создаем платеж в БД до подтверждения админом)
         if not settings.CRYPTO_USDT_TRC20_ADDRESS:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ <b>Ошибка</b>\n\n"
                 "Криптовалютные платежи не настроены. Обратитесь к администратору: @dcfrq",
@@ -197,6 +203,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
             )]
         ])
         
+        # UI EXCEPTION: прямой вызов UI метода
         buttons_message = await callback.message.answer(
             "Используйте кнопки ниже для управления оплатой:",
             reply_markup=keyboard,
@@ -233,6 +240,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         logger.error(f"Ошибка при создании крипто-платежа: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             "❌ <b>Ошибка</b>\n\n"
             "Произошла ошибка при создании платежа. Попробуйте позже.",
@@ -243,6 +251,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
 @router.callback_query(lambda c: c.data.startswith("change_payment_method_"))
 async def change_payment_method(callback: types.CallbackQuery):
     """Обработчик возврата к выбору способа оплаты для того же тарифа"""
+    # UI EXCEPTION: быстрый ответ на callback перед обработкой
     await callback.answer()
     
     # Парсим параметры из callback_data: change_payment_method_{plan_code}_{period_months}_{amount_rub}_{qr_message_id}
@@ -302,6 +311,7 @@ async def change_payment_method(callback: types.CallbackQuery):
 @router.callback_query(lambda c: c.data == "buy_subscription_cleanup")
 async def buy_subscription_cleanup(callback: types.CallbackQuery):
     """Обработчик возврата к выбору тарифа с очисткой сообщений об оплате"""
+    # UI EXCEPTION: быстрый ответ на callback перед обработкой
     await callback.answer()
     # Удаляем сообщения об оплате USDT
     await delete_crypto_payment_messages(callback.bot, None, callback.from_user.id)
@@ -325,6 +335,7 @@ async def buy_subscription_cleanup(callback: types.CallbackQuery):
 @router.callback_query(lambda c: c.data.startswith("back_to_main_cleanup_"))
 async def back_to_main_cleanup(callback: types.CallbackQuery):
     """Обработчик возврата в главное меню с очисткой сообщений об оплате"""
+    # UI EXCEPTION: быстрый ответ на callback перед обработкой
     await callback.answer()
     
     # Парсим message_id из callback_data если есть
@@ -388,6 +399,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         parts = callback.data.replace("crypto_paid_", "").split("_")
         
         if len(parts) < 6:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.answer("❌ Ошибка: неверный формат данных", show_alert=True)
             return
         
@@ -400,6 +412,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         
         # Проверяем, что это запрос от правильного пользователя
         if callback.from_user.id != user_id:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.answer("❌ Ошибка доступа", show_alert=True)
             return
         
@@ -416,6 +429,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         # Создаем payment_id для использования при подтверждении админом
         payment_id = f"crypto_{user_id}_{timestamp}"
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("Отправляю уведомление администратору...")
         
         # Удаляем сообщение с QR-кодом если знаем его ID
@@ -468,6 +482,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
             # Если админы не найдены, логируем предупреждение
             if not admin_ids:
                 logger.warning(f"⚠️ Администраторы не настроены в ADMINS. Платеж {payment_id} не может быть обработан.")
+                # UI EXCEPTION: ошибка конфигурации, показываем пользователю
                 await callback.message.edit_text(
                     "⚠️ Администраторы не настроены. Обратитесь в поддержку.",
                     reply_markup=get_back_to_plans_keyboard()
@@ -542,6 +557,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
                 )
                 return
             else:
+                # UI EXCEPTION: ошибка отправки уведомления администратору
                 await callback.message.edit_text(
                     "⚠️ Не удалось отправить уведомление администратору.\n"
                     "Пожалуйста, свяжитесь с поддержкой вручную.",
@@ -552,6 +568,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         logger.error(f"Ошибка при обработке подтверждения оплаты: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             "❌ Произошла ошибка. Попробуйте позже или обратитесь в поддержку.",
             reply_markup=get_back_to_plans_keyboard()
@@ -564,6 +581,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
     from app.config import is_admin
     
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
     
@@ -574,6 +592,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
         data_str = callback.data.replace("admin_approve_crypto_", "")
         
         if not data_str.startswith("crypto_"):
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Неверный формат данных: payment_id должен начинаться с 'crypto_'")
             return
         
@@ -583,6 +602,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
         # payment_id состоит из 3 частей: crypto, user_id, timestamp
         # Затем идут: plan_code, period_months, amount_rub
         if len(all_parts) < 6:  # минимум 6 частей
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Неверный формат данных: недостаточно параметров")
             logger.error(f"Недостаточно частей в callback_data: {all_parts}, длина: {len(all_parts)}")
             return
@@ -596,6 +616,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
             amount_rub = int(all_parts[5])
         except (ValueError, IndexError) as e:
             logger.error(f"Ошибка парсинга параметров: {e}, all_parts: {all_parts}")
+            # UI EXCEPTION: ошибка парсинга данных платежа
             await callback.message.edit_text(f"❌ Ошибка парсинга данных: {e}")
             return
         
@@ -603,6 +624,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
         payment_parts = payment_id.replace("crypto_", "").split("_")
         if len(payment_parts) < 2:
             logger.error(f"Неверный формат payment_id: {payment_id}, parts: {payment_parts}")
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Неверный формат ID платежа")
             return
         
@@ -611,9 +633,11 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
             timestamp = int(payment_parts[1])
         except ValueError as e:
             logger.error(f"Ошибка парсинга payment_id: {payment_id}, parts: {payment_parts}, error: {e}")
+            # UI EXCEPTION: ошибка парсинга данных платежа
             await callback.message.edit_text(f"❌ Ошибка парсинга ID платежа: {e}")
             return
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("Подтверждаю платеж...")
         
         # Создаем платеж в БД при подтверждении админом
@@ -625,6 +649,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
         import json
         
         if not SessionLocal:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ База данных не настроена")
             return
         
@@ -644,6 +669,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
                 user = user_result.scalar_one_or_none()
                 
                 if not user:
+                    # UI EXCEPTION: прямой вызов UI метода
                     await callback.message.edit_text(f"❌ Пользователь {user_id} не найден")
                     return
                 
@@ -724,6 +750,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
                 )
                 logger.info(f"Платеж {payment_id} успешно обработан, подписка активирована для пользователя {payment.telegram_user_id}")
                 
+                # UI EXCEPTION: подтверждение платежа администратором
                 await callback.message.edit_text(
                     f"✅ Платеж подтвержден\n\n"
                     f"Пользователю {payment.telegram_user_id} отправлено уведомление об активации подписки."
@@ -747,6 +774,7 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
                 except Exception as notify_error:
                     logger.error(f"Ошибка при отправке резервного уведомления: {notify_error}")
                 
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.message.edit_text(
                     f"⚠️ Платеж подтвержден, но возникла ошибка при активации подписки.\n\n"
                     f"Пользователю {payment.telegram_user_id} отправлено уведомление.\n"
@@ -761,11 +789,13 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
         # Убираем HTML теги и специальные символы из сообщения об ошибке
         error_msg_clean = error_msg.replace("<", "").replace(">", "").replace("&", "и")
         try:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(f"❌ Ошибка: {error_msg_clean[:200]}")
         except Exception as edit_error:
             # Если не удалось отредактировать, отправляем новое сообщение
             logger.error(f"Ошибка при редактировании сообщения: {edit_error}")
             try:
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.message.answer(f"❌ Ошибка: {error_msg_clean[:200]}")
             except:
                 pass
@@ -777,11 +807,13 @@ async def admin_reject_crypto_payment(callback: types.CallbackQuery):
     from app.config import is_admin
     
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
     
     try:
         payment_id = callback.data.replace("admin_reject_crypto_", "")
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("Отклоняю платеж...")
         
         # Извлекаем user_id из payment_id (формат: crypto_{user_id}_{timestamp})
@@ -828,11 +860,13 @@ async def admin_reject_crypto_payment(callback: types.CallbackQuery):
                 except Exception as e:
                     logger.error(f"Ошибка при отправке уведомления пользователю {user_id}: {e}")
                 
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.message.edit_text(
                     f"❌ Платеж отклонен\n\n"
                     f"Пользователю {user_id} отправлено уведомление."
                 )
             else:
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.message.edit_text(
                     "⚠️ Платеж не найден и не удалось определить пользователя"
                 )
@@ -842,12 +876,14 @@ async def admin_reject_crypto_payment(callback: types.CallbackQuery):
         import traceback
         logger.debug(traceback.format_exc())
         error_msg = str(e)
+        # UI EXCEPTION: ошибка при отклонении платежа
         await callback.message.edit_text(f"❌ Ошибка: {error_msg}")
 
 
 @router.callback_query(F.data.startswith("help_from_crypto_"))
 async def help_from_crypto(callback: types.CallbackQuery):
     """Обработчик кнопки 'Помощь' из криптоплатежа"""
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Парсим message_id из callback_data
@@ -875,6 +911,7 @@ async def help_from_crypto(callback: types.CallbackQuery):
     
     # Показываем помощь через ScreenManager (новый экран)
     from app.ui.screen_manager import get_screen_manager
+    # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
     from app.ui.screens import ScreenID
     
     screen_manager = get_screen_manager()
@@ -889,6 +926,7 @@ async def help_from_crypto(callback: types.CallbackQuery):
 @router.callback_query(F.data == "vpn_instructions")
 async def show_vpn_instructions(callback: types.CallbackQuery):
     """Показывает инструкции по настройке VPN"""
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     instructions_text = (
@@ -920,6 +958,7 @@ async def show_vpn_instructions(callback: types.CallbackQuery):
         )]
     ])
     
+    # UI EXCEPTION: показ инструкций по VPN (команда)
     await callback.message.edit_text(
         instructions_text,
         reply_markup=keyboard,
@@ -935,6 +974,7 @@ async def confirm_payment_command(message: types.Message):
     from app.config import is_admin
     
     if not is_admin(message.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer("❌ У вас нет прав администратора")
         return
     
@@ -942,6 +982,7 @@ async def confirm_payment_command(message: types.Message):
         # Формат: /confirm_crypto <payment_id> [transaction_hash]
         parts = message.text.split()
         if len(parts) < 2:
+            # UI EXCEPTION: показ справки по использованию команды (команда)
             await message.answer(
                 "Использование: /confirm_crypto <payment_id> [transaction_hash]\n\n"
                 "Пример: /confirm_crypto crypto_123456789_1234567890"
@@ -976,17 +1017,22 @@ async def confirm_payment_command(message: types.Message):
                             description=payment.description or "CRS VPN 30 дней",
                             bot=message.bot
                         )
+                        # UI EXCEPTION: ответ администратору о подтверждении платежа
                         await message.answer(f"✅ Платеж {payment_id} подтвержден и обработан. Пользователю отправлено уведомление.")
                     else:
+                        # UI EXCEPTION: ответ администратору о статусе платежа
                         await message.answer(f"⚠️ Платеж {payment_id} не найден или не в статусе succeeded")
             except Exception as e:
                 logger.error(f"Ошибка при обработке успешного крипто-платежа: {e}")
+                # UI EXCEPTION: ошибка при обработке платежа
                 await message.answer(f"✅ Платеж подтвержден, но ошибка при обработке: {e}")
         else:
+            # UI EXCEPTION: платеж не подтвержден (подтверждение)
             await message.answer(f"❌ Не удалось подтвердить платеж {payment_id}")
             
     except Exception as e:
         logger.error(f"Ошибка при подтверждении платежа: {e}")
+        # UI EXCEPTION: общая ошибка при подтверждении платежа
         await message.answer(f"❌ Ошибка: {e}")
 
 
@@ -996,6 +1042,7 @@ async def list_pending_payments(message: types.Message):
     from app.config import is_admin
     
     if not is_admin(message.from_user.id):
+        # UI EXCEPTION: проверка прав администратора для команды
         await message.answer("❌ У вас нет прав администратора")
         return
     
@@ -1003,6 +1050,7 @@ async def list_pending_payments(message: types.Message):
         payments = await get_pending_crypto_payments()
         
         if not payments:
+            # UI EXCEPTION: ответ о пустом списке платежей (список)
             await message.answer("📭 Ожидающих крипто-платежей нет")
             return
         
@@ -1020,9 +1068,11 @@ async def list_pending_payments(message: types.Message):
         if len(payments) > 10:
             text += f"... и еще {len(payments) - 10} платежей"
         
+        # UI EXCEPTION: показ списка ожидающих платежей администратору
         await message.answer(text, parse_mode="HTML")
         
     except Exception as e:
         logger.error(f"Ошибка при получении списка платежей: {e}")
+        # UI EXCEPTION: ошибка при получении списка платежей
         await message.answer(f"❌ Ошибка: {e}")
 
