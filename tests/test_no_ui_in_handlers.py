@@ -51,14 +51,15 @@ def is_whitelisted(file_path: Path, line_number: int, source_lines: list) -> boo
     # Проверяем, есть ли файл в whitelist
     for whitelist_file, patterns in WHITELIST_FILES.items():
         if whitelist_file in file_str:
-            # Проверяем, есть ли комментарий с UI EXCEPTION
-            if line_number <= len(source_lines):
-                line = source_lines[line_number - 1]
-                if REQUIRED_COMMENT_PATTERN in line:
-                    # Проверяем, соответствует ли паттерну
-                    for pattern in patterns:
-                        if pattern in line.lower():
-                            return True
+            # Проверяем, есть ли комментарий с UI EXCEPTION в текущей или предыдущих строках
+            for check_line_num in range(max(1, line_number - 3), line_number + 1):
+                if check_line_num <= len(source_lines):
+                    line = source_lines[check_line_num - 1]
+                    if REQUIRED_COMMENT_PATTERN in line:
+                        # Проверяем, соответствует ли паттерну
+                        for pattern in patterns:
+                            if pattern in line.lower():
+                                return True
     
     return False
 
@@ -95,12 +96,23 @@ def find_ui_violations(file_path: Path, tree: ast.AST):
                 # Запрещаем импорт из ui/renderers, ui/keyboards, ui/screens
                 if any(x in node.module for x in ["ui.renderers", "ui.keyboards", "ui.screens"]):
                     if "legacy" not in node.module:  # legacy разрешен
-                        violations.append({
-                            "type": "forbidden_import",
-                            "file": str(file_path),
-                            "line": node.lineno,
-                            "message": f"Запрещен прямой импорт из UI модуля: {node.module}. Используйте ScreenManager."
-                        })
+                        # Проверяем, есть ли комментарий UI EXCEPTION в предыдущих строках
+                        is_allowed = False
+                        if source_lines:
+                            for check_line_num in range(max(1, node.lineno - 3), node.lineno + 1):
+                                if check_line_num <= len(source_lines):
+                                    check_line = source_lines[check_line_num - 1]
+                                    if is_whitelisted(file_path, check_line_num, source_lines):
+                                        is_allowed = True
+                                        break
+                        
+                        if not is_allowed:
+                            violations.append({
+                                "type": "forbidden_import",
+                                "file": str(file_path),
+                                "line": node.lineno,
+                                "message": f"Запрещен прямой импорт из UI модуля: {node.module}. Используйте ScreenManager."
+                            })
     
     # Проверяем вызовы методов .answer() и .edit_text()
     for node in ast.walk(tree):

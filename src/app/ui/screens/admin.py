@@ -1,7 +1,7 @@
 """
 Админские экраны
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from aiogram import types
 from app.ui.screens.base import BaseScreen
 from app.ui.screens import ScreenID
@@ -71,7 +71,7 @@ class AdminStatsScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
         """Обрабатывает действия экрана (refresh - обновление статистики)"""
@@ -136,7 +136,7 @@ class AdminUsersScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         action_type=None
     ) -> bool:
@@ -245,7 +245,7 @@ class AdminPaymentsScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         action_type=None
     ) -> bool:

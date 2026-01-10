@@ -1,7 +1,7 @@
 """
 Экран главного меню
 """
-from typing import Optional
+from typing import Optional, Union
 from aiogram import types
 from app.ui.screens.base import BaseScreen
 from app.ui.viewmodels.base import BaseViewModel
@@ -51,7 +51,7 @@ class MainMenuScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
         """Обрабатывает действия экрана (refresh - обновление информации)"""

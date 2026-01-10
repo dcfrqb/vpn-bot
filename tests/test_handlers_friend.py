@@ -69,8 +69,7 @@ async def test_friend_handler_always_uses_force_remna(mock_message):
     )
     
     with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.can_create_request', return_value=(True, None)), \
-         patch('app.routers.start.message.answer') as mock_answer:
+         patch('app.services.access_request.can_create_request', new_callable=AsyncMock, return_value=(True, None)):
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)
@@ -129,7 +128,7 @@ async def test_friend_handler_without_subscription_allowed(mock_message):
     )
     
     with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.can_create_request', return_value=(True, None)):
+         patch('app.services.access_request.can_create_request', return_value=(True, None)):
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)
@@ -215,10 +214,10 @@ async def test_friend_request_yes_without_subscription_allowed(mock_callback):
     )
     
     with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.can_create_request', return_value=(True, None)), \
-         patch('app.routers.start.create_access_request') as mock_create_request, \
-         patch('app.routers.start.get_admin_access_request_keyboard') as mock_admin_keyboard, \
-         patch('app.routers.start.settings') as mock_settings:
+         patch('app.services.access_request.can_create_request', return_value=(True, None)), \
+         patch('app.services.access_request.create_access_request') as mock_create_request, \
+         patch('app.keyboards.get_admin_access_request_keyboard') as mock_admin_keyboard, \
+         patch('app.config.settings') as mock_settings:
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(
@@ -261,7 +260,7 @@ async def test_friend_handler_does_not_use_cache(mock_message):
     )
     
     with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.can_create_request', return_value=(True, None)):
+         patch('app.services.access_request.can_create_request', return_value=(True, None)):
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)

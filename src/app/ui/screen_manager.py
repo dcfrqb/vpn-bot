@@ -5,7 +5,7 @@ import time
 import uuid
 import hashlib
 import asyncio
-from typing import Optional, Dict, Type, List, Tuple
+from typing import Optional, Dict, Type, List, Tuple, Union
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from app.logger import logger
@@ -105,7 +105,7 @@ class ScreenManager:
         except Exception:
             return hashlib.md5(str(keyboard).encode('utf-8')).hexdigest()
     
-    def _get_message_key(self, message_or_callback: types.Message | types.CallbackQuery | dict) -> Optional[Tuple[int, int]]:
+    def _get_message_key(self, message_or_callback: Union[types.Message, types.CallbackQuery, dict]) -> Optional[Tuple[int, int]]:
         """Получает ключ для кэша рендера: (user_id, message_id)"""
         if isinstance(message_or_callback, types.CallbackQuery):
             if message_or_callback.message:
@@ -164,7 +164,7 @@ class ScreenManager:
     async def show_screen(
         self,
         screen_id: ScreenID,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         viewmodel: BaseViewModel,
         edit: bool = False,
         user_id: Optional[int] = None
@@ -462,7 +462,7 @@ class ScreenManager:
             logger.exception(f"Ошибка при показе экрана {screen_id}: {e}")
             return False
     
-    def _get_user_id(self, message_or_callback: types.Message | types.CallbackQuery | dict) -> Optional[int]:
+    def _get_user_id(self, message_or_callback: Union[types.Message, types.CallbackQuery, dict]) -> Optional[int]:
         """Извлекает user_id из message_or_callback"""
         if isinstance(message_or_callback, types.Message):
             return message_or_callback.from_user.id
@@ -534,7 +534,7 @@ class ScreenManager:
         self,
         from_screen_id: ScreenID,
         to_screen_id: ScreenID,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         viewmodel: BaseViewModel,
         edit: bool = True,
         user_id: Optional[int] = None,
@@ -616,7 +616,7 @@ class ScreenManager:
         screen_id: ScreenID,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int] = None
     ) -> bool:
         """
@@ -797,7 +797,7 @@ class ScreenManager:
         screen_id: ScreenID,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int] = None
     ) -> bool:
         """
@@ -816,7 +816,7 @@ class ScreenManager:
         screen_id: ScreenID,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         target_screen: Optional[ScreenID],
         action_type: ActionType,
@@ -1018,7 +1018,7 @@ class ScreenManager:
         screen_id: ScreenID,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         action_type: ActionType,
         request_id: str,
@@ -1211,7 +1211,7 @@ class ScreenManager:
         screen_id: ScreenID,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         target_screen: Optional[ScreenID],
         action_type: ActionType,
@@ -1298,7 +1298,7 @@ class ScreenManager:
     
     async def _handle_connect_flow(
         self,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         request_id: str,
         start_time: float,
@@ -1444,7 +1444,7 @@ class ScreenManager:
     async def _create_viewmodel_for_screen(
         self,
         screen_id: ScreenID,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int],
         payload: str = "-"
     ) -> Optional[BaseViewModel]:

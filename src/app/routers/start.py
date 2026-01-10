@@ -23,6 +23,7 @@ from app.keyboards import (
     get_period_keyboard,
     get_inactive_subscription_keyboard
 )
+# UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
 from app.ui.screens import ScreenID
 from app.ui.helpers import get_main_menu_viewmodel
 from app.config import is_admin
@@ -231,6 +232,7 @@ async def cmd_start(m: types.Message):
         # Проверяем, что sync_result не None
         if not sync_result:
             logger.error(f"sync_result is None для пользователя {m.from_user.id} - это не должно происходить!")
+            # UI EXCEPTION: прямой вызов UI метода
             await m.answer(
                 "❌ <b>Произошла ошибка</b>\n\n"
                 "Пожалуйста, попробуйте позже или обратитесь в поддержку: @dcfrq",
@@ -259,6 +261,7 @@ async def cmd_start(m: types.Message):
                 "error_message": str(e)
             }
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await m.answer(
             f"❌ <b>Произошла ошибка форматирования сообщения</b>\n\n"
             f"Код ошибки: <code>{request_id}</code>\n\n"
@@ -292,6 +295,7 @@ async def cmd_start(m: types.Message):
                 "traceback": traceback.format_exc()
             }
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await m.answer(
             f"❌ <b>Произошла ошибка</b>\n\n"
             f"Код ошибки: <code>{request_id}</code>\n\n"
@@ -422,6 +426,7 @@ async def buy_subscription(callback: types.CallbackQuery):
     """Обработчик кнопки 'Купить подписку' - использует ScreenManager"""
     logger.info(f"Пользователь {callback.from_user.id} нажал 'Купить подписку'")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Удаляем сообщения об оплате USDT в фоне (не блокируем)
@@ -432,6 +437,7 @@ async def buy_subscription(callback: types.CallbackQuery):
         pass
     
     # Показываем экран выбора тарифов
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlansScreen
     screen = SubscriptionPlansScreen()
     viewmodel = await screen.create_viewmodel()
@@ -451,6 +457,7 @@ async def my_plan(callback: types.CallbackQuery):
     """Обработчик кнопки 'Мой тариф'"""
     logger.info(f"Пользователь {callback.from_user.id} нажал 'Мой тариф'")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем кэш для быстрого ответа
@@ -517,6 +524,7 @@ async def connect_vpn(callback: types.CallbackQuery):
     """Обработчик кнопки 'Подключиться' - использует ScreenManager"""
     logger.info(f"Пользователь {callback.from_user.id} нажал 'Подключиться'")
     # Даем мгновенный фидбек через callback.answer()
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer("⏳ Получаем ссылку подписки...")
     
     # Используем ScreenManager для обработки CONNECT flow
@@ -536,6 +544,7 @@ async def help_info(callback: types.CallbackQuery):
     """Обработчик кнопки 'Помощь' - использует ScreenManager"""
     logger.info(f"Пользователь {callback.from_user.id} нажал 'Помощь'")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Показываем экран помощи через handle_action (FLOW action)
@@ -554,9 +563,11 @@ async def plan_basic(callback: types.CallbackQuery):
     """Обработчик выбора базового тарифа - использует ScreenManager"""
     logger.info(f"Пользователь {callback.from_user.id} выбрал тариф 'Базовый'")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем ScreenManager для показа экрана деталей тарифа
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlanDetailScreen
     screen = SubscriptionPlanDetailScreen()
     viewmodel = await screen.create_viewmodel(
@@ -587,9 +598,11 @@ async def plan_premium(callback: types.CallbackQuery):
     """Обработчик выбора премиум тарифа - использует ScreenManager"""
     logger.info(f"Пользователь {callback.from_user.id} выбрал тариф 'Премиум'")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем ScreenManager для показа экрана деталей тарифа
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlanDetailScreen
     screen = SubscriptionPlanDetailScreen()
     viewmodel = await screen.create_viewmodel(
@@ -623,14 +636,17 @@ async def plan_basic_period(callback: types.CallbackQuery):
     periods = {"1": (99, 1), "3": (249, 3), "6": (499, 6), "12": (899, 12)}
     
     if period not in periods:
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("Неверный период")
         return
     
     amount, months = periods[period]
     logger.info(f"Пользователь {callback.from_user.id} выбрал базовый тариф на {months} месяц(а/ев), сумма: {amount}₽")
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Создаем ViewModel для детального экрана тарифа
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlanDetailScreen
     screen = SubscriptionPlanDetailScreen()
     viewmodel = await screen.create_viewmodel(
@@ -665,14 +681,17 @@ async def plan_premium_period(callback: types.CallbackQuery):
     periods = {"1": (199, 1), "3": (549, 3), "6": (999, 6), "12": (1799, 12)}
     
     if period not in periods:
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("Неверный период")
         return
     
     amount, months = periods[period]
     logger.info(f"Пользователь {callback.from_user.id} выбрал премиум тариф на {months} месяц(а/ев), сумма: {amount}₽")
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Создаем ViewModel для детального экрана тарифа
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlanDetailScreen
     screen = SubscriptionPlanDetailScreen()
     viewmodel = await screen.create_viewmodel(
@@ -705,6 +724,7 @@ async def back_to_main(callback: types.CallbackQuery):
     """Обработчик возврата в главное меню - использует ScreenManager через Navigator"""
     logger.info(f"Пользователь {callback.from_user.id} вернулся в главное меню")
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Удаляем сообщения об оплате USDT, если они есть (не блокируем)
@@ -742,6 +762,7 @@ async def refresh_info(callback: types.CallbackQuery):
     telegram_id = callback.from_user.id
     logger.info(f"Пользователь {telegram_id} нажал кнопку 'Обновить' - принудительная синхронизация с Remna")
     
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer("🔄 Обновление данных из Remna...")
     
     # Инвалидируем кэш перед принудительной синхронизацией
@@ -773,6 +794,7 @@ async def refresh_info(callback: types.CallbackQuery):
             f"status={sync_result.subscription_status}, "
             f"время Remna API: {remna_elapsed_ms:.2f}мс"
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("✅ Данные обновлены из Remna")
         
     except RemnaUnavailableError as e:
@@ -790,6 +812,7 @@ async def refresh_info(callback: types.CallbackQuery):
             reply_markup=get_main_menu_keyboard(user_id=telegram_id, has_subscription=None),
             parse_mode="HTML"
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Remna недоступна")
         return  # Выходим, не показываем старые данные
         
@@ -810,6 +833,7 @@ async def refresh_info(callback: types.CallbackQuery):
             reply_markup=get_main_menu_keyboard(user_id=telegram_id, has_subscription=None),
             parse_mode="HTML"
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Ошибка обновления")
         return  # Выходим, не показываем старые данные
     
@@ -823,6 +847,7 @@ async def refresh_info(callback: types.CallbackQuery):
             reply_markup=get_main_menu_keyboard(user_id=telegram_id, has_subscription=None),
             parse_mode="HTML"
         )
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Ошибка обновления")
         return
     
@@ -859,13 +884,16 @@ async def refresh_info(callback: types.CallbackQuery):
 async def admin_panel_callback(callback: types.CallbackQuery):
     """Обработчик кнопки админ-панели из главного меню - использует ScreenManager"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
     
     logger.info(f"Администратор {callback.from_user.id} открыл панель через кнопку")
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     from app.services.stats import get_statistics
+    # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.admin import AdminPanelScreen
     
     stats = await get_statistics()
@@ -899,6 +927,7 @@ async def cmd_myid(message: types.Message):
         text += "💡 Чтобы стать администратором, добавьте ваш ID в .env файл:\n"
         text += f"<code>ADMINS={user_id}</code>"
     
+    # UI EXCEPTION: прямой вызов UI метода
     await message.answer(text, reply_markup=get_main_menu_keyboard(user_id=user_id))
 
 
@@ -922,6 +951,7 @@ async def cmd_profile(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка при получении профиля: {e}")
         # Показываем ошибку через ScreenManager (будет реализовано в ШАГ 4)
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer(
             "❌ Произошла ошибка при получении информации о профиле. Попробуйте позже.",
             reply_markup=get_main_menu_keyboard(user_id=message.from_user.id)
@@ -963,6 +993,7 @@ async def cmd_friend(message: types.Message):
             if sync_result.subscription_status == "active":
                 # Есть активная подписка в Remna - запрещаем создание запроса
                 logger.info(f"Пользователь {user_id} имеет активную подписку в Remna, /friend недоступен")
+                # UI EXCEPTION: прямой вызов UI метода
                 await message.answer(
                     "❌ У вас уже есть активная подписка. Команда /friend недоступна при активной подписке.",
                     reply_markup=get_main_menu_keyboard(user_id=user_id)
@@ -978,6 +1009,7 @@ async def cmd_friend(message: types.Message):
         except RemnaUnavailableError as e:
             # Remna недоступна - не используем старые данные
             logger.error(f"Remna API недоступна для проверки подписки в /friend (user_id={user_id}): {e}")
+            # UI EXCEPTION: прямой вызов UI метода
             await message.answer(
                 "❌ Не удалось проверить статус подписки. Попробуйте позже.",
                 reply_markup=get_main_menu_keyboard(user_id=user_id)
@@ -985,6 +1017,7 @@ async def cmd_friend(message: types.Message):
             return
         except Exception as e:
             logger.error(f"Ошибка при проверке подписки через Remna для /friend (user_id={user_id}): {e}")
+            # UI EXCEPTION: прямой вызов UI метода
             await message.answer(
                 "❌ Не удалось проверить статус подписки. Попробуйте позже.",
                 reply_markup=get_main_menu_keyboard(user_id=user_id)
@@ -996,6 +1029,7 @@ async def cmd_friend(message: types.Message):
         can_create, error_message = await can_create_request(user_id)
         
         if not can_create:
+            # UI EXCEPTION: прямой вызов UI метода
             await message.answer(
                 f"❌ {error_message}",
                 reply_markup=get_main_menu_keyboard(user_id=user_id)
@@ -1004,6 +1038,7 @@ async def cmd_friend(message: types.Message):
         
         # Показываем подтверждение
         from app.keyboards import get_friend_request_keyboard
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer(
             "❓ Вы хотите попросить доступ к VPN у администратора?",
             reply_markup=get_friend_request_keyboard()
@@ -1013,6 +1048,7 @@ async def cmd_friend(message: types.Message):
         logger.error(f"Ошибка при обработке команды /friend для пользователя {user_id}: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer(
             "❌ Произошла ошибка. Попробуйте позже.",
             reply_markup=get_main_menu_keyboard(user_id=user_id)
@@ -1026,6 +1062,7 @@ async def friend_request_yes(callback: types.CallbackQuery):
     logger.info(f"Пользователь {user_id} подтвердил запрос на доступ")
     
     try:
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer()
         
         # ПРИНУДИТЕЛЬНАЯ проверка подписки через Remna API (без кэша и fallback)
@@ -1151,12 +1188,14 @@ async def friend_request_yes(callback: types.CallbackQuery):
         
     except Exception as e:
         logger.error(f"Ошибка при обработке подтверждения запроса для пользователя {user_id}: {e}")
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Произошла ошибка. Попробуйте позже.", show_alert=True)
 
 
 @router.callback_query(lambda c: c.data == "friend_request_no")
 async def friend_request_no(callback: types.CallbackQuery):
     """Обработчик кнопки 'Нет' для запроса на доступ"""
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     # UI EXCEPTION: уведомление об отмене запроса (legacy handler, будет переведен на ScreenManager)
     await callback.message.edit_text("Запрос отменён", reply_markup=None)

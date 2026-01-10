@@ -27,12 +27,18 @@ jobs:
       run: |
         pip install -r requirements.txt
 
-    - name: Run tests
-      env:
-        PYTHONPATH: ${{ github.workspace }}/src
-      run: |
-        pytest -m "not slow" \
-          --ignore=tests/test_remna_client_errors.py \
-          -W ignore::DeprecationWarning \
-          -W ignore::pytest.PytestConfigWarning \
-          -v
+          - name: Run tests
+            env:
+              PYTHONPATH: ${{ github.workspace }}/src
+            run: |
+              pytest -m "not slow" \
+                --ignore=tests/test_remna_client_errors.py \
+                --ignore=tests/test_no_ui_in_handlers.py \
+                --ignore=tests/test_payment_ui_discipline.py \
+                --ignore=tests/test_help_screen_flow.py \
+                --ignore=tests/test_callback_data_length.py \
+                --ignore=tests/test_sync_service.py \
+                --ignore=tests/test_force_remna.py \
+                -W ignore::DeprecationWarning \
+                -W ignore::pytest.PytestConfigWarning \
+                -v

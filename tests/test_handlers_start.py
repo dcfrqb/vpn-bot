@@ -71,8 +71,8 @@ async def test_start_handler_fast_response(mock_message):
         source="cache"
     )
     
-    with patch('app.routers.start.get_navigator') as mock_get_navigator, \
-         patch('app.routers.start.get_screen_manager') as mock_get_sm, \
+    with patch('app.navigation.navigator.get_navigator') as mock_get_navigator, \
+         patch('app.ui.screen_manager.get_screen_manager') as mock_get_sm, \
          patch('app.routers.start.SyncService') as mock_sync_service_class, \
          patch('app.routers.start.get_main_menu_viewmodel') as mock_get_vm:
         
@@ -124,8 +124,8 @@ async def test_start_handler_no_subscription(mock_message):
         source="remna"
     )
     
-    with patch('app.routers.start.get_navigator') as mock_get_navigator, \
-         patch('app.routers.start.get_screen_manager') as mock_get_sm, \
+    with patch('app.navigation.navigator.get_navigator') as mock_get_navigator, \
+         patch('app.ui.screen_manager.get_screen_manager') as mock_get_sm, \
          patch('app.routers.start.SyncService') as mock_sync_service_class, \
          patch('app.routers.start.get_main_menu_viewmodel') as mock_get_vm:
         
@@ -145,7 +145,7 @@ async def test_start_handler_no_subscription(mock_message):
         mock_sync_service_class.return_value = mock_sync_service
         
         from app.ui.viewmodels.main_menu import MainMenuViewModel
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=12345)
         
         # Выполняем handler - не должно быть исключений
         await cmd_start(mock_message)
@@ -171,8 +171,8 @@ async def test_start_handler_with_active_subscription(mock_message):
         source="remna"
     )
     
-    with patch('app.routers.start.get_navigator') as mock_get_navigator, \
-         patch('app.routers.start.get_screen_manager') as mock_get_sm, \
+    with patch('app.navigation.navigator.get_navigator') as mock_get_navigator, \
+         patch('app.ui.screen_manager.get_screen_manager') as mock_get_sm, \
          patch('app.routers.start.SyncService') as mock_sync_service_class, \
          patch('app.routers.start.get_main_menu_viewmodel') as mock_get_vm:
         
@@ -192,7 +192,7 @@ async def test_start_handler_with_active_subscription(mock_message):
         mock_sync_service_class.return_value = mock_sync_service
         
         from app.ui.viewmodels.main_menu import MainMenuViewModel
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=12345)
         
         await cmd_start(mock_message)
         
@@ -218,7 +218,7 @@ async def test_refresh_button_calls_force_remna(mock_callback):
     
     with patch('app.routers.start.invalidate_sync_cache') as mock_invalidate, \
          patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.get_screen_manager') as mock_get_sm, \
+         patch('app.ui.screen_manager.get_screen_manager') as mock_get_sm, \
          patch('app.routers.start.get_main_menu_viewmodel') as mock_get_vm:
         
         mock_sync_service = AsyncMock()
@@ -230,7 +230,7 @@ async def test_refresh_button_calls_force_remna(mock_callback):
         mock_get_sm.return_value = mock_sm
         
         from app.ui.viewmodels.main_menu import MainMenuViewModel
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=12345)
         
         await refresh_info(mock_callback)
         
@@ -294,7 +294,7 @@ async def test_refresh_button_returns_actual_status(mock_callback):
     
     with patch('app.routers.start.invalidate_sync_cache'), \
          patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.routers.start.get_screen_manager') as mock_get_sm, \
+         patch('app.ui.screen_manager.get_screen_manager') as mock_get_sm, \
          patch('app.routers.start.get_main_menu_viewmodel') as mock_get_vm:
         
         mock_sync_service = AsyncMock()
@@ -306,7 +306,7 @@ async def test_refresh_button_returns_actual_status(mock_callback):
         mock_get_sm.return_value = mock_sm
         
         from app.ui.viewmodels.main_menu import MainMenuViewModel
-        mock_get_vm.return_value = MainMenuViewModel()
+        mock_get_vm.return_value = MainMenuViewModel(user_id=12345)
         
         await refresh_info(mock_callback)
         

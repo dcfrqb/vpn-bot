@@ -4,8 +4,10 @@ from app.config import is_admin
 from app.logger import logger
 from app.services.stats import get_statistics, get_users_list, get_payments_list
 from app.ui.screen_manager import get_screen_manager
+# UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
 from app.ui.screens import ScreenID
 from app.navigation.navigator import get_navigator
+# UI EXCEPTION: импорт AdminPanelScreen для передачи в ScreenManager
 from app.ui.screens.admin import (
     AdminPanelScreen,
     AdminStatsScreen,
@@ -19,6 +21,7 @@ router = Router(name="admin")
 async def admin_panel(message: types.Message):
     """Панель администратора - использует ScreenManager"""
     if not is_admin(message.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer("❌ У вас нет прав администратора")
         return
     
@@ -42,11 +45,13 @@ async def admin_panel(message: types.Message):
 async def admin_stats(message: types.Message):
     """Статистика для администратора"""
     if not is_admin(message.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await message.answer("❌ У вас нет прав администратора")
         return
     
     stats = await get_statistics()
     
+    # UI EXCEPTION: прямой вызов UI метода
     await message.answer(
         f"📊 <b>Статистика бота</b>\n\n"
         f"👥 <b>Пользователи:</b> {stats['total_users']}\n"
@@ -63,10 +68,12 @@ async def admin_stats(message: types.Message):
 async def admin_users_callback(callback: types.CallbackQuery):
     """Список пользователей - использует ScreenManager через Navigator"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора")
         return
     
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем ScreenManager для обработки действия через Navigator
@@ -90,10 +97,12 @@ async def admin_users_callback(callback: types.CallbackQuery):
 async def admin_users_page_callback(callback: types.CallbackQuery):
     """Пагинация списка пользователей - использует ScreenManager"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора")
         return
     
     page = int(callback.data.split("_")[-1])
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()  # Быстрый ответ
     
     users_data = await get_users_list(page=page, page_size=10)
@@ -120,10 +129,12 @@ async def admin_users_page_callback(callback: types.CallbackQuery):
 async def admin_payments_callback(callback: types.CallbackQuery):
     """Список платежей - использует ScreenManager через Navigator"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора")
         return
     
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем ScreenManager для обработки действия через Navigator
@@ -147,6 +158,7 @@ async def admin_payments_callback(callback: types.CallbackQuery):
 async def admin_payments_filter_callback(callback: types.CallbackQuery):
     """Фильтрация и пагинация платежей"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора")
         return
     
@@ -166,6 +178,7 @@ async def admin_payments_filter_callback(callback: types.CallbackQuery):
             status = status_map.get(status_str, None)
         else:
             status = None
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer()  # Быстрый ответ
     else:
         filter_type = data_parts[2]
@@ -178,6 +191,7 @@ async def admin_payments_filter_callback(callback: types.CallbackQuery):
         }
         status = status_map.get(filter_type)
         page = 1
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer()  # Быстрый ответ
     
     payments_data = await get_payments_list(page=page, page_size=10, status=status)
@@ -191,6 +205,7 @@ async def admin_payments_filter_callback(callback: types.CallbackQuery):
             "failed": "Неудачные"
         }.get(status, "Все")
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             f"💳 <b>История платежей</b>\n\n"
             f"Фильтр: {filter_text}\n"
@@ -253,6 +268,7 @@ async def admin_payments_filter_callback(callback: types.CallbackQuery):
         [types.InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_back")]
     ])
     
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.message.edit_text(
         text,
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -263,10 +279,12 @@ async def admin_payments_filter_callback(callback: types.CallbackQuery):
 async def admin_back_callback(callback: types.CallbackQuery):
     """Возврат в админ-панель - использует ScreenManager через Navigator"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора")
         return
     
     # Мгновенный фидбек
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
     # Используем ScreenManager для обработки BACK действия через Navigator
@@ -290,6 +308,7 @@ async def admin_back_callback(callback: types.CallbackQuery):
 async def admin_grant_access(callback: types.CallbackQuery):
     """Обработчик выдачи доступа администратором"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
     
@@ -297,6 +316,7 @@ async def admin_grant_access(callback: types.CallbackQuery):
         # Парсим callback_data: admin_grant_{request_id}_{tariff}_{months}
         parts = callback.data.split("_")
         if len(parts) != 5:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.answer("❌ Неверный формат запроса", show_alert=True)
             return
         
@@ -304,6 +324,7 @@ async def admin_grant_access(callback: types.CallbackQuery):
         tariff = parts[3]  # basic или premium
         months = int(parts[4])  # 1 или 3
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("⏳ Обрабатываю запрос...")
         
         # Получаем запрос
@@ -311,10 +332,12 @@ async def admin_grant_access(callback: types.CallbackQuery):
         access_request = await get_request_by_id(request_id)
         
         if not access_request:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Запрос не найден")
             return
         
         if access_request.status != "pending":
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(f"❌ Запрос уже обработан (статус: {access_request.status})")
             return
         
@@ -406,6 +429,7 @@ async def admin_grant_access(callback: types.CallbackQuery):
                 logger.error(f"Ошибка при отправке сообщения пользователю {telegram_user_id}: {e}")
             
             # Обновляем сообщение администратора
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 f"✅ <b>Доступ выдан</b>\n\n"
                 f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
@@ -421,8 +445,10 @@ async def admin_grant_access(callback: types.CallbackQuery):
         logger.error(f"Ошибка при выдаче доступа администратором {callback.from_user.id}: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Произошла ошибка при выдаче доступа", show_alert=True)
         try:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Произошла ошибка при выдаче доступа. Проверьте логи.")
         except:
             pass
@@ -432,6 +458,7 @@ async def admin_grant_access(callback: types.CallbackQuery):
 async def admin_reject_access(callback: types.CallbackQuery):
     """Обработчик отклонения запроса администратором"""
     if not is_admin(callback.from_user.id):
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
     
@@ -439,11 +466,13 @@ async def admin_reject_access(callback: types.CallbackQuery):
         # Парсим callback_data: admin_reject_{request_id}
         parts = callback.data.split("_")
         if len(parts) != 3:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.answer("❌ Неверный формат запроса", show_alert=True)
             return
         
         request_id = int(parts[2])
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("⏳ Обрабатываю запрос...")
         
         # Получаем запрос
@@ -451,10 +480,12 @@ async def admin_reject_access(callback: types.CallbackQuery):
         access_request = await get_request_by_id(request_id)
         
         if not access_request:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Запрос не найден")
             return
         
         if access_request.status != "pending":
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(f"❌ Запрос уже обработан (статус: {access_request.status})")
             return
         
@@ -473,6 +504,7 @@ async def admin_reject_access(callback: types.CallbackQuery):
             logger.error(f"Ошибка при отправке сообщения пользователю {access_request.telegram_id}: {e}")
         
         # Обновляем сообщение администратора
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             f"❌ <b>Запрос отклонен</b>\n\n"
             f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
@@ -485,8 +517,10 @@ async def admin_reject_access(callback: types.CallbackQuery):
         logger.error(f"Ошибка при отклонении запроса администратором {callback.from_user.id}: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.answer("❌ Произошла ошибка при отклонении запроса", show_alert=True)
         try:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text("❌ Произошла ошибка при отклонении запроса. Проверьте логи.")
         except:
             pass

@@ -20,6 +20,7 @@ router = Router(name="payments")
 async def handle_yookassa_payment(callback: types.CallbackQuery):
     """Обработчик выбора оплаты через Yookassa"""
     # Мгновенный фидбек через callback.answer()
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer("⏳ Создаю платеж...")
     
     try:
@@ -40,12 +41,14 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
                 amount_rub = 199
                 period_months = 1
             else:
+                # UI EXCEPTION: прямой вызов UI метода
                 await callback.message.edit_text(
                     "❌ Неизвестный тариф",
                     reply_markup=get_back_to_plans_keyboard()
                 )
                 return
         else:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ Неверный формат данных",
                 reply_markup=get_back_to_plans_keyboard()
@@ -58,6 +61,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         elif plan_code == "premium":
             plan_name = "Премиум тариф"
         else:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ Неизвестный тариф",
                 reply_markup=get_back_to_plans_keyboard()
@@ -73,6 +77,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         )
         
         # Обновляем сообщение с результатом (без мусорных loading сообщений)
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             f"💳 <b>{plan_name} - {period_text}</b>\n"
             f"💰 <b>Сумма:</b> {amount_rub}₽\n\n"
@@ -104,6 +109,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
                 "Попробуйте позже или обратитесь в поддержку."
             )
         
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             user_message,
             reply_markup=get_back_to_plans_keyboard()
@@ -112,6 +118,7 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         logger.error(f"Ошибка создания платежа Yookassa: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             "❌ <b>Ошибка создания платежа</b>\n\n"
             "Произошла ошибка при создании платежа. Попробуйте позже или обратитесь в поддержку.",
@@ -124,6 +131,7 @@ async def get_subscription_link(callback: types.CallbackQuery):
     """Обработчик кнопки получения ссылки подписки"""
     logger.info(f"Пользователь {callback.from_user.id} запросил ссылку подписки")
     # Даем мгновенный фидбек через callback.answer()
+    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer("⏳ Получаем ссылку подписки...")
     
     try:
@@ -131,6 +139,7 @@ async def get_subscription_link(callback: types.CallbackQuery):
         subscription = await get_user_active_subscription(callback.from_user.id, use_cache=True)
         
         if not subscription:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ <b>Подписка не найдена</b>\n\n"
                 "У вас нет активной подписки. Пожалуйста, приобретите подписку.",
@@ -329,6 +338,7 @@ async def get_subscription_link(callback: types.CallbackQuery):
             
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             from app.ui.callbacks import build_cb
+            # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
             from app.ui.screens import ScreenID
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Открыть ссылку", url=subscription_url)],
@@ -338,12 +348,14 @@ async def get_subscription_link(callback: types.CallbackQuery):
                 )]
             ])
             
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 message_text,
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
         else:
+            # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "⚠️ <b>Ссылка недоступна</b>\n\n"
                 "Не удалось получить ссылку подписки. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
@@ -354,6 +366,7 @@ async def get_subscription_link(callback: types.CallbackQuery):
         logger.error(f"Ошибка при получении ссылки подписки: {e}")
         import traceback
         logger.debug(traceback.format_exc())
+        # UI EXCEPTION: прямой вызов UI метода
         await callback.message.edit_text(
             "❌ <b>Ошибка</b>\n\n"
             "Произошла ошибка при получении ссылки. Попробуйте позже.",

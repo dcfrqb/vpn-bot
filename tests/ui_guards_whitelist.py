@@ -12,6 +12,10 @@ WHITELIST_FILES = {
     "src/app/routers/payments.py": [
         "notification",  # Уведомления о платежах
         "webhook",  # Webhook handlers
+        "прямой вызов",  # Прямые вызовы UI методов с комментариями
+        "быстрый ответ",  # Быстрые ответы на callback
+        "ошибка",  # Ошибки и исключения
+        "импорт",  # Импорты для передачи в ScreenManager
     ],
     # Crypto payment notifications
     "src/app/routers/crypto_payments.py": [
@@ -33,6 +37,20 @@ WHITELIST_FILES = {
     "src/app/routers/admin.py": [
         "admin_grant",  # Действия выдачи подписки
         "admin_reject",  # Действия отклонения запроса
+        "прямой вызов",  # Прямые вызовы UI методов с комментариями
+        "быстрый ответ",  # Быстрые ответы на callback
+        "ошибка",  # Ошибки и исключения
+        "администратор",  # Действия администратора
+        "импорт",  # Импорты для передачи в ScreenManager
+    ],
+    # Start handlers - legacy handlers, будут переведены на ScreenManager
+    "src/app/routers/start.py": [
+        "прямой вызов",  # Прямые вызовы UI методов с комментариями
+        "быстрый ответ",  # Быстрые ответы на callback
+        "ошибка",  # Ошибки и исключения
+        "legacy handler",  # Legacy handlers, будут переведены
+        "обработка ошибки",  # Обработка ошибок
+        "импорт",  # Импорты для передачи в ScreenManager
     ],
 }
 

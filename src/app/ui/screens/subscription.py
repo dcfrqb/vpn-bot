@@ -1,7 +1,7 @@
 """
 Экраны подписки
 """
-from typing import Optional
+from typing import Optional, Union
 from aiogram import types
 from app.ui.screens.base import BaseScreen
 from app.ui.screens import ScreenID
@@ -43,7 +43,7 @@ class SubscriptionPlansScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
         """
@@ -162,7 +162,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
         self,
         action: str,
         payload: str,
-        message_or_callback: types.Message | types.CallbackQuery | dict,
+        message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
         """

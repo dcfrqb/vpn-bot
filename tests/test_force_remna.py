@@ -36,6 +36,27 @@ def mock_session():
     return session
 
 
+@pytest.fixture(autouse=True)
+def mock_session_local(mock_session):
+    """Автоматически мокает SessionLocal для всех тестов"""
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+    
+    @asynccontextmanager
+    async def _session_context():
+        yield mock_session
+    
+    class SessionLocalFactory:
+        def __call__(self):
+            return _session_context()
+        
+        def __bool__(self):
+            return True
+    
+    with patch('app.services.sync_service.SessionLocal', SessionLocalFactory()):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_force_remna_deleted_subscription_returns_none(sync_service, mock_remna_client, mock_session):
     """Тест: force_remna при удалённой подписке -> Remna → none"""
