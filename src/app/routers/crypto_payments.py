@@ -2,7 +2,6 @@
 Роутер для обработки криптовалютных платежей
 """
 from aiogram import Router, types, F, Bot
-from aiogram.types import BufferedInputFile
 from app.logger import logger
 from app.services.payments.crypto import (
     create_crypto_payment,
@@ -10,7 +9,6 @@ from app.services.payments.crypto import (
     get_pending_crypto_payments,
     calculate_usdt_amount,
     get_usdt_amount,
-    generate_qr_code
 )
 from app.keyboards import get_payment_method_keyboard, get_back_to_plans_keyboard, get_main_menu_keyboard
 from app.config import settings
@@ -130,11 +128,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         
         address = settings.CRYPTO_USDT_TRC20_ADDRESS
         
-        # Генерируем QR-код с адресом
-        from app.services.payments.crypto import generate_qr_code
-        qr_code = generate_qr_code(address)
-        
-        # Формируем сообщение
+        # Формируем сообщение с адресом (без QR-кода)
         message_text = (
             f"₿ <b>Оплата USDT (TRC20)</b>\n\n"
             f"💳 <b>Тариф:</b> {plan_name} - {period_text}\n"
@@ -156,31 +150,20 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         payment_id = f"crypto_{user_id}_{timestamp}"
         
         # Формируем callback_data для кнопки "Я оплатил" с полной информацией о платеже
-        # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{qr_message_id}
+        # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}
         # Это позволит восстановить всю информацию без обращения к БД
         
-        # Отправляем QR-код с информацией
-        qr_file = BufferedInputFile(
-            qr_code.read(),
-            filename="payment_qr.png"
-        )
+        # Отправляем сообщение с адресом (без QR-кода)
+        info_message = await callback.message.answer(message_text, parse_mode="HTML")
+        info_message_id = info_message.message_id
         
-        qr_message = await callback.message.answer_photo(
-            photo=qr_file,
-            caption=message_text,
-            parse_mode="HTML"
-        )
-        
-        # Сохраняем message_id сообщения с QR-кодом ПЕРЕД отправкой кнопок
-        qr_message_id = qr_message.message_id
-        
-        # Отправляем сообщение с кнопками после QR-кода
+        # Отправляем сообщение с кнопками после адреса
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        # Формируем callback_data для возврата к выбору способа оплаты (включая qr_message_id)
-        change_payment_callback = f"change_payment_method_{plan_code}_{period_months}_{amount_rub}_{qr_message_id}"
+        # Формируем callback_data для возврата к выбору способа оплаты (включая info_message_id)
+        change_payment_callback = f"change_payment_method_{plan_code}_{period_months}_{amount_rub}_{info_message_id}"
         # Формируем callback_data для кнопки "Я оплатил" с полной информацией о платеже
-        # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{qr_message_id}
-        crypto_paid_callback = f"crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{qr_message_id}"
+        # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}
+        crypto_paid_callback = f"crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="✅ Я оплатил",
@@ -192,11 +175,11 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text="ℹ️ Помощь",
-                callback_data=f"help_from_crypto_{qr_message_id}"
+                callback_data=f"help_from_crypto_{info_message_id}"
             )],
             [InlineKeyboardButton(
                 text="⬅️ В главное меню",
-                callback_data=f"back_to_main_cleanup_{qr_message_id}"
+                callback_data=f"back_to_main_cleanup_{info_message_id}"
             )]
         ])
         
@@ -218,7 +201,7 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
                     if payment:
                         if not payment.payment_metadata:
                             payment.payment_metadata = {}
-                        payment.payment_metadata["qr_message_id"] = qr_message.message_id
+                        payment.payment_metadata["qr_message_id"] = info_message.message_id
                         payment.payment_metadata["buttons_message_id"] = buttons_message.message_id
                         payment.payment_metadata["chat_id"] = callback.message.chat.id
                         await session.commit()

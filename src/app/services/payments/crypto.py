@@ -1,8 +1,6 @@
 """
 Сервис для работы с криптовалютными платежами (USDT TRC20)
 """
-import io
-import qrcode
 from typing import Optional, Tuple
 from datetime import datetime
 from app.config import settings
@@ -13,30 +11,12 @@ from sqlalchemy import select
 from app.remnawave.client import RemnaClient
 
 
-def generate_qr_code(data: str) -> io.BytesIO:
-    """Генерирует QR-код для данных"""
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    
-    img = qr.make_image(fill_color="black", back_color="white")
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
-    return img_byte_arr
-
-
-async def create_crypto_payment(amount_rub: int, description: str, user_id: int) -> Tuple[str, Optional[io.BytesIO]]:
+async def create_crypto_payment(amount_rub: int, description: str, user_id: int) -> Tuple[str, None]:
     """
-    Создает крипто-платеж и возвращает адрес и QR-код
+    Создает крипто-платеж и возвращает адрес
     
     Returns:
-        Tuple[address, qr_code_image]
+        Tuple[address, None]
     """
     try:
         if not settings.CRYPTO_USDT_TRC20_ADDRESS:
@@ -92,11 +72,8 @@ async def create_crypto_payment(amount_rub: int, description: str, user_id: int)
             except Exception as e:
                 logger.error(f"Ошибка при сохранении крипто-платежа в БД: {e}")
         
-        # Генерируем QR-код с адресом
-        qr_code = generate_qr_code(address)
-        
         logger.info(f"Создан крипто-платеж для пользователя {user_id}, сумма: {amount_rub}₽, адрес: {address}")
-        return address, qr_code
+        return address, None
         
     except Exception as e:
         logger.error(f"Ошибка при создании крипто-платежа: {e}")
