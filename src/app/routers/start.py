@@ -912,11 +912,11 @@ async def admin_panel_callback(callback: types.CallbackQuery):
     )
 
 
-@router.message(Command("Solokhin"))
+@router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод /Solokhin — 1 месяц basic для новых пользователей (без подписок)"""
+    """Промокод /solokhin — 1 месяц basic для новых пользователей (без подписок)"""
     user_id = message.from_user.id
-    logger.info(f"Пользователь {user_id} вызвал промокод /Solokhin")
+    logger.info(f"Пользователь {user_id} вызвал промокод /solokhin")
 
     from sqlalchemy import select, func
     from app.db.session import SessionLocal
@@ -982,7 +982,7 @@ async def cmd_solokhin(message: types.Message):
                 subscription.config_data["subscription_url"] = subscription_url
                 await session.commit()
         except Exception as remna_err:
-            logger.warning(f"Remna API недоступна для промо Solokhin: {remna_err}")
+            logger.warning(f"Remna API недоступна для промо solokhin: {remna_err}")
 
         await invalidate_user_cache(user_id)
         await invalidate_subscription_cache(user_id)

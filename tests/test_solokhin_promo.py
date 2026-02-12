@@ -1,4 +1,4 @@
-"""Тесты для промокода /Solokhin — 1 месяц basic только для новых пользователей"""
+"""Тесты для промокода /solokhin — 1 месяц basic только для новых пользователей"""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram import types
@@ -16,14 +16,14 @@ def mock_message():
     )
     message = MagicMock(spec=types.Message)
     message.from_user = user
-    message.text = "/Solokhin"
+    message.text = "/solokhin"
     message.answer = AsyncMock()
     return message
 
 
 @pytest.mark.asyncio
 async def test_solokhin_grants_only_new_user(mock_message):
-    """Промокод /Solokhin выдаёт подписку только новому пользователю (count=0)"""
+    """Промокод /solokhin выдаёт подписку только новому пользователю (count=0)"""
     from app.routers.start import cmd_solokhin
 
     created_subscription = None
@@ -76,7 +76,7 @@ async def test_solokhin_grants_only_new_user(mock_message):
 
 @pytest.mark.asyncio
 async def test_solokhin_rejects_existing_user(mock_message):
-    """Промокод /Solokhin отклоняет пользователя с существующей подпиской"""
+    """Промокод /solokhin отклоняет пользователя с существующей подпиской"""
     from app.routers.start import cmd_solokhin
 
     mock_session = AsyncMock()
