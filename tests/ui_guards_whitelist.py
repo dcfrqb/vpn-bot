@@ -36,6 +36,7 @@ WHITELIST_FILES = {
     # Admin actions - не UI screens, а действия
     "src/app/routers/admin.py": [
         "admin_grant",  # Действия выдачи подписки
+        "admin_grant_forever",  # Выдача премиум навсегда
         "admin_reject",  # Действия отклонения запроса
         "прямой вызов",  # Прямые вызовы UI методов с комментариями
         "быстрый ответ",  # Быстрые ответы на callback

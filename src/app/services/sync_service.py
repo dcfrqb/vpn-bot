@@ -400,9 +400,12 @@ class SyncService:
                         subscription_status = "none"
                         logger.info(f"Подписка для {telegram_id} определена как NONE (нет expires_at и active=False)")
                     
-                    # Определяем plan_code из данных
-                    plan_code = remna_subscription.plan or "unknown"
-                    plan_name = remna_subscription.plan or "Неизвестный тариф"
+                    # Определяем plan_code из данных Remna
+                    raw_plan = remna_subscription.plan
+                    plan_code = (raw_plan or "unknown").lower().strip() if raw_plan else "unknown"
+                    # Нормализация: используем единый справочник тарифов
+                    from app.core.plans import get_plan_name
+                    plan_name = get_plan_name(plan_code if plan_code != "unknown" else None)
                     
                     # Определяем active на основе expires_at, а не remna_subscription.active
                     # Это важно для корректной синхронизации с панелью

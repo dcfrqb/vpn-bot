@@ -28,6 +28,7 @@ ACTION_MAP: Dict[ScreenID, Dict[str, Tuple[ActionEffect, Optional[ScreenID]]]] =
     ScreenID.SUBSCRIPTION_PLAN_DETAIL: {
         "open": ("NAVIGATION", None),
         "select": ("NAVIGATION", None),  # Остаётся на том же экране, но меняет состояние
+        "select_period": ("STATE", None),  # Выбор периода — обновление экрана без навигации
         "back": ("NAVIGATION", ScreenID.SUBSCRIPTION_PLANS),
     },
     ScreenID.SUBSCRIPTION_PAYMENT: {

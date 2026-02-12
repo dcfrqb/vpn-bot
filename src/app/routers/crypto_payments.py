@@ -94,15 +94,12 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
             await callback.answer("Неверный формат данных", show_alert=True)
             return
         
-        # Определяем название тарифа
-        if plan_code == "basic":
-            plan_name = "Базовый тариф"
-        elif plan_code == "premium":
-            plan_name = "Премиум тариф"
-        else:
-            # UI EXCEPTION: быстрый ответ на неизвестный тариф
+        # Определяем название тарифа (только basic/premium поддерживаются для оплаты)
+        from app.core.plans import get_plan_name
+        if not plan_code or str(plan_code).lower() not in ("basic", "premium"):
             await callback.answer("Неизвестный тариф", show_alert=True)
             return
+        plan_name = get_plan_name(plan_code)
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         
@@ -294,7 +291,8 @@ async def change_payment_method(callback: types.CallbackQuery):
     
     # Возвращаемся к выбору способа оплаты для того же тарифа
     from app.keyboards import get_payment_method_keyboard
-    plan_name = "Базовый тариф" if plan_code == "basic" else "Премиум тариф"
+    from app.core.plans import get_plan_name
+    plan_name = get_plan_name(plan_code)
     period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
     
     await callback.bot.send_message(
@@ -416,13 +414,9 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
             await callback.answer("❌ Ошибка доступа", show_alert=True)
             return
         
-        # Определяем название тарифа
-        if plan_code == "basic":
-            plan_name = "Базовый тариф"
-        elif plan_code == "premium":
-            plan_name = "Премиум тариф"
-        else:
-            plan_name = "Неизвестный тариф"
+        # Определяем название тарифа через единый справочник
+        from app.core.plans import get_plan_name
+        plan_name = get_plan_name(plan_code)
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         
@@ -674,12 +668,8 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
                     return
                 
                 # Используем информацию о тарифе из callback_data
-                if plan_code == "basic":
-                    plan_name = "Базовый тариф"
-                elif plan_code == "premium":
-                    plan_name = "Премиум тариф"
-                else:
-                    plan_name = "Неизвестный тариф"
+                from app.core.plans import get_plan_name
+                plan_name = get_plan_name(plan_code)
                 
                 period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
                 description = f"CRS VPN - {plan_name} ({period_text})"

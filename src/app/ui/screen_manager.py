@@ -1068,8 +1068,28 @@ class ScreenManager:
             return False
         
         # Если у экрана есть handle_action, делегируем
-        if hasattr(screen, 'handle_action') and action in ("page", "filter", "select"):
+        if hasattr(screen, 'handle_action') and action in ("page", "filter", "select", "select_period"):
             try:
+                # select_period не требует Navigator — делегируем напрямую в экран
+                if action == "select_period":
+                    result = await screen.handle_action(
+                        action, payload, message_or_callback, user_id
+                    )
+                    duration = (time.monotonic() - start_time) * 1000
+                    result_str = "OK" if result else "ERROR"
+                    logger.info(f"[UI STATE] result={result_str}, action={action}, duration={duration:.2f}ms")
+                    self._log_screen_action(
+                        request_id=request_id,
+                        telegram_id=user_id,
+                        screen_id=screen_id,
+                        action=action,
+                        payload=payload,
+                        mode="action",
+                        duration_ms=duration,
+                        action_type=action_type,
+                        backstack_size=backstack_size
+                    )
+                    return result
                 # Используем Navigator для STATE действий (page, filter, select)
                 if user_id:
                     navigator = get_navigator()
@@ -1594,8 +1614,6 @@ class ScreenManager:
                 logger.debug(f"[PERF] _create_viewmodel screen={screen_id.value} duration={vm_duration:.2f}ms user_id={user_id}")
 
 
-# Глобальный экземпляр ScreenManager
-_screen_manager: Optional[ScreenManager] = None
 # Глобальный экземпляр ScreenManager
 _screen_manager: Optional[ScreenManager] = None
 

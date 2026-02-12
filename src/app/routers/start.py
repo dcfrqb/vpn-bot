@@ -912,6 +912,87 @@ async def admin_panel_callback(callback: types.CallbackQuery):
     )
 
 
+@router.message(Command("Solokhin"))
+async def cmd_solokhin(message: types.Message):
+    """Промокод /Solokhin — 1 месяц basic для новых пользователей (без подписок)"""
+    user_id = message.from_user.id
+    logger.info(f"Пользователь {user_id} вызвал промокод /Solokhin")
+
+    from sqlalchemy import select, func
+    from app.db.session import SessionLocal
+    from app.db.models import Subscription
+    from app.repositories.subscription_repo import SubscriptionRepo
+    from app.services.users import get_or_create_telegram_user
+    from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
+
+    if not SessionLocal:
+        await message.answer("❌ Сервис временно недоступен. Попробуйте позже.")
+        return
+
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(func.count(Subscription.id)).where(
+                Subscription.telegram_user_id == user_id
+            )
+        )
+        count = result.scalar() or 0
+
+    if count > 0:
+        await message.answer(
+            "Промокод доступен только новым пользователям.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id)
+        )
+        return
+
+    async with SessionLocal() as session:
+        await get_or_create_telegram_user(
+            telegram_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            create_trial=False
+        )
+
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        expires_at = now + timedelta(days=30)
+
+        sub_repo = SubscriptionRepo(session)
+        subscription = await sub_repo.upsert_subscription(
+            telegram_user_id=user_id,
+            defaults={
+                "plan_code": "basic",
+                "plan_name": "Базовый",
+                "active": True,
+                "valid_until": expires_at,
+                "config_data": {"source": "promo_solokhin"},
+            },
+        )
+        await session.commit()
+        await session.refresh(subscription)
+
+        try:
+            from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
+            subscription_url = await get_or_create_remna_user_and_get_subscription_url(
+                telegram_user_id=user_id,
+                subscription_id=subscription.id
+            )
+            if subscription_url:
+                if not subscription.config_data:
+                    subscription.config_data = {}
+                subscription.config_data["subscription_url"] = subscription_url
+                await session.commit()
+        except Exception as remna_err:
+            logger.warning(f"Remna API недоступна для промо Solokhin: {remna_err}")
+
+        await invalidate_user_cache(user_id)
+        await invalidate_subscription_cache(user_id)
+
+    await message.answer(
+        "Вам выдан 1 месяц бесплатного доступа 🎉",
+        reply_markup=get_main_menu_keyboard(user_id=user_id)
+    )
+
+
 @router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     """Команда /myid показывает ваш Telegram ID"""

@@ -1,7 +1,7 @@
 """Сервис для работы с подписками и уведомлениями"""
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Subscription, TelegramUser
@@ -93,13 +93,18 @@ async def get_subscriptions_expiring_soon(days: int) -> List[Dict[str, Any]]:
     return subscriptions
 
 
+EXPIRY_NOTICE_RATE_LIMIT_HOURS = 24  # Максимум 1 уведомление раз в 24 часа
+
+
 async def send_expiration_notification(
     bot,
     telegram_user_id: int,
     days_left: int,
     subscription: Subscription
 ) -> bool:
-    """Отправляет уведомление пользователю об истечении подписки"""
+    """Отправляет уведомление пользователю об истечении подписки.
+    Дедупликация: максимум 1 уведомление раз в 24 часа на (user_id, subscription_id).
+    """
     try:
         plan_name = subscription.plan_name or subscription.plan_code.upper()
         expires_at_str = subscription.valid_until.strftime("%d.%m.%Y %H:%M")
@@ -150,8 +155,50 @@ async def send_expiration_notification(
         return False
 
 
+async def try_acquire_expiry_notice_lock(subscription_id: int) -> bool:
+    """
+    Атомарно «захватывает» право на отправку уведомления.
+    UPDATE выполняется только если last_expiry_notice_at IS NULL
+    или last_expiry_notice_at < cutoff (24h назад).
+    Безопасно при нескольких воркерах: только один получит rowcount=1.
+
+    Returns:
+        True — право захвачено, можно отправлять. False — недавно уже отправляли.
+    """
+    if not SessionLocal:
+        return False
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=EXPIRY_NOTICE_RATE_LIMIT_HOURS)
+    async with SessionLocal() as session:
+        try:
+            result = await session.execute(
+                update(Subscription)
+                .where(
+                    Subscription.id == subscription_id,
+                    or_(
+                        Subscription.last_expiry_notice_at.is_(None),
+                        Subscription.last_expiry_notice_at < cutoff,
+                    ),
+                )
+                .values(last_expiry_notice_at=now)
+            )
+            await session.commit()
+            acquired = result.rowcount == 1
+            if not acquired:
+                logger.debug(
+                    f"Подписка {subscription_id}: уведомление уже отправляли недавно (rate-limit)"
+                )
+            return acquired
+        except Exception as e:
+            logger.error(f"Ошибка try_acquire_expiry_notice_lock для подписки {subscription_id}: {e}")
+            await session.rollback()
+            return False
+
+
 async def process_subscription_notifications(bot) -> Dict[str, int]:
-    """Обрабатывает уведомления об истечении подписок"""
+    """Обрабатывает уведомления об истечении подписок.
+    Дедупликация: максимум 1 уведомление раз в 24 часа на (user_id, subscription_id).
+    """
     if not SessionLocal:
         return {"notified_3d": 0, "notified_1d": 0, "notified_0d": 0, "errors": 0}
     
@@ -164,8 +211,11 @@ async def process_subscription_notifications(bot) -> Dict[str, int]:
         subs_3d = await get_subscriptions_expiring_soon(3)
         for sub_data in subs_3d:
             if sub_data["days_left"] == 3:
+                sub = sub_data["subscription"]
+                if not await try_acquire_expiry_notice_lock(sub.id):
+                    continue
                 if await send_expiration_notification(
-                    bot, sub_data["user"].telegram_id, 3, sub_data["subscription"]
+                    bot, sub_data["user"].telegram_id, 3, sub
                 ):
                     notified_3d += 1
                 else:
@@ -174,8 +224,11 @@ async def process_subscription_notifications(bot) -> Dict[str, int]:
         subs_1d = await get_subscriptions_expiring_soon(1)
         for sub_data in subs_1d:
             if sub_data["days_left"] == 1:
+                sub = sub_data["subscription"]
+                if not await try_acquire_expiry_notice_lock(sub.id):
+                    continue
                 if await send_expiration_notification(
-                    bot, sub_data["user"].telegram_id, 1, sub_data["subscription"]
+                    bot, sub_data["user"].telegram_id, 1, sub
                 ):
                     notified_1d += 1
                 else:
@@ -184,8 +237,11 @@ async def process_subscription_notifications(bot) -> Dict[str, int]:
         subs_0d = await get_subscriptions_expiring_soon(0)
         for sub_data in subs_0d:
             if sub_data["days_left"] == 0:
+                sub = sub_data["subscription"]
+                if not await try_acquire_expiry_notice_lock(sub.id):
+                    continue
                 if await send_expiration_notification(
-                    bot, sub_data["user"].telegram_id, 0, sub_data["subscription"]
+                    bot, sub_data["user"].telegram_id, 0, sub
                 ):
                     notified_0d += 1
                 else:

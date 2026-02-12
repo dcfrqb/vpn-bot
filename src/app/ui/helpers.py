@@ -234,7 +234,9 @@ async def get_profile_viewmodel(telegram_id: int) -> 'ProfileViewModel':
     subscription_days_left = None
     
     if subscription:
-        subscription_plan = subscription.plan_name or (subscription.plan_code.upper() if subscription.plan_code else None)
+        from app.core.plans import get_plan_name
+        # Приоритет: plan_name из БД, иначе нормализованное название по plan_code
+        subscription_plan = subscription.plan_name or get_plan_name(subscription.plan_code)
         if subscription.valid_until:
             subscription_valid_until = subscription.valid_until
             if subscription.valid_until > datetime.utcnow():

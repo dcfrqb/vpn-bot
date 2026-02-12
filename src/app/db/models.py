@@ -107,6 +107,9 @@ class Subscription(Base):
     # Статус
     active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    last_expiry_notice_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="Время последнего уведомления об истечении (rate-limit 24h)"
+    )
     
     # Дополнительные данные
     config_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True, comment="Данные конфигурации VPN")

@@ -266,6 +266,12 @@ def get_admin_access_request_keyboard(request_id: int) -> types.InlineKeyboardMa
         ],
         [
             types.InlineKeyboardButton(
+                text="Выдать навсегда",
+                callback_data=f"admin_grant_forever_{request_id}"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
                 text="❌ Отклонить",
                 callback_data=f"admin_reject_{request_id}"
             )

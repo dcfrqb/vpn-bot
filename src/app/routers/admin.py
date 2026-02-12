@@ -304,6 +304,131 @@ async def admin_back_callback(callback: types.CallbackQuery):
     )
 
 
+@router.callback_query(F.data.startswith("admin_grant_forever_"))
+async def admin_grant_forever(callback: types.CallbackQuery):
+    """Обработчик выдачи премиум навсегда (до 31.12.2099)"""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет прав администратора", show_alert=True)
+        return
+
+    try:
+        # Парсим callback_data: admin_grant_forever_{request_id}
+        parts = callback.data.split("_")
+        if len(parts) != 4:
+            await callback.answer("❌ Неверный формат запроса", show_alert=True)
+            return
+
+        request_id = int(parts[3])
+
+        await callback.answer("⏳ Обрабатываю запрос...")
+
+        from app.services.access_request import get_request_by_id, approve_request
+        access_request = await get_request_by_id(request_id)
+
+        if not access_request:
+            await callback.message.edit_text("❌ Запрос не найден")
+            return
+
+        if access_request.status != "pending":
+            await callback.message.edit_text(
+                f"❌ Запрос уже обработан (статус: {access_request.status})"
+            )
+            return
+
+        telegram_user_id = access_request.telegram_id
+
+        from datetime import datetime, timezone
+        from app.db.session import SessionLocal
+        from app.repositories.subscription_repo import SubscriptionRepo
+        from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
+        from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
+
+        expires_at = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+        async with SessionLocal() as session:
+            from app.services.users import get_or_create_telegram_user
+            await get_or_create_telegram_user(
+                telegram_id=telegram_user_id,
+                username=access_request.username,
+                first_name=access_request.name,
+                create_trial=False
+            )
+
+            sub_repo = SubscriptionRepo(session)
+            subscription = await sub_repo.upsert_subscription(
+                telegram_user_id=telegram_user_id,
+                defaults={
+                    "plan_code": "premium",
+                    "plan_name": "Премиум",
+                    "active": True,
+                    "valid_until": expires_at,
+                    "last_expiry_notice_at": None,
+                    "config_data": {"source": "admin_forever"},
+                },
+            )
+
+            await session.commit()
+            await session.refresh(subscription)
+
+            logger.info(
+                f"[ADMIN] Granted premium forever to user_id={telegram_user_id}"
+            )
+
+            try:
+                subscription_url = await get_or_create_remna_user_and_get_subscription_url(
+                    telegram_user_id=telegram_user_id,
+                    subscription_id=subscription.id
+                )
+                if subscription_url:
+                    if not subscription.config_data:
+                        subscription.config_data = {}
+                    subscription.config_data["subscription_url"] = subscription_url
+                    await session.commit()
+            except Exception as remna_error:
+                logger.error(f"Ошибка при создании пользователя в Remna API: {remna_error}")
+
+            await invalidate_user_cache(telegram_user_id)
+            await invalidate_subscription_cache(telegram_user_id)
+            await approve_request(request_id, callback.from_user.id)
+
+            try:
+                user_message = (
+                    "✅ <b>Ваш запрос на доступ одобрен!</b>\n\n"
+                    "💳 <b>Тариф:</b> Премиум (навсегда)\n"
+                    "📅 <b>Действует до:</b> 31.12.2099\n\n"
+                    "🎉 Ваша подписка активирована! Теперь вы можете получить ссылку для настройки VPN."
+                )
+                from app.keyboards import get_subscription_link_keyboard
+                await callback.bot.send_message(
+                    chat_id=telegram_user_id,
+                    text=user_message,
+                    reply_markup=get_subscription_link_keyboard(),
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения пользователю {telegram_user_id}: {e}")
+
+            valid_until_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            await callback.message.edit_text(
+                "✅ <b>Премиум навсегда выдан</b>\n\n"
+                f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
+                f"Действует до: {valid_until_str}\n\n"
+                "Пользователю отправлено уведомление."
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка при выдаче премиум навсегда {callback.from_user.id}: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        await callback.answer("❌ Произошла ошибка при выдаче доступа", show_alert=True)
+        try:
+            await callback.message.edit_text(
+                "❌ Произошла ошибка при выдаче доступа. Проверьте логи."
+            )
+        except Exception:
+            pass
+
+
 @router.callback_query(F.data.startswith("admin_grant_"))
 async def admin_grant_access(callback: types.CallbackQuery):
     """Обработчик выдачи доступа администратором"""
