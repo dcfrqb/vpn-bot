@@ -343,13 +343,14 @@ async def admin_grant_forever(callback: types.CallbackQuery):
 
         await callback.answer("⏳ Обрабатываю запрос...")
 
-        from datetime import datetime, timezone
+        from datetime import datetime
         from app.db.session import SessionLocal
         from app.repositories.subscription_repo import SubscriptionRepo
         from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
         from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
 
-        expires_at = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        # naive datetime — PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+        expires_at = datetime(2099, 12, 31, 23, 59, 59)
 
         async with SessionLocal() as session:
             from app.services.users import get_or_create_telegram_user
