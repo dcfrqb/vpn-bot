@@ -1,5 +1,5 @@
 """Сервис для работы с пользователями"""
-from datetime import datetime
+from datetime import datetime as dt
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,8 +37,8 @@ async def get_or_create_telegram_user(
             last_name = last_name
             language_code = language_code
             is_admin = False
-            created_at = datetime.utcnow()
-            last_activity_at = datetime.utcnow()
+            created_at = dt.utcnow()
+            last_activity_at = dt.utcnow()
         return MockUser()
     
     async with SessionLocal() as session:
@@ -53,7 +53,7 @@ async def get_or_create_telegram_user(
             user.first_name = first_name
             user.last_name = last_name
             user.language_code = language_code
-            user.last_activity_at = datetime.utcnow()
+            user.last_activity_at = dt.utcnow()
             logger.debug(f"Обновлен пользователь {telegram_id}")
         else:
             user = TelegramUser(
@@ -62,7 +62,7 @@ async def get_or_create_telegram_user(
                 first_name=first_name,
                 last_name=last_name,
                 language_code=language_code,
-                last_activity_at=datetime.utcnow()
+                last_activity_at=dt.utcnow()
             )
             session.add(user)
             is_new_user = True
@@ -93,7 +93,7 @@ async def update_user_activity(telegram_id: int) -> None:
         user = result.scalar_one_or_none()
         
         if user:
-            user.last_activity_at = datetime.utcnow()
+            user.last_activity_at = dt.utcnow()
             await session.commit()
 
 
@@ -113,7 +113,7 @@ async def get_user_active_subscription(telegram_id: int, use_cache: bool = True)
                     # Создаем объект из кэшированных данных
                     sub_data = cached.copy()
                     if sub_data.get('valid_until'):
-                        sub_data['valid_until'] = datetime.fromisoformat(sub_data['valid_until'])
+                        sub_data['valid_until'] = dt.fromisoformat(sub_data['valid_until'])
                     # Создаем минимальный объект Subscription (используем глобальный импорт)
                     subscription = Subscription()
                     for key, value in sub_data.items():
@@ -128,7 +128,7 @@ async def get_user_active_subscription(telegram_id: int, use_cache: bool = True)
     
     # Получаем из БД
     async with SessionLocal() as session:
-        now = datetime.utcnow()
+        now = dt.utcnow()
         result = await session.execute(
             select(Subscription)
             .join(TelegramUser, Subscription.telegram_user_id == TelegramUser.telegram_id)
