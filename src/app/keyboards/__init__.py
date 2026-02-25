@@ -99,18 +99,29 @@ def get_payment_method_keyboard(plan_code: str, period_months: int = 1, amount: 
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_payment_keyboard(payment_url: str) -> types.InlineKeyboardMarkup:
-    """Клавиатура для оплаты"""
-    return types.InlineKeyboardMarkup(inline_keyboard=[
+def get_payment_keyboard(payment_url: str, external_id: str) -> types.InlineKeyboardMarkup:
+    """Клавиатура для оплаты: Оплатить, Проверить оплату (привязана к external_id), Назад.
+    YooKassa external_id — UUID 36 символов, check_payment:<id> укладывается в лимит 64 байта."""
+    keyboard = [
         [types.InlineKeyboardButton(text="💳 Оплатить", url=payment_url)],
+        [types.InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_payment:{external_id}")],
         [types.InlineKeyboardButton(text="⬅️ Назад к тарифам", callback_data="buy_subscription")]
-    ])
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def get_back_to_plans_keyboard() -> types.InlineKeyboardMarkup:
     """Клавиатура с кнопкой возврата к тарифам"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⬅️ Назад к тарифам", callback_data="buy_subscription")]
+    ])
+
+
+def get_new_payment_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура для NOT_FOUND: кнопка «Создать новый платёж» (buy_subscription)"""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="💳 Создать новый платёж", callback_data="buy_subscription")],
+        [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
     ])
 
 

@@ -86,7 +86,7 @@ async def test_payment_and_subscription_flow(test_db_with_postgres, mock_bot):
         mock_payment_class.create.return_value = mock_payment_object
         mock_get_url.return_value = "https://remna.example.com/subscription/456"
         
-        payment_url = await create_payment(
+        payment_url, external_id = await create_payment(
             amount_rub=199,
             description="CRS VPN - Премиум тариф (1 месяц)",
             user_id=987654321
@@ -94,6 +94,7 @@ async def test_payment_and_subscription_flow(test_db_with_postgres, mock_bot):
         
         assert payment_url is not None
         assert "yookassa.ru" in payment_url
+        assert external_id == "test_payment_123"
         
         result = await session.execute(
             select(Payment).where(Payment.telegram_user_id == 987654321)

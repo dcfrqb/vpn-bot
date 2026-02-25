@@ -84,11 +84,16 @@ async def build_subscription_plan_detail_keyboard(viewmodel: SubscriptionPlanDet
 
 
 async def build_subscription_payment_keyboard(viewmodel: SubscriptionPaymentViewModel) -> types.InlineKeyboardMarkup:
-    """Строит клавиатуру экрана оплаты"""
+    """Строит клавиатуру экрана оплаты (кнопка «Проверить» привязана к external_id)"""
     keyboard = []
     
     if viewmodel.payment_url:
         keyboard.append([types.InlineKeyboardButton(text="💳 Оплатить", url=viewmodel.payment_url)])
+        if viewmodel.external_id:
+            keyboard.append([types.InlineKeyboardButton(
+                text="🔄 Проверить оплату",
+                callback_data=f"check_payment:{viewmodel.external_id}"
+            )])
     
     # Кнопка помощи
     keyboard.append([types.InlineKeyboardButton(

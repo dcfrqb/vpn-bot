@@ -1,10 +1,95 @@
 import asyncio
 import httpx
-from typing import Optional, Dict, Any
-from datetime import datetime
+from typing import Optional, Dict, Any, Union
+from datetime import datetime, date, timezone
 from dataclasses import dataclass
 from app.config import settings
+from app.core.errors import InfraError
 from app.logger import logger
+
+# Фиксированное значение для подписки "навсегда" (Remna не поддерживает null/бессрочно)
+LIFETIME_EXPIRE_AT = "2099-12-31T23:59:59Z"
+
+# Whitelist полей для update_user и маппинг snake_case -> camelCase
+_USER_UPDATE_WHITELIST = {
+    "name": "name",
+    "username": "username",
+    "password": "password",
+    "permissions": "permissions",
+    "expire_at": "expireAt",
+    "expireAt": "expireAt",
+    "telegram_id": "telegramId",
+    "telegramId": "telegramId",
+    "active_internal_squads": "activeInternalSquads",
+    "activeInternalSquads": "activeInternalSquads",
+}
+
+
+def normalize_expire_at(value: Optional[Union[str, datetime, date]]) -> Optional[str]:
+    """
+    Нормализует значение expireAt для Remna API.
+    - None -> None
+    - datetime/date с year >= 2099 -> LIFETIME_EXPIRE_AT
+    - str содержащий "2099" (подписка навсегда) -> LIFETIME_EXPIRE_AT
+    - иначе -> ISO8601 UTC с суффиксом Z
+    """
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        if getattr(value, "year", 0) >= 2099:
+            return LIFETIME_EXPIRE_AT
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                logger.debug("Remna normalize_expire_at: naive datetime трактуется как UTC")
+                value = value.replace(tzinfo=timezone.utc)
+            value = value.astimezone(timezone.utc)
+            return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime(value.year, value.month, value.day, 23, 59, 59, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(value, str):
+        if "2099" in value:
+            return LIFETIME_EXPIRE_AT
+        try:
+            expire_str = value.replace("Z", "+00:00").replace("z", "+00:00")
+            if "+" not in expire_str and "-" not in expire_str[-6:]:
+                expire_str += "+00:00"
+            dt = datetime.fromisoformat(expire_str)
+            if dt.tzinfo:
+                dt = dt.astimezone(timezone.utc)
+            else:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            return value
+    return None
+
+
+def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Строит payload для Remna API из kwargs с whitelist и маппингом snake_case -> camelCase.
+    Не включает поля со значением None. Приоритет для expire: expireAt > expire_at.
+    """
+    result: Dict[str, Any] = {}
+    expire_val = kwargs.get("expireAt", kwargs.get("expire_at"))
+    if expire_val is not None:
+        normalized = normalize_expire_at(expire_val)
+        if normalized is not None:
+            result["expireAt"] = normalized
+    for key, val in kwargs.items():
+        if val is None:
+            continue
+        if key in ("expire_at", "expireAt"):
+            continue
+        api_key = _USER_UPDATE_WHITELIST.get(key)
+        if api_key is None:
+            logger.debug(f"Remna update_user: игнорируем неподдерживаемое поле {key!r}")
+            continue
+        if api_key == "telegramId":
+            result["telegramId"] = int(val)
+        elif api_key == "activeInternalSquads":
+            result["activeInternalSquads"] = val if isinstance(val, list) else [val]
+        else:
+            result[api_key] = val
+    return result
 
 
 @dataclass
@@ -196,15 +281,16 @@ class RemnaClient:
         """Получить список пользователей"""
         return await self.request("GET", f"/api/users?size={size}&start={start}")
 
-    async def create_user(self, username: str, password: str, expire_at: Optional[str] = None, telegram_id: Optional[int] = None, active_internal_squads: Optional[list] = None) -> Dict[str, Any]:
+    async def create_user(self, username: str, password: str, expire_at: Optional[Union[str, datetime, date]] = None, telegram_id: Optional[int] = None, active_internal_squads: Optional[list] = None) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
-        # Используем /api/users для создания через API токен (не /api/auth/register)
-        # Remna API требует поле expireAt (дата истечения подписки)
+        # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
         payload = {"username": username, "password": password}
-        if expire_at:
-            payload["expireAt"] = expire_at
+        normalized_expire = normalize_expire_at(expire_at)
+        if normalized_expire:
+            payload["expireAt"] = normalized_expire
+            logger.debug(f"Remna create_user: expireAt={normalized_expire}")
         if telegram_id:
-            payload["telegramId"] = int(telegram_id)  # Remna API принимает telegramId как число
+            payload["telegramId"] = int(telegram_id)
         if active_internal_squads:
             payload["activeInternalSquads"] = active_internal_squads
         return await self.request("POST", "/api/users", json=payload)
@@ -459,34 +545,33 @@ class RemnaClient:
         return (remna_user, subscription)
 
     async def update_user(self, user_id: str, **kwargs) -> Dict[str, Any]:
-        """Обновить данные пользователя"""
-        # Пробуем разные варианты эндпоинтов
+        """Обновить данные пользователя. kwargs: expire_at/expireAt, telegram_id/telegramId, active_internal_squads/activeInternalSquads и др. (whitelist)."""
+        payload = build_user_payload_from_kwargs(kwargs)
+        if payload.get("expireAt"):
+            logger.debug(f"Remna update_user {user_id}: expireAt={payload['expireAt']}")
+        if not payload:
+            logger.debug("Remna update_user: пустой payload после фильтрации kwargs")
+            return {}
         endpoints = [
             f"/api/user/{user_id}",
             f"/api/users/{user_id}",
             f"/api/users/{user_id}/update",
         ]
-        
         for endpoint in endpoints:
             try:
-                return await self.request("PUT", endpoint, json=kwargs)
-            except Exception as e:
-                if "404" not in str(e):
-                    # Если не 404, значит эндпоинт существует, но другая ошибка
-                    raise
-                continue
-        
-        # Если все варианты не сработали, пробуем PATCH
-        for endpoint in endpoints:
-            try:
-                return await self.request("PATCH", endpoint, json=kwargs)
+                return await self.request("PUT", endpoint, json=payload)
             except Exception as e:
                 if "404" not in str(e):
                     raise
                 continue
-        
-        # Если ничего не сработало, пробуем последний вариант
-        return await self.request("PUT", f"/api/users/{user_id}", json=kwargs)
+        for endpoint in endpoints:
+            try:
+                return await self.request("PATCH", endpoint, json=payload)
+            except Exception as e:
+                if "404" not in str(e):
+                    raise
+                continue
+        return await self.request("PUT", f"/api/users/{user_id}", json=payload)
 
     async def get_nodes(self) -> Dict[str, Any]:
         """Получить список нод"""

@@ -48,6 +48,17 @@ class SubscriptionChecker:
                     f"ошибок - {notification_result['errors']}"
                 )
                 
+                try:
+                    from app.services.payments.recovery import retry_needs_provisioning, recheck_pending_payments
+                    prov_result = await retry_needs_provisioning(self.bot)
+                    if prov_result["processed"]:
+                        logger.info(f"Payment recovery (needs_provisioning): processed={prov_result['processed']} succeeded={prov_result['succeeded']} errors={prov_result['errors']}")
+                    pend_result = await recheck_pending_payments(self.bot)
+                    if pend_result["checked"]:
+                        logger.info(f"Payment recovery (pending recheck): checked={pend_result['checked']} updated={pend_result['updated']} errors={pend_result['errors']}")
+                except Exception as e:
+                    logger.debug(f"Payment recovery error: {e}")
+                
                 logger.info(f"Проверка завершена. Следующая проверка через {self.check_interval} сек")
                 
             except Exception as e:

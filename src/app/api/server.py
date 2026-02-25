@@ -1,6 +1,11 @@
 """
 Скрипт для запуска FastAPI сервера
 """
+from app.utils.preflight import run_preflight_webhook_api
+
+# Preflight: проверка обязательных env до старта
+run_preflight_webhook_api()
+
 import uvicorn
 from app.config import settings
 from app.logger import logger

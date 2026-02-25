@@ -149,8 +149,20 @@ run() {
         fi
     fi
     
-    # Запускаем приложение
-    docker-compose up -d
+    # Запускаем db и redis
+    docker-compose up -d db redis
+    info "Ожидание готовности db/redis..."
+    sleep 10
+    
+    # Миграции (one-shot)
+    info "Применение миграций..."
+    docker-compose --profile migrate run --rm migrate || {
+        error "Ошибка применения миграций"
+        return 1
+    }
+    
+    # Запускаем bot и webhook-api
+    docker-compose up -d bot webhook-api
     
     info "Ожидание готовности сервисов..."
     sleep 5

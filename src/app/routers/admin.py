@@ -306,36 +306,42 @@ async def admin_back_callback(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_grant_forever_"))
 async def admin_grant_forever(callback: types.CallbackQuery):
-    """Обработчик выдачи премиум навсегда (до 31.12.2099)"""
+    """Обработчик выдачи премиум навсегда (до 31.12.2099). Идемпотентен."""
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет прав администратора", show_alert=True)
         return
 
     try:
-        # Парсим callback_data: admin_grant_forever_{request_id}
         parts = callback.data.split("_")
         if len(parts) != 4:
             await callback.answer("❌ Неверный формат запроса", show_alert=True)
             return
 
         request_id = int(parts[3])
-
-        await callback.answer("⏳ Обрабатываю запрос...")
+        target_user_id = None
 
         from app.services.access_request import get_request_by_id, approve_request
         access_request = await get_request_by_id(request_id)
 
         if not access_request:
+            await callback.answer("❌ Запрос не найден", show_alert=True)
             await callback.message.edit_text("❌ Запрос не найден")
             return
 
+        target_user_id = access_request.telegram_id
+
         if access_request.status != "pending":
+            await callback.answer("✅ Уже обработано")
+            valid_until_str = "31.12.2099"
             await callback.message.edit_text(
-                f"❌ Запрос уже обработан (статус: {access_request.status})"
+                "✅ <b>Премиум навсегда уже выдан</b>\n\n"
+                f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
+                f"Действует до: {valid_until_str}\n\n"
+                f"(Запрос обработан ранее, статус: {access_request.status})"
             )
             return
 
-        telegram_user_id = access_request.telegram_id
+        await callback.answer("⏳ Обрабатываю запрос...")
 
         from datetime import datetime, timezone
         from app.db.session import SessionLocal
@@ -348,21 +354,23 @@ async def admin_grant_forever(callback: types.CallbackQuery):
         async with SessionLocal() as session:
             from app.services.users import get_or_create_telegram_user
             await get_or_create_telegram_user(
-                telegram_id=telegram_user_id,
+                telegram_id=target_user_id,
                 username=access_request.username,
                 first_name=access_request.name,
-                create_trial=False
+                last_name=None,
+                create_trial=False,
             )
 
             sub_repo = SubscriptionRepo(session)
             subscription = await sub_repo.upsert_subscription(
-                telegram_user_id=telegram_user_id,
+                telegram_user_id=target_user_id,
                 defaults={
                     "plan_code": "premium",
                     "plan_name": "Премиум",
                     "active": True,
                     "valid_until": expires_at,
                     "last_expiry_notice_at": None,
+                    "is_lifetime": True,
                     "config_data": {"source": "admin_forever"},
                 },
             )
@@ -371,12 +379,13 @@ async def admin_grant_forever(callback: types.CallbackQuery):
             await session.refresh(subscription)
 
             logger.info(
-                f"[ADMIN] Granted premium forever to user_id={telegram_user_id}"
+                f"[ADMIN] admin grant forever: target_user_id={target_user_id} request_id={request_id} "
+                f"subscription_id={subscription.id}"
             )
 
             try:
                 subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                    telegram_user_id=telegram_user_id,
+                    telegram_user_id=target_user_id,
                     subscription_id=subscription.id
                 )
                 if subscription_url:
@@ -387,8 +396,8 @@ async def admin_grant_forever(callback: types.CallbackQuery):
             except Exception as remna_error:
                 logger.error(f"Ошибка при создании пользователя в Remna API: {remna_error}")
 
-            await invalidate_user_cache(telegram_user_id)
-            await invalidate_subscription_cache(telegram_user_id)
+            await invalidate_user_cache(target_user_id)
+            await invalidate_subscription_cache(target_user_id)
             await approve_request(request_id, callback.from_user.id)
 
             try:
@@ -400,13 +409,13 @@ async def admin_grant_forever(callback: types.CallbackQuery):
                 )
                 from app.keyboards import get_subscription_link_keyboard
                 await callback.bot.send_message(
-                    chat_id=telegram_user_id,
+                    chat_id=target_user_id,
                     text=user_message,
                     reply_markup=get_subscription_link_keyboard(),
                     parse_mode="HTML"
                 )
             except Exception as e:
-                logger.error(f"Ошибка при отправке сообщения пользователю {telegram_user_id}: {e}")
+                logger.error(f"Ошибка при отправке сообщения пользователю {target_user_id}: {e}")
 
             valid_until_str = expires_at.strftime("%d.%m.%Y %H:%M")
             await callback.message.edit_text(
@@ -417,7 +426,7 @@ async def admin_grant_forever(callback: types.CallbackQuery):
             )
 
     except Exception as e:
-        logger.error(f"Ошибка при выдаче премиум навсегда {callback.from_user.id}: {e}")
+        logger.error(f"Ошибка при выдаче премиум навсегда: {e}")
         import traceback
         logger.debug(traceback.format_exc())
         await callback.answer("❌ Произошла ошибка при выдаче доступа", show_alert=True)

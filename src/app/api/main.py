@@ -76,7 +76,7 @@ async def health_check():
 
 
 @app.post("/webhook/yookassa")
-async def yookassa_webhook(request: Request):
+async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None, alias="X-Webhook-Secret")):
     """
     Эндпоинт для обработки webhook'ов от ЮKassa
     
@@ -85,8 +85,19 @@ async def yookassa_webhook(request: Request):
     - payment.waiting_for_capture - платеж ожидает подтверждения
     - payment.canceled - отмена платежа
     - refund.succeeded - успешный возврат
+    
+    Защита: если YOOKASSA_WEBHOOK_SECRET задан, требуется заголовок X-Webhook-Secret.
     """
     try:
+        # Минимальная защита: X-Webhook-Secret
+        secret = settings.YOOKASSA_WEBHOOK_SECRET
+        if secret and str(secret).strip():
+            if not x_webhook_secret or x_webhook_secret != str(secret).strip():
+                logger.warning("Webhook rejected: X-Webhook-Secret mismatch or missing")
+                raise HTTPException(status_code=401, detail="Unauthorized")
+        else:
+            logger.warning("YOOKASSA_WEBHOOK_SECRET not configured — webhook accepts any request (dev only, PROD: set secret)")
+
         # Получаем данные из запроса
         try:
             data = await request.json()

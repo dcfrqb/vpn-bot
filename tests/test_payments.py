@@ -124,7 +124,7 @@ async def test_create_payment_success(mock_payment_object):
         mock_session.execute.return_value = mock_result
         
         # Вызываем функцию
-        payment_url = await create_payment(
+        payment_url, external_id = await create_payment(
             amount_rub=99,
             description="CRS VPN - Базовый тариф (30 дней)",
             user_id=123456789
@@ -132,6 +132,7 @@ async def test_create_payment_success(mock_payment_object):
         
         # Проверки
         assert payment_url == "https://yookassa.ru/checkout/payments/test_payment_123"
+        assert external_id == "test_payment_123"
         mock_payment_class.create.assert_called_once()
         mock_session.add.assert_called_once()
         mock_session.commit.assert_called_once()
@@ -139,25 +140,23 @@ async def test_create_payment_success(mock_payment_object):
 
 @pytest.mark.asyncio
 async def test_create_payment_without_db(mock_payment_object):
-    """Тест создания платежа без БД"""
+    """Тест создания платежа без БД — теперь должен вызывать исключение"""
     with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
          patch('app.services.payments.yookassa.SessionLocal', None), \
          patch('app.services.payments.yookassa.settings') as mock_settings:
         
-        # Мокируем настройки YooKassa
         mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
         mock_settings.YOOKASSA_API_KEY = "test_api_key"
         mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
         
         mock_payment_class.create.return_value = mock_payment_object
         
-        payment_url = await create_payment(
-            amount_rub=99,
-            description="CRS VPN - Базовый тариф (30 дней)",
-            user_id=123456789
-        )
-        
-        assert payment_url == "https://yookassa.ru/checkout/payments/test_payment_123"
+        with pytest.raises(ValueError, match="БД не настроена"):
+            await create_payment(
+                amount_rub=99,
+                description="CRS VPN - Базовый тариф (30 дней)",
+                user_id=123456789
+            )
 
 
 @pytest.mark.asyncio
@@ -257,8 +256,99 @@ async def test_process_payment_webhook_succeeded(webhook_data_succeeded):
         assert result is True
         mock_session.add.assert_called_once()
         assert mock_session.commit.call_count >= 1
-        # handle_successful_payment должна быть вызвана для succeeded платежа
         mock_handle.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_process_payment_webhook_succeeded_idempotent(webhook_data_succeeded):
+    """Повторный webhook succeeded для уже обработанного платежа — handle_successful_payment не вызывается"""
+    with patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+         patch('app.services.payments.yookassa.WebhookNotification') as mock_notification, \
+         patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
+        
+        mock_session = AsyncMock()
+        mock_session_local.return_value.__aenter__.return_value = mock_session
+        
+        mock_notif_obj = Mock()
+        mock_notif_obj.object = Mock()
+        mock_notif_obj.object.id = "test_payment_456"
+        mock_notif_obj.object.status = "succeeded"
+        mock_notif_obj.object.amount.value = "249.00"
+        mock_notif_obj.object.amount.currency = "RUB"
+        mock_notif_obj.object.description = "CRS VPN - Премиум тариф (30 дней)"
+        mock_notif_obj.object.metadata = {"tg_user_id": "123456789"}
+        mock_notification.return_value = mock_notif_obj
+        
+        payment_db = PaymentModel(
+            id=1,
+            telegram_user_id=123456789,
+            external_id="test_payment_456",
+            amount=249.00,
+            currency="RUB",
+            status="succeeded",
+            subscription_id=99,
+        )
+        
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = payment_db
+        mock_session.execute.return_value = mock_result
+        
+        mock_bot = AsyncMock()
+        result = await process_payment_webhook(webhook_data_succeeded, mock_bot)
+        
+        assert result is True
+        mock_handle.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_payment_webhook_invalid_transition_canceled_to_succeeded():
+    """Webhook succeeded для платежа со статусом canceled — FSM отклоняет переход, подписка не выдаётся"""
+    webhook_data = {
+        "type": "notification",
+        "event": "payment.succeeded",
+        "object": {
+            "id": "test_payment_canceled",
+            "status": "succeeded",
+            "amount": {"value": "99.00", "currency": "RUB"},
+            "description": "Test",
+            "metadata": {"tg_user_id": "123456789"},
+        },
+    }
+    with patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+         patch('app.services.payments.yookassa.WebhookNotification') as mock_notification, \
+         patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
+        mock_session = AsyncMock()
+        mock_session_local.return_value.__aenter__.return_value = mock_session
+
+        mock_notif_obj = Mock()
+        mock_notif_obj.object = Mock()
+        mock_notif_obj.object.id = "test_payment_canceled"
+        mock_notif_obj.object.status = "succeeded"
+        mock_notif_obj.object.amount.value = "99.00"
+        mock_notif_obj.object.amount.currency = "RUB"
+        mock_notif_obj.object.description = "Test"
+        mock_notif_obj.object.metadata = {"tg_user_id": "123456789"}
+        mock_notification.return_value = mock_notif_obj
+
+        payment_db = PaymentModel(
+            id=1,
+            telegram_user_id=123456789,
+            external_id="test_payment_canceled",
+            amount=99.00,
+            currency="RUB",
+            status="canceled",
+            subscription_id=None,
+        )
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = payment_db
+        mock_session.execute.return_value = mock_result
+
+        mock_bot = AsyncMock()
+        result = await process_payment_webhook(webhook_data, mock_bot)
+
+        assert result is True
+        mock_handle.assert_not_called()
+        assert payment_db.status == "canceled"
 
 
 @pytest.mark.asyncio
@@ -328,13 +418,17 @@ async def test_check_payment_status_success(mock_succeeded_payment):
 
 @pytest.mark.asyncio
 async def test_check_payment_status_not_found():
-    """Тест проверки статуса несуществующего платежа"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class:
+    """Тест проверки статуса несуществующего платежа — возвращает {"error": "not_found"}"""
+    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+         patch('app.services.payments.yookassa.settings') as mock_settings:
+        mock_settings.YOOKASSA_SHOP_ID = "test"
+        mock_settings.YOOKASSA_API_KEY = "test"
         mock_payment_class.find_one.return_value = None
         
         result = await check_payment_status("non_existent_payment")
         
-        assert result is None
+        assert result is not None
+        assert result.get("error") == "not_found"
 
 
 @pytest.mark.asyncio
@@ -474,6 +568,44 @@ async def test_handle_successful_payment_premium():
         # Проверяем сообщение
         call_args = mock_bot.send_message.call_args
         assert "Премиум" in call_args.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_handle_successful_payment_notified_race():
+    """Повторный webhook: payment уже notified — send_message не вызывается"""
+    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url'):
+        mock_session = AsyncMock()
+        user = TelegramUser(telegram_id=123456789, username="test_user")
+        payment_db = PaymentModel(
+            id=1,
+            telegram_user_id=123456789,
+            subscription_id=99,
+            payment_metadata={"notified": True},
+        )
+        mock_user_result = MagicMock()
+        mock_user_result.scalar_one_or_none.return_value = user
+        mock_payment_result = MagicMock()
+        mock_payment_result.scalar_one_or_none.return_value = payment_db
+
+        async def mock_execute(query):
+            query_str = str(query)
+            if "Payment" in query_str or "payments" in query_str:
+                return mock_payment_result
+            return mock_user_result
+
+        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        mock_bot = AsyncMock()
+
+        await handle_successful_payment(
+            session=mock_session,
+            payment_id=1,
+            telegram_user_id=123456789,
+            amount=99.0,
+            description="CRS VPN",
+            bot=mock_bot
+        )
+
+        mock_bot.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio

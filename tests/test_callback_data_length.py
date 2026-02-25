@@ -88,6 +88,25 @@ class TestCallbackDataLength:
         assert pagination_old.page == 4
         assert pagination_old.page_size == 20
     
+    def test_check_payment_callback_with_external_id(self):
+        """check_payment:<external_id> должен быть под лимитом 64 байта"""
+        from app.keyboards import get_payment_keyboard
+        external_id = "2d7f3e67-0000-5000-9000-1abc12345678"
+        kb = get_payment_keyboard("https://yookassa.ru/checkout/xxx", external_id)
+        check_btn = None
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if hasattr(btn, "callback_data") and btn.callback_data and "check_payment" in btn.callback_data:
+                    check_btn = btn
+                    break
+            if check_btn:
+                break
+        assert check_btn is not None
+        cb = check_btn.callback_data
+        assert cb.startswith("check_payment:")
+        assert external_id in cb
+        assert len(cb.encode("utf-8")) <= 64
+
     def test_real_world_pagination_callback_length(self):
         """Реальный пример пагинации должен быть под лимитом"""
         # Симулируем реальный callback для ADMIN_PAYMENTS с пагинацией и фильтром

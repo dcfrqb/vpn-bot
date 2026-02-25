@@ -296,12 +296,13 @@ class SubscriptionPaymentScreen(BaseScreen):
     
     async def create_viewmodel(
         self,
-        plan_code: str,
-        plan_name: str,
-        period_months: int,
-        amount: int,
+        plan_code: str = "",
+        plan_name: str = "",
+        period_months: int = 0,
+        amount: int = 0,
         payment_url: str = None,
-        crypto_address: str = None
+        crypto_address: str = None,
+        external_id: str = None,
     ) -> SubscriptionPaymentViewModel:
         return SubscriptionPaymentViewModel(
             plan_code=plan_code,
@@ -309,5 +310,6 @@ class SubscriptionPaymentScreen(BaseScreen):
             period_months=period_months,
             amount=amount,
             payment_url=payment_url,
-            crypto_address=crypto_address
+            crypto_address=crypto_address,
+            external_id=external_id,
         )

@@ -46,7 +46,8 @@ class SubscriptionPaymentViewModel(BaseViewModel):
         period_months: int,
         amount: int,
         payment_url: Optional[str] = None,
-        crypto_address: Optional[str] = None
+        crypto_address: Optional[str] = None,
+        external_id: Optional[str] = None,
     ):
         self.plan_code = plan_code
         self.plan_name = plan_name
@@ -54,6 +55,7 @@ class SubscriptionPaymentViewModel(BaseViewModel):
         self.amount = amount
         self.payment_url = payment_url
         self.crypto_address = crypto_address
+        self.external_id = external_id
     
     @property
     def screen_id(self) -> ScreenID:

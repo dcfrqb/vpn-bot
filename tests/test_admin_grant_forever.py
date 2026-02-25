@@ -138,3 +138,27 @@ async def test_admin_grant_forever_updates_existing(
     assert call_defaults["config_data"]["source"] == "admin_forever"
     assert call_defaults["last_expiry_notice_at"] is None
     assert call_defaults["valid_until"].year == 2099
+    assert call_defaults.get("is_lifetime") is True
+
+
+@pytest.mark.asyncio
+async def test_admin_grant_forever_idempotent_when_already_processed(
+    mock_callback_admin, mock_access_request
+):
+    """Повторное нажатие при уже обработанном запросе — идемпотентно, без вызова upsert"""
+    from app.routers.admin import admin_grant_forever
+
+    mock_access_request.status = "approved"
+
+    mock_repo = AsyncMock()
+    mock_repo.upsert_subscription = AsyncMock()
+
+    with patch("app.routers.admin.is_admin", return_value=True), \
+         patch("app.services.access_request.get_request_by_id", new_callable=AsyncMock, return_value=mock_access_request), \
+         patch("app.repositories.subscription_repo.SubscriptionRepo", return_value=mock_repo):
+        await admin_grant_forever(mock_callback_admin)
+
+    mock_repo.upsert_subscription.assert_not_called()
+    mock_callback_admin.answer.assert_called_once()
+    answer_args = mock_callback_admin.answer.call_args[0]
+    assert any("обработано" in str(a).lower() for a in answer_args)

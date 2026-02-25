@@ -1,7 +1,10 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import secrets
 import string
+import uuid
+from sqlalchemy.exc import IntegrityError
 from yookassa import Configuration, Payment
 from yookassa.domain.notification import WebhookNotification
 from app.config import settings
@@ -59,36 +62,55 @@ def generate_remna_password(length: int = 24) -> str:
     
     return ''.join(password_chars)
 
-async def create_payment(amount_rub: int, description: str, user_id: int) -> str:
-    """Создает платеж в YooKassa и возвращает URL для оплаты"""
+# Допустимые переходы статусов платежа (FSM)
+VALID_STATUS_TRANSITIONS = {
+    "pending": {"succeeded", "canceled", "failed", "waiting_for_capture"},
+    "waiting_for_capture": {"succeeded", "canceled", "failed"},
+    "succeeded": set(),  # терминальный
+    "canceled": set(),
+    "failed": set(),
+}
+
+
+async def create_payment(
+    amount_rub: int,
+    description: str,
+    user_id: int,
+    plan_code: Optional[str] = None,
+    period_months: Optional[int] = None,
+    request_id: Optional[int] = None,
+) -> tuple[str, str]:
+    """Создает платеж в YooKassa и возвращает (payment_url, external_id)"""
+    trace_id = str(uuid.uuid4())
     try:
         if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_API_KEY:
             raise ValueError("YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены")
         
-        # Проверяем, что API ключ не пустой и имеет правильный формат
         api_key = str(settings.YOOKASSA_API_KEY).strip()
         if not api_key:
             raise ValueError("YOOKASSA_API_KEY пустой")
         
-        # Убеждаемся, что Configuration правильно настроен
         shop_id = str(settings.YOOKASSA_SHOP_ID).strip()
         Configuration.account_id = shop_id
         Configuration.secret_key = api_key
         
-        # Логируем для отладки (без полного ключа)
-        logger.debug(f"YooKassa Configuration: account_id={shop_id}, secret_key length={len(api_key)}")
-        
-        # Проверяем return_url
         if not settings.YOOKASSA_RETURN_URL:
             raise ValueError("YOOKASSA_RETURN_URL должен быть настроен")
+        
+        metadata = {"tg_user_id": user_id}
+        if plan_code:
+            metadata["plan_code"] = plan_code
+        if period_months:
+            metadata["period_months"] = str(period_months)
+        if request_id:
+            metadata["request_id"] = str(request_id)
         
         payment_data = {
             "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
             "capture": True,
             "confirmation": {"type": "redirect", "return_url": str(settings.YOOKASSA_RETURN_URL)},
             "description": description,
-            "metadata": {"tg_user_id": user_id},
-            # Добавляем поддержку SBP (Система быстрых платежей)
+            "metadata": metadata,
             "payment_method_types": ["bank_card", "sbp", "yoo_money"]
         }
         
@@ -98,26 +120,31 @@ async def create_payment(amount_rub: int, description: str, user_id: int) -> str
             payment_url = p.confirmation.confirmation_url
         except Exception as api_error:
             error_msg = str(api_error)
-            # Проверяем специфичные ошибки YooKassa
             if "invalid_credentials" in error_msg.lower() or "password format" in error_msg.lower() or "unauthorized" in error_msg.lower():
-                logger.error(f"Ошибка авторизации YooKassa: Проверьте правильность YOOKASSA_API_KEY (должен быть Secret key из Merchant Profile)")
-                logger.error(f"Детали ошибки: {error_msg}")
-                raise ValueError("Ошибка авторизации YooKassa: проверьте правильность API ключа (должен быть Secret key, а не test ключ)")
+                logger.error(f"[{trace_id}] Ошибка авторизации YooKassa: Проверьте YOOKASSA_API_KEY")
+                raise ValueError("Ошибка авторизации YooKassa: проверьте правильность API ключа")
             elif "shop_id" in error_msg.lower() or "account_id" in error_msg.lower():
-                logger.error(f"Ошибка YooKassa: Проверьте правильность YOOKASSA_SHOP_ID")
-                logger.error(f"Детали ошибки: {error_msg}")
+                logger.error(f"[{trace_id}] Ошибка YooKassa: Проверьте YOOKASSA_SHOP_ID")
                 raise ValueError("Ошибка YooKassa: проверьте правильность Shop ID")
             else:
-                logger.error(f"Ошибка API YooKassa: {error_msg}")
-                import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(f"[{trace_id}] Ошибка API YooKassa: {error_msg}")
                 raise
         
-        # Сохраняем платеж в БД
-        if SessionLocal:
+        if not SessionLocal:
+            logger.error(f"[{trace_id}] payment created pending: id={payment_id} user={user_id} amount={amount_rub} — БД не настроена")
+            raise ValueError("БД не настроена, платеж не может быть сохранен")
+        
+        payment_metadata = {
+            "payment_data": payment_data,
+            "yookassa_response": p.dict() if hasattr(p, "dict") else str(p),
+            "trace_id": trace_id,
+            "plan_code": plan_code,
+            "period_months": period_months,
+        }
+        
+        for attempt in range(2):
             try:
                 async with SessionLocal() as session:
-                    # Проверяем, существует ли уже такой платеж
                     result = await session.execute(
                         select(PaymentModel).where(PaymentModel.external_id == payment_id)
                     )
@@ -132,46 +159,56 @@ async def create_payment(amount_rub: int, description: str, user_id: int) -> str
                             currency="RUB",
                             status=p.status or "pending",
                             description=description,
-                            payment_metadata={"payment_data": payment_data, "yookassa_response": p.dict() if hasattr(p, 'dict') else str(p)}
+                            payment_metadata=payment_metadata,
                         )
                         session.add(new_payment)
                         await session.commit()
-                        logger.info(f"Платеж {payment_id} сохранен в БД для пользователя {user_id}")
+                        logger.info(
+                            f"[{trace_id}] payment created pending: external_id={payment_id} user={user_id} "
+                            f"amount={amount_rub} plan={plan_code} period={period_months}"
+                        )
                     else:
-                        logger.warning(f"Платеж {payment_id} уже существует в БД")
+                        logger.info(f"[{trace_id}] payment already exists: external_id={payment_id}")
+                    break
+            except IntegrityError as e:
+                if "external_id" in str(e).lower() or "unique" in str(e).lower():
+                    logger.warning(f"[{trace_id}] payment race: external_id={payment_id} already in DB, attempt={attempt}")
+                    if attempt == 0:
+                        await asyncio.sleep(0.1)
+                        continue
+                logger.error(f"[{trace_id}] Ошибка при сохранении платежа (IntegrityError): {e}")
+                raise
             except Exception as e:
-                logger.error(f"Ошибка при сохранении платежа в БД: {e}")
-                # Не прерываем процесс, платеж уже создан в Yookassa
+                logger.error(f"[{trace_id}] Ошибка при сохранении платежа (external_id={payment_id} user={user_id}): {e}")
+                raise
         
-        logger.info(f"Создан платеж {payment_id} для пользователя {user_id}, сумма: {amount_rub}₽")
-        return payment_url
+        return (payment_url, payment_id)
         
     except Exception as e:
-        logger.error(f"Ошибка при создании платежа: {e}")
+        logger.error(f"[{trace_id}] Ошибка при создании платежа: {e}")
         raise
 
 
 async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
     """Обрабатывает webhook от YooKassa"""
+    trace_id = str(uuid.uuid4())
     try:
-        # Валидация webhook данных
         if not webhook_data:
-            logger.error("Получен пустой webhook")
+            logger.error(f"[{trace_id}] webhook received: empty body")
             return False
         
         event = webhook_data.get("event")
         if not event:
-            logger.error("Webhook не содержит поле 'event'")
+            logger.error(f"[{trace_id}] webhook received: missing event")
             return False
         
-        logger.info(f"Получен webhook событие: {event}")
+        logger.info(f"[{trace_id}] webhook received: event={event}")
         
-        # Парсим уведомление
         notification = WebhookNotification(webhook_data)
         payment = notification.object
         
         if not payment:
-            logger.error("Webhook не содержит объект платежа")
+            logger.error(f"[{trace_id}] webhook received: no payment object")
             return False
         
         payment_id = payment.id
@@ -183,12 +220,11 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         telegram_user_id = metadata.get("tg_user_id")
         
         if not telegram_user_id:
-            logger.error(f"Платеж {payment_id} не содержит telegram_user_id в metadata")
+            logger.error(f"[{trace_id}] webhook received: external_id={payment_id} missing tg_user_id in metadata")
             return False
         
         telegram_user_id = int(telegram_user_id)
         
-        # Убеждаемся, что пользователь существует в БД
         from app.services.users import get_or_create_telegram_user
         try:
             await get_or_create_telegram_user(
@@ -197,73 +233,105 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                 first_name=None,
                 last_name=None,
                 language_code=None,
-                create_trial=False  # Не создаем пробную подписку при webhook
+                create_trial=False,
             )
         except Exception as e:
-            logger.warning(f"Не удалось создать/получить пользователя {telegram_user_id} при webhook: {e}")
+            logger.warning(f"[{trace_id}] get_or_create_telegram_user failed: user={telegram_user_id} err={e}")
         
-        logger.info(f"Получен webhook для платежа {payment_id}, статус: {status}, пользователь: {telegram_user_id}, сумма: {amount} {currency}")
+        logger.info(
+            f"[{trace_id}] webhook received: external_id={payment_id} status={status} "
+            f"user={telegram_user_id} amount={amount} {currency}"
+        )
         
         if not SessionLocal:
-            logger.error("БД не настроена, платеж не может быть обработан")
+            logger.error(f"[{trace_id}] БД не настроена, платеж не может быть обработан")
             return False
         
         async with SessionLocal() as session:
-            result = await session.execute(
-                select(PaymentModel).where(PaymentModel.external_id == payment_id)
+            stmt = (
+                select(PaymentModel)
+                .where(PaymentModel.external_id == payment_id)
+                .with_for_update(skip_locked=True)
             )
+            result = await session.execute(stmt)
             existing_payment = result.scalar_one_or_none()
             
             payment_db = None
             if existing_payment:
-                # Обновляем существующий платеж
                 old_status = existing_payment.status
-                existing_payment.status = status
-                existing_payment.updated_at = datetime.utcnow()
-                existing_payment.amount = amount
-                if status == "succeeded" and not existing_payment.paid_at:
-                    existing_payment.paid_at = datetime.utcnow()
-                existing_payment.payment_metadata = webhook_data
-                await session.commit()
-                payment_db = existing_payment
-                logger.info(f"Обновлен платеж {payment_id}, статус изменен: {old_status} -> {status}")
+                if old_status == status:
+                    logger.info(f"[{trace_id}] payment unchanged: external_id={payment_id} status={status}")
+                    payment_db = existing_payment
+                else:
+                    allowed = VALID_STATUS_TRANSITIONS.get(old_status)
+                    if allowed is None:
+                        allowed = VALID_STATUS_TRANSITIONS.get("pending", set())
+                    if status in allowed:
+                        existing_payment.status = status
+                        existing_payment.updated_at = datetime.utcnow()
+                        existing_payment.amount = amount
+                        if status == "succeeded" and not existing_payment.paid_at:
+                            existing_payment.paid_at = datetime.utcnow()
+                        meta = existing_payment.payment_metadata or {}
+                        if isinstance(meta, dict):
+                            meta = dict(meta)
+                        meta["last_webhook"] = webhook_data
+                        meta["trace_id"] = trace_id
+                        existing_payment.payment_metadata = meta
+                        await session.commit()
+                        payment_db = existing_payment
+                        logger.info(f"[{trace_id}] payment updated: external_id={payment_id} {old_status} -> {status}")
+                    else:
+                        logger.warning(
+                            f"[{trace_id}] payment invalid transition: external_id={payment_id} "
+                            f"{old_status} -> {status} (ignored)"
+                        )
+                        payment_db = existing_payment
             else:
-                # Создаем новый платеж (если webhook пришел раньше, чем платеж был сохранен при создании)
-                # Убеждаемся, что пользователь существует в БД
-                from app.services.users import get_or_create_telegram_user
                 try:
-                    await get_or_create_telegram_user(
-                        telegram_id=telegram_user_id,
-                        username=None,
-                        first_name=None,
-                        last_name=None,
-                        language_code=None,
-                        create_trial=False  # Не создаем пробную подписку при webhook
+                    meta = dict(webhook_data) if isinstance(webhook_data, dict) else {}
+                    meta["trace_id"] = trace_id
+                    meta["plan_code"] = metadata.get("plan_code")
+                    meta["period_months"] = metadata.get("period_months")
+                    new_payment = PaymentModel(
+                        telegram_user_id=telegram_user_id,
+                        provider="yookassa",
+                        external_id=payment_id,
+                        amount=amount,
+                        currency=currency,
+                        status=status,
+                        description=description,
+                        payment_metadata=meta,
                     )
-                except Exception as e:
-                    logger.warning(f"Не удалось создать/получить пользователя {telegram_user_id} при webhook: {e}")
-                
-                new_payment = PaymentModel(
-                    telegram_user_id=telegram_user_id,
-                    provider="yookassa",
-                    external_id=payment_id,
-                    amount=amount,
-                    currency=currency,
-                    status=status,
-                    description=description,
-                    payment_metadata=webhook_data
-                )
-                if status == "succeeded":
-                    new_payment.paid_at = datetime.utcnow()
-                session.add(new_payment)
-                await session.commit()
-                await session.refresh(new_payment)
-                payment_db = new_payment
-                logger.info(f"Создан платеж {payment_id} из webhook, статус: {status}")
+                    if status == "succeeded":
+                        new_payment.paid_at = datetime.utcnow()
+                    session.add(new_payment)
+                    await session.commit()
+                    await session.refresh(new_payment)
+                    payment_db = new_payment
+                    logger.info(f"[{trace_id}] payment created from webhook: external_id={payment_id} status={status}")
+                except IntegrityError as e:
+                    if "external_id" in str(e).lower() or "unique" in str(e).lower():
+                        await session.rollback()
+                        result = await session.execute(
+                            select(PaymentModel).where(PaymentModel.external_id == payment_id)
+                        )
+                        payment_db = result.scalar_one_or_none()
+                        if payment_db:
+                            payment_db.status = status
+                            payment_db.updated_at = datetime.utcnow()
+                            payment_db.amount = amount
+                            if status == "succeeded" and not payment_db.paid_at:
+                                payment_db.paid_at = datetime.utcnow()
+                            await session.commit()
+                            logger.info(f"[{trace_id}] payment race resolved: external_id={payment_id} updated from webhook")
+                        else:
+                            logger.error(f"[{trace_id}] IntegrityError and payment not found: {e}")
+                            return False
+                    else:
+                        raise
             
-            # Обрабатываем успешный платеж только если статус изменился на succeeded
-            if status == "succeeded" and payment_db:
-                # Проверяем, не обработан ли уже этот платеж
+            if payment_db and payment_db.status == "succeeded":
                 if not payment_db.subscription_id:
                     await handle_successful_payment(
                         session=session,
@@ -271,15 +339,24 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                         telegram_user_id=telegram_user_id,
                         amount=amount,
                         description=description or "CRS VPN 30 дней",
-                        bot=bot
+                        bot=bot,
+                        trace_id=trace_id,
                     )
                 else:
-                    logger.info(f"Платеж {payment_id} уже обработан, подписка ID: {payment_db.subscription_id}")
+                    logger.info(
+                        f"[{trace_id}] subscription issued: external_id={payment_id} subscription_id={payment_db.subscription_id}"
+                    )
         
         return True
         
     except Exception as e:
-        logger.error(f"Ошибка при обработке webhook платежа: {e}")
+        ext_id = "?"
+        try:
+            obj = webhook_data.get("object", {}) if webhook_data else {}
+            ext_id = obj.get("id", "?") if isinstance(obj, dict) else getattr(obj, "id", "?")
+        except Exception:
+            pass
+        logger.error(f"[{trace_id}] webhook error: external_id={ext_id} err={e}")
         import traceback
         logger.debug(traceback.format_exc())
         return False
@@ -291,28 +368,36 @@ async def handle_successful_payment(
     telegram_user_id: int,
     amount: float,
     description: str,
-    bot
+    bot,
+    trace_id: Optional[str] = None,
 ) -> None:
-    # Инвалидируем кэш подписки и синхронизации при успешном платеже
+    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку."""
+    trace_id = trace_id or str(uuid.uuid4())
     try:
         from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
         await invalidate_subscription_cache(telegram_user_id)
         await invalidate_sync_cache(telegram_user_id)
-        logger.debug(f"Кэш инвалидирован для пользователя {telegram_user_id} после успешного платежа")
     except Exception as e:
-        logger.debug(f"Ошибка инвалидации кэша: {e}")
-    """Обрабатывает успешный платеж создает подписку и отправляет пользователю ссылку"""
+        logger.debug(f"[{trace_id}] cache invalidation: {e}")
+    
     try:
-        # Сначала пытаемся получить тариф и период из payment_metadata
-        plan_code = None
-        period_months = None
-        
         payment_result = await session.execute(
             select(PaymentModel).where(PaymentModel.id == payment_id)
         )
         payment = payment_result.scalar_one_or_none()
-        
-        if payment and payment.payment_metadata:
+        if not payment:
+            logger.error(f"[{trace_id}] handle_successful_payment: payment not found id={payment_id}")
+            return
+
+        meta = payment.payment_metadata or {}
+        if isinstance(meta, dict) and meta.get("notified"):
+            logger.info(f"[{trace_id}] handle_successful_payment: already notified payment_id={payment_id}")
+            return
+
+        # Получаем тариф и период из payment_metadata
+        plan_code = None
+        period_months = None
+        if payment.payment_metadata:
             metadata = payment.payment_metadata
             if isinstance(metadata, dict):
                 plan_code = metadata.get("plan_code")
@@ -322,7 +407,7 @@ async def handle_successful_payment(
                         period_months = int(period_months)
                     except (ValueError, TypeError):
                         period_months = None
-        
+
         # Если не нашли в metadata, определяем тариф и период по сумме платежа
         if not plan_code or not period_months:
             # Базовый: 99 (1 мес), 249 (3 мес), 499 (6 мес), 899 (12 мес)
@@ -424,13 +509,25 @@ async def handle_successful_payment(
                 subscription.config_data = {}
             subscription.config_data["subscription_url"] = subscription_url
             await session.commit()
-        
+
+        # Re-lock payment для атомарной проверки/установки notified (гонка при повторных webhook)
+        pay_lock = await session.execute(
+            select(PaymentModel).where(PaymentModel.id == payment_id).with_for_update()
+        )
+        payment = pay_lock.scalar_one_or_none()
+        if not payment:
+            return
+        meta = payment.payment_metadata or {}
+        if isinstance(meta, dict) and meta.get("notified"):
+            logger.info(f"[{trace_id}] subscription notified already: payment_id={payment_id}, skip send")
+            return
+
         message_text = (
-            "✅ <b>Платеж успешно обработан!</b>\n\n"
+            "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
             f"💳 <b>Тариф:</b> {plan_name}\n"
             f"📅 <b>Действует до:</b> {valid_until.strftime('%d.%m.%Y %H:%M')}\n"
             f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
-            "🎉 Ваша подписка активирована! Теперь вы можете получить ссылку для настройки VPN."
+            "🎉 Теперь вы можете получить ссылку для настройки VPN."
         )
         
         from app.keyboards import get_subscription_link_keyboard
@@ -440,17 +537,44 @@ async def handle_successful_payment(
             reply_markup=get_subscription_link_keyboard(),
             parse_mode="HTML"
         )
+
+        # notified=True только после успешной отправки — иначе recovery сможет повторить
+        meta = dict(meta) if isinstance(meta, dict) else {}
+        meta["notified"] = True
+        payment.payment_metadata = meta
+        await session.commit()
         
-        logger.info(f"Пользователю {telegram_user_id} отправлено сообщение об успешной оплате")
+        logger.info(f"[{trace_id}] subscription issued: payment_id={payment_id} subscription_id={subscription.id} remna_user_id={subscription.remna_user_id}")
         
     except Exception as e:
-        logger.error(f"Ошибка при обработке успешного платежа: {e}")
+        logger.error(f"[{trace_id}] handle_successful_payment failed: payment_id={payment_id} user={telegram_user_id} err={e}")
         import traceback
         logger.debug(traceback.format_exc())
+        try:
+            payment_result = await session.execute(
+                select(PaymentModel).where(PaymentModel.id == payment_id)
+            )
+            payment = payment_result.scalar_one_or_none()
+            if payment and not payment.subscription_id:
+                meta = payment.payment_metadata or {}
+                if not isinstance(meta, dict):
+                    meta = dict(meta) if meta else {}
+                meta["needs_provisioning"] = True
+                meta["provisioning_attempted_at"] = datetime.utcnow().isoformat()
+                meta["provisioning_error"] = str(e)[:500]
+                payment.payment_metadata = meta
+                await session.commit()
+                logger.info(f"[{trace_id}] payment needs_provisioning set: payment_id={payment_id}")
+        except Exception as e2:
+            logger.error(f"[{trace_id}] failed to set needs_provisioning: {e2}")
 
 
 async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
-    """Проверяет статус платежа в YooKassa"""
+    """
+    Проверяет статус платежа в YooKassa.
+    Returns: dict с status/amount/... или {"error": "not_found"} если платёж не найден в YooKassa,
+    или None при ошибке API/сети.
+    """
     try:
         if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_API_KEY:
             logger.error("YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены")
@@ -459,8 +583,8 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
         payment = Payment.find_one(payment_id)
         
         if not payment:
-            logger.error(f"Платеж {payment_id} не найден в YooKassa")
-            return None
+            logger.warning(f"Платеж {payment_id} не найден в YooKassa")
+            return {"error": "not_found"}
         
         return {
             "id": payment.id,
@@ -474,6 +598,10 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
             "captured_at": payment.captured_at.isoformat() if hasattr(payment, 'captured_at') and payment.captured_at else None,
         }
     except Exception as e:
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "404" in err_msg or "не найден" in err_msg:
+            logger.warning(f"Платеж {payment_id} не найден в YooKassa: {e}")
+            return {"error": "not_found"}
         logger.error(f"Ошибка при проверке статуса платежа {payment_id}: {e}")
         return None
 
@@ -536,11 +664,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 # Генерируем пароль, соответствующий требованиям Remna API
                 password = generate_remna_password(length=24)
                 
-                # Получаем дату истечения из подписки (Remna API требует expireAt)
-                expire_at = None
-                if subscription.valid_until:
-                    # Форматируем дату в ISO 8601 формат для Remna API
-                    expire_at = subscription.valid_until.isoformat()
+                # Дата истечения: клиент нормализует (навсегда -> 2099-12-31T23:59:59Z)
+                expire_at = subscription.valid_until
                 
                 # Получаем сквад для плана подписки перед созданием пользователя
                 squad_name = await get_squad_name_for_plan(subscription.plan_code)
@@ -556,18 +681,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 
                 logger.info(f"Создание пользователя в Remna API: username={username}, telegram_id={telegram_user_id}, expire_at={expire_at}")
                 try:
-                    create_payload = {
-                        "username": username,
-                        "password": password,
-                    }
-                    if expire_at:
-                        create_payload["expireAt"] = expire_at
-                    if telegram_user_id:
-                        create_payload["telegramId"] = int(telegram_user_id)
                     if squad_uuid:
-                        create_payload["activeInternalSquads"] = [squad_uuid]
                         logger.info(f"📝 Добавляю сквад {squad_name} при создании пользователя")
-                    
                     remna_user_data = await client.create_user(
                         username=username, 
                         password=password, 
@@ -684,12 +799,11 @@ async def get_or_create_remna_user_and_get_subscription_url(
                                 if user_uuid:
                                     logger.info(f"✅ Найден существующий пользователь: {user_uuid}")
                                     
-                                    # Обновляем expireAt в Remna для существующего пользователя
+                                    # Обновляем expireAt в Remna для существующего пользователя (snake_case -> camelCase в клиенте)
                                     if subscription.valid_until:
-                                        expire_at = subscription.valid_until.isoformat()
-                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}: {expire_at}")
+                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}")
                                         try:
-                                            await client.update_user(str(user_uuid), expireAt=expire_at)
+                                            await client.update_user(str(user_uuid), expire_at=subscription.valid_until)
                                             logger.info(f"✅ expireAt обновлен в Remna")
                                         except Exception as update_e:
                                             logger.warning(f"⚠️ Не удалось обновить expireAt: {update_e}")
@@ -933,11 +1047,10 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 try:
                     update_payload = {}
                     
-                    # Обновляем expireAt в Remna для нового пользователя
+                    # Обновляем expireAt в Remna для нового пользователя (клиент нормализует и маппит expire_at -> expireAt)
                     if subscription.valid_until:
-                        expire_at = subscription.valid_until.isoformat()
-                        update_payload["expireAt"] = expire_at
-                        logger.info(f"📝 Обновляю expireAt для нового пользователя: {expire_at}")
+                        update_payload["expire_at"] = subscription.valid_until
+                        logger.info(f"📝 Обновляю expireAt для нового пользователя")
                     
                     # Убеждаемся, что telegramId установлен
                     if user_response_data and not user_response_data.get("telegramId"):

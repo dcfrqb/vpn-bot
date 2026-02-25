@@ -1,4 +1,10 @@
 import asyncio
+
+from app.utils.preflight import run_preflight_bot
+
+# Preflight: проверка обязательных env до импорта тяжёлых модулей
+run_preflight_bot()
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage

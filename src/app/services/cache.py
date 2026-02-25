@@ -257,6 +257,59 @@ async def set_cached_sync_result(telegram_id: int, sync_data: Dict[str, Any], tt
         logger.debug(f"Ошибка сохранения SyncResult в кэш для {telegram_id}: {e}")
 
 
+CHECK_PAYMENT_RATE_LIMIT_TTL = 10  # секунд
+CHECK_PAYMENT_RATE_PREFIX = "check_payment:"
+AUTORECHECK_SCHEDULED_PREFIX = "autorecheck_scheduled:"
+AUTORECHECK_SCHEDULED_TTL = 180  # 3 минуты — защита от повторного планирования
+
+
+async def try_schedule_autorecheck(external_id: str) -> bool:
+    """
+    Защита от повторного планирования auto-recheck.
+    Redis ключ: autorecheck_scheduled:{external_id}, TTL=180s.
+    Returns True если планирование разрешено (ключа не было), False если уже запланировано.
+    Redis недоступен → True (fallback, логируем warning в вызывающем коде).
+    """
+    client = get_redis_client()
+    if not client:
+        return True
+
+    try:
+        key = f"{AUTORECHECK_SCHEDULED_PREFIX}{external_id}"
+        # SET key 1 NX EX 180 — установить только если ключа нет
+        ok = await client.set(key, "1", ex=AUTORECHECK_SCHEDULED_TTL, nx=True)
+        return bool(ok)
+    except Exception as e:
+        logger.debug(f"try_schedule_autorecheck: {e}")
+        return True
+
+
+async def check_payment_rate_limit(telegram_user_id: int, external_id: str) -> tuple[bool, int]:
+    """
+    Проверяет rate limit для кнопки «Проверить оплату».
+    Ключ: check_payment:{tg_user_id}:{external_id}, TTL=10s.
+
+    Returns:
+        (allowed, seconds_left): allowed=True если можно нажать, seconds_left — сколько ждать
+    """
+    client = get_redis_client()
+    if not client:
+        logger.debug("check_payment_rate_limit: Redis unavailable, allowing")
+        return (True, 0)
+
+    try:
+        key = f"{CHECK_PAYMENT_RATE_PREFIX}{telegram_user_id}:{external_id}"
+        ttl = await client.ttl(key)
+        if ttl > 0:
+            return (False, ttl)
+        # Устанавливаем блокировку
+        await client.setex(key, CHECK_PAYMENT_RATE_LIMIT_TTL, "1")
+        return (True, 0)
+    except Exception as e:
+        logger.debug(f"check_payment_rate_limit: {e}")
+        return (True, 0)
+
+
 async def invalidate_sync_cache(telegram_id: int):
     """Инвалидирует кэш синхронизации для пользователя"""
     client = get_redis_client()

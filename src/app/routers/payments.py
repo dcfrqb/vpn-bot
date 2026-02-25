@@ -1,17 +1,23 @@
+import asyncio
 import json
+import uuid
 from aiohttp import web
 from aiogram import Router, types, F, Bot
 from app.services.payments.yookassa import create_payment, process_payment_webhook
+from app.services.payments.recovery import recheck_single_payment
+from app.services.cache import check_payment_rate_limit, try_schedule_autorecheck, get_redis_client
 from app.logger import logger
 from app.keyboards import (
-    get_subscription_link_keyboard, 
+    get_subscription_link_keyboard,
+    get_subscription_info_keyboard,
     get_main_menu_keyboard,
     get_back_to_plans_keyboard,
-    get_payment_keyboard
+    get_payment_keyboard,
+    get_new_payment_keyboard,
 )
 from app.services.users import get_user_active_subscription
 from app.db.session import SessionLocal
-from app.db.models import Subscription
+from app.db.models import Subscription, Payment as PaymentModel
 from sqlalchemy import select
 
 router = Router(name="payments")
@@ -70,10 +76,12 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         
-        payment_url = await create_payment(
+        payment_url, external_id = await create_payment(
             amount_rub=amount_rub,
             description=f"CRS VPN - {plan_name} ({period_text})",
-            user_id=callback.from_user.id
+            user_id=callback.from_user.id,
+            plan_code=plan_code,
+            period_months=period_months,
         )
         
         # Обновляем сообщение с результатом (без мусорных loading сообщений)
@@ -84,8 +92,31 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
             "🔗 <b>Для оплаты перейдите по ссылке:</b>\n"
             f"<a href='{payment_url}'>Оплатить подписку</a>\n\n"
             "💡 После оплаты вы получите конфигурацию VPN",
-            reply_markup=get_payment_keyboard(payment_url)
+            reply_markup=get_payment_keyboard(payment_url, external_id)
         )
+
+        # Auto-recheck: best-effort, t+30s и t+90s. Не гарантируется при рестарте.
+        # Основная страховка — кнопка «Проверить» + batch recovery (recheck_pending_payments).
+        # Защита от дублирования: Redis autorecheck_scheduled:{external_id}, TTL=180s
+        can_schedule = await try_schedule_autorecheck(external_id)
+        if not can_schedule:
+            logger.debug(f"autorecheck already scheduled: external_id={external_id}")
+        else:
+            if not get_redis_client():
+                logger.warning("autorecheck: Redis unavailable, scheduling without dedup guard")
+            async def _recheck_at(delay: int):
+                await asyncio.sleep(delay)
+                try:
+                    await recheck_single_payment(
+                        external_id=external_id,
+                        bot=callback.bot,
+                        trace_id=f"auto-recheck-{delay}s",
+                    )
+                except Exception as e:
+                    logger.debug(f"auto-recheck {delay}s external_id={external_id}: {e}")
+
+            asyncio.create_task(_recheck_at(30))
+            asyncio.create_task(_recheck_at(90))
         
     except ValueError as e:
         error_msg = str(e)
@@ -122,6 +153,137 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         await callback.message.edit_text(
             "❌ <b>Ошибка создания платежа</b>\n\n"
             "Произошла ошибка при создании платежа. Попробуйте позже или обратитесь в поддержку.",
+            reply_markup=get_back_to_plans_keyboard()
+        )
+
+
+@router.callback_query(F.data.startswith("check_payment"))
+async def handle_check_payment(callback: types.CallbackQuery):
+    """Обработчик кнопки 'Проверить оплату' — синхронизирует статус с YooKassa по external_id"""
+    trace_id = str(uuid.uuid4())
+    user_id = callback.from_user.id
+
+    # Парсим external_id из callback_data: check_payment:<external_id>
+    parts = callback.data.split(":", 1)
+    external_id = parts[1] if len(parts) > 1 and parts[1] else None
+
+    if not external_id:
+        await callback.answer("⚠️ Ссылка устарела. Создайте новый платёж.", show_alert=True)
+        await callback.message.edit_text(
+            "ℹ️ Ссылка на платёж устарела.\n\nСоздайте новый платёж через «Подписка» → «Выбрать тариф».",
+            reply_markup=get_back_to_plans_keyboard()
+        )
+        return
+
+    # Anti-spam: rate limit 1 раз в 10 секунд (Redis)
+    allowed, seconds_left = await check_payment_rate_limit(user_id, external_id)
+    if not allowed:
+        await callback.answer(f"⏳ Подожди {seconds_left} сек. перед повторной проверкой.", show_alert=True)
+        return
+
+    await callback.answer("⏳ Проверяю статус оплаты...")
+
+    if not SessionLocal:
+        await callback.message.edit_text(
+            "❌ Сервис временно недоступен. Попробуйте позже.",
+            reply_markup=get_back_to_plans_keyboard()
+        )
+        return
+
+    try:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                select(PaymentModel)
+                .where(
+                    PaymentModel.external_id == external_id,
+                    PaymentModel.telegram_user_id == user_id,
+                    PaymentModel.provider == "yookassa",
+                )
+            )
+            payment = result.scalar_one_or_none()
+
+        if not payment:
+            logger.warning(f"[{trace_id}] check_payment: payment not found external_id={external_id} tg_user_id={user_id}")
+            await callback.message.edit_text(
+                "ℹ️ Платёж не найден.\n\n"
+                "Возможно, ссылка устарела — создайте новый платёж.",
+                reply_markup=get_new_payment_keyboard()
+            )
+            return
+
+        recheck_result = await recheck_single_payment(
+            external_id=payment.external_id,
+            bot=callback.bot,
+            trace_id=trace_id,
+        )
+
+        logger.info(
+            f"[{trace_id}] check_payment: user={user_id} external_id={payment.external_id} "
+            f"updated={recheck_result.get('updated')} status={recheck_result.get('status')} "
+            f"provisioned={recheck_result.get('provisioned')}"
+        )
+
+        if recheck_result.get("error") == "not_found":
+            logger.info(f"[{trace_id}] check_payment NOT_FOUND: tg_user_id={user_id} external_id={external_id}")
+            await callback.message.edit_text(
+                "ℹ️ <b>Платёж не найден</b>.\n\n"
+                "Возможно, ссылка устарела — создайте новый платёж.",
+                reply_markup=get_new_payment_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
+        if recheck_result.get("error") == "api_error":
+            await callback.message.edit_text(
+                "⚠️ Не удалось проверить статус в платёжной системе.\n\n"
+                "Попробуйте позже или обратитесь в поддержку.",
+                reply_markup=get_back_to_plans_keyboard()
+            )
+            return
+
+        if recheck_result.get("provisioned"):
+            await callback.message.edit_text(
+                "✅ <b>Оплата подтверждена!</b>\n\n"
+                "Подписка активирована. Нажмите «Получить ссылку» для настройки VPN.",
+                reply_markup=get_subscription_info_keyboard(has_subscription=True),
+                parse_mode="HTML"
+            )
+            return
+
+        if recheck_result.get("status") == "succeeded":
+            await callback.message.edit_text(
+                "✅ Оплата подтверждена. Подписка должна быть уже активирована.",
+                reply_markup=get_subscription_info_keyboard(has_subscription=True)
+            )
+            return
+
+        if recheck_result.get("status") == "pending":
+            payment_url = ""
+            if callback.message.reply_markup and callback.message.reply_markup.inline_keyboard:
+                for row in callback.message.reply_markup.inline_keyboard:
+                    for btn in row:
+                        if getattr(btn, "url", None):
+                            payment_url = btn.url
+                            break
+                    if payment_url:
+                        break
+            await callback.message.edit_text(
+                "⏳ Платёж ещё не получен.\n\n"
+                "Если вы уже оплатили — подождите 1–2 минуты и нажмите «Проверить оплату» снова.",
+                reply_markup=get_payment_keyboard(payment_url, external_id) if payment_url else get_back_to_plans_keyboard()
+            )
+            return
+
+        await callback.message.edit_text(
+            f"ℹ️ Статус платежа: {recheck_result.get('status', 'unknown')}.\n\n"
+            "Если есть вопросы — обратитесь в поддержку.",
+            reply_markup=get_back_to_plans_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"[{trace_id}] check_payment error: user={user_id} err={e}")
+        await callback.message.edit_text(
+            "❌ Ошибка при проверке. Попробуйте позже.",
             reply_markup=get_back_to_plans_keyboard()
         )
 
@@ -381,6 +543,8 @@ async def yookassa_webhook_handler(request: web.Request) -> web.Response:
         if request.method != "POST":
             logger.warning(f"Получен запрос с неправильным методом: {request.method}")
             return web.Response(status=405, text="Method not allowed")
+
+        # Секрет проверяется только в FastAPI (порт 8001). Этот handler — aiogram, не используется для YooKassa в PROD.
         
         # Получаем данные
         try:

@@ -18,10 +18,6 @@ Telegram-бот для продажи и управления VPN-подписк
 - **Для администраторов**: мониторинг пользователей и платежей, управление подписками, статистика системы
 - **Для системы**: синхронизация данных с VPN-панелью, обработка платежей, автоматическое обновление статусов подписок
 
-### Целевая аудитория
-- **Пользователи**: клиенты, приобретающие VPN-подписки
-- **Администраторы**: операторы системы, управляющие подписками и пользователями
-
 ## Функциональные возможности
 
 ### Возможности для пользователя
@@ -104,7 +100,6 @@ Telegram-бот для продажи и управления VPN-подписк
 
 ### Инфраструктура
 - **Docker & Docker Compose**: контейнеризация и оркестрация сервисов
-- **Alembic**: управление миграциями базы данных
 - **uvloop**: оптимизация производительности event loop
 
 ### Внешние интеграции
@@ -137,6 +132,45 @@ vpn-bot/
 
 ## Запуск и развертывание
 
+### Local dev quickstart
+
+```bash
+# 1. Зависимости (без Docker)
+pip install -r requirements.txt
+
+# 2. Конфиг
+cp config.example.env .env
+# Заполните BOT_TOKEN, ADMINS, DATABASE_URL, REDIS_URL, YooKassa, Remna
+
+# 3. Тесты (без БД — ключевые модули)
+PYTHONPATH=src pytest tests/test_payments.py tests/test_recovery.py tests/test_admin_grant_forever.py tests/test_build.py -v
+
+# 4. Полный запуск — требуется Docker
+docker compose up -d db redis
+make migrate                    # миграции (one-shot)
+docker compose up -d bot webhook-api
+```
+
+### Server deploy (production)
+
+Полная инструкция: **`docs/DEPLOY_SERVER.md`**
+
+Кратко:
+1. `docker compose build` → `docker compose up -d db redis`
+2. `make migrate` (или `docker compose --profile migrate run --rm migrate`)
+3. `docker compose up -d bot webhook-api`
+4. Smoke: `curl http://localhost:8001/health`
+
+### Server smoke checklist
+
+```bash
+docker compose ps
+curl -s http://localhost:8001/health
+docker compose logs -f bot webhook-api --tail 50
+# Webhook без секрета → 401; с X-Webhook-Secret → 200/400
+# Telegram: /start
+```
+
 ### Требования
 
 - **Docker** 20.10+ и **Docker Compose** 2.0+
@@ -146,13 +180,7 @@ vpn-bot/
 
 ### Переменные окружения
 
-Создайте файл `.env` на основе `config.example.env`:
-
-```bash
-cp config.example.env .env
-```
-
-Обязательные параметры:
+Создайте `.env` на основе `config.example.env`. Обязательные параметры:
 
 - `BOT_TOKEN` — токен Telegram бота от @BotFather
 - `ADMINS` — список ID администраторов (через запятую)
@@ -171,34 +199,12 @@ cp config.example.env .env
 
 ### Локальный запуск
 
-#### Быстрый старт
-
 ```bash
-# Выполнить все операции: сборка → тесты → запуск
+# Всё одной командой: сборка → тесты → запуск
 ./run_all.sh all
 ```
 
-#### Поэтапный запуск
-
-```bash
-# 1. Сборка Docker образов
-./run_all.sh build
-
-# 2. Запуск приложения
-./run_all.sh run
-```
-
-#### Через Docker Compose напрямую
-
-```bash
-docker compose up -d
-```
-
-При запуске автоматически:
-- Создаются и запускаются контейнеры PostgreSQL и Redis
-- Применяются миграции базы данных
-- Запускается Telegram бот
-- Запускается FastAPI webhook сервер
+Или поэтапно: `./run_all.sh build` → `./run_all.sh run`. Порядок: db, redis → migrate → bot, webhook-api.
 
 ### Проверка статуса
 
@@ -215,7 +221,7 @@ docker compose down
 
 ### Миграции базы данных
 
-Миграции применяются автоматически при запуске. Для ручного применения:
+Миграции выполняются отдельным one-shot сервисом (безопасно, не параллельно):
 
 ```bash
 make migrate
@@ -237,7 +243,9 @@ make migrate-create
 
 ### Webhook-безопасность
 
-- Проверка подписи webhook-уведомлений от YooKassa через `YOOKASSA_WEBHOOK_SECRET`
+- **X-Webhook-Secret:** проверка только в FastAPI (порт 8001). В PROD YooKassa webhook должен идти на 8001. Если `YOOKASSA_WEBHOOK_SECRET` задан — требуется заголовок `X-Webhook-Secret`.
+- **Nginx (PROD):** проксировать `/webhook/yookassa` на `localhost:8001`. Добавить заголовок из env:
+  `proxy_set_header X-Webhook-Secret "${YOOKASSA_WEBHOOK_SECRET}";` (через envsubst при старте nginx).
 - Валидация данных платежей перед обработкой
 - Логирование всех webhook-запросов для аудита
 
@@ -257,14 +265,6 @@ make migrate-create
 
 ## Масштабирование и развитие
 
-### Архитектурные решения для масштабирования
-
-- **Stateless-дизайн**: состояние хранится в Redis, что позволяет запускать несколько инстансов бота
-- **Асинхронная архитектура**: неблокирующая обработка запросов обеспечивает высокую производительность
-- **Разделение сервисов**: bot и webhook-api работают независимо, могут масштабироваться отдельно
-- **Кэширование**: Redis используется для кэширования часто запрашиваемых данных
-- **Миграции БД**: Alembic обеспечивает версионирование схемы базы данных
-
 ### Возможные направления развития
 
 - **Горизонтальное масштабирование**: запуск нескольких инстансов бота за балансировщиком нагрузки
@@ -275,16 +275,6 @@ make migrate-create
 - **Аналитика**: детальная аналитика пользователей и платежей
 - **API для внешних сервисов**: предоставление REST API для интеграции с другими системами
 
-## Демонстрация работы
+## Демонстрация
 
-Данный бот уже развернут и работает в продакшене вместе с VPN-сервисом. Вы можете протестировать его работу в реальном времени:
-
-**Telegram бот:** @crs_vpn_bot
-
-Бот полностью функционален и позволяет:
-
-- Выбрать тарифный план VPN-подписки
-- Оплатить подписку через YooKassa или USDT
-- Получить конфигурацию VPN после успешной оплаты
-- Просматривать статус активной подписки
-- Управлять подпиской через удобный интерфейс Telegram
+Бот развёрнут в продакшене: **@crs_vpn_bot**

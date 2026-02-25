@@ -13,12 +13,12 @@ restart:
 logs:
 	docker compose logs -f
 
-# Миграции базы данных
+# Миграции базы данных (one-shot, требует db)
 migrate:
-	docker compose exec bot python3 -m alembic upgrade head
+	docker compose --profile migrate run --rm migrate
 
 migrate-create:
-	docker compose exec bot python3 -m alembic revision --autogenerate -m "auto"
+	docker compose --profile migrate run --rm migrate sh -c 'python3 -m alembic revision --autogenerate -m "auto"'
 
 # Установка зависимостей (для локальной разработки)
 install:
