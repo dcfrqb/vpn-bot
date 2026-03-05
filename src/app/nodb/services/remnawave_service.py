@@ -2,12 +2,15 @@
 Remnawave — единственный источник истины в No-DB режиме.
 ensure_user, provision_subscription.
 REMNAWAVE_DRY_RUN=1 — для локальной проверки без вызова API (только логирование).
+Календарные месяцы: relativedelta(months=N), base = max(now, current_expires_at).
 """
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
-from app.remnawave.client import RemnaClient
+from dateutil.relativedelta import relativedelta
+
+from app.remnawave.client import RemnaClient, LIFETIME_EXPIRE_AT
 from app.logger import logger
 from app.nodb.logs import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
 
@@ -29,6 +32,7 @@ TARIFF_TO_PLAN = {
     "premium_3": ("premium", 3),
     "premium_6": ("premium", 6),
     "premium_12": ("premium", 12),
+    "premium_forever": ("premium", -1),  # -1 = unlimited
 }
 
 
@@ -72,9 +76,35 @@ async def provision_subscription(
     except Exception:
         plan_code, period_months = "basic", 1
 
-    period_days = period_months * 30
-    valid_until = datetime.now(timezone.utc) + timedelta(days=period_days)
-    valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if period_months < 0:
+        valid_until_str = LIFETIME_EXPIRE_AT
+    else:
+        now = datetime.now(timezone.utc)
+        base = now
+        try:
+            user_data = await client.get_user_by_id(remnawave_user_id)
+            raw = user_data.get("response", user_data) if isinstance(user_data, dict) else {}
+            if not isinstance(raw, dict):
+                raw = {}
+            expire_raw = raw.get("expireAt") or raw.get("expires_at") or raw.get("valid_until")
+            if expire_raw:
+                if isinstance(expire_raw, str):
+                    expire_str = expire_raw.replace("Z", "+00:00")
+                    if "+" not in expire_str and "-" not in expire_str[-6:]:
+                        expire_str += "+00:00"
+                    current_exp = datetime.fromisoformat(expire_str)
+                else:
+                    current_exp = datetime.fromtimestamp(expire_raw)
+                if current_exp.tzinfo:
+                    current_exp = current_exp.astimezone(timezone.utc)
+                else:
+                    current_exp = current_exp.replace(tzinfo=timezone.utc)
+                if current_exp > now:
+                    base = current_exp
+        except Exception as e:
+            logger.debug(f"Не удалось получить текущий expireAt для {remnawave_user_id}: {e}")
+        valid_until = base + relativedelta(months=period_months)
+        valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
         await client.update_user(remnawave_user_id, expire_at=valid_until_str)
@@ -122,7 +152,7 @@ async def provision_tariff(
     REMNAWAVE_DRY_RUN=1 — не дергает сеть, логирует remnawave_provision_success фейково.
     """
     if os.environ.get("REMNAWAVE_DRY_RUN") == "1":
-        valid_until = datetime.now(timezone.utc) + timedelta(days=30)
+        valid_until = datetime.now(timezone.utc) + relativedelta(months=1)
         log_payment_event(
             EVENT_REMNAWAVE_PROVISION_SUCCESS,
             req_id=req_id,

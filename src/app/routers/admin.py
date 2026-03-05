@@ -7,6 +7,7 @@ from app.config import is_admin, settings
 from app.utils.html import escape_html
 from app.logger import logger
 from app.services.stats import get_statistics, get_users_list, get_payments_list
+from app.services.sync_service import SyncService, RemnaUnavailableError
 from app.ui.screen_manager import get_screen_manager
 # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
 from app.ui.screens import ScreenID
@@ -23,27 +24,84 @@ router = Router(name="admin")
 
 @router.message(Command("admin"))
 async def admin_panel(message: types.Message):
-    """Панель администратора - использует ScreenManager"""
-    if not is_admin(message.from_user.id):
-        # UI EXCEPTION: прямой вызов UI метода
+    """Панель администратора или промокод /admin (запрос на выдачу)"""
+    if is_admin(message.from_user.id):
+        # Админ — показываем панель
+        logger.info(f"Администратор {message.from_user.id} открыл панель")
+        stats = await get_statistics()
+        screen = AdminPanelScreen()
+        viewmodel = await screen.create_viewmodel(stats=stats)
+        screen_manager = get_screen_manager()
+        await screen_manager.show_screen(
+            screen_id=ScreenID.ADMIN_PANEL,
+            message_or_callback=message,
+            viewmodel=viewmodel,
+            edit=False,
+            user_id=message.from_user.id
+        )
+        return
+
+    # Не админ — промокод /admin (запрос на выдачу) — только если включён
+    if not getattr(settings, "PROMO_ADMIN_ENABLED", True):
         await message.answer("❌ У вас нет прав администратора")
         return
-    
-    logger.info(f"Администратор {message.from_user.id} открыл панель")
-    
-    stats = await get_statistics()
-    
-    screen = AdminPanelScreen()
-    viewmodel = await screen.create_viewmodel(stats=stats)
-    
-    screen_manager = get_screen_manager()
-    await screen_manager.show_screen(
-        screen_id=ScreenID.ADMIN_PANEL,
-        message_or_callback=message,
-        viewmodel=viewmodel,
-        edit=False,
-        user_id=message.from_user.id
+
+    await _handle_admin_promo_request(message)
+
+
+async def _handle_admin_promo_request(message: types.Message):
+    """Промокод /admin: отправляет запрос админам с inline-клавиатурой."""
+    user_id = message.from_user.id
+    logger.info(f"Пользователь {user_id} вызвал промокод /admin")
+    try:
+        sync_service = SyncService()
+        sync_result = await sync_service.sync_user_and_subscription(
+            telegram_id=user_id,
+            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            use_fallback=False,
+            use_cache=False,
+            force_sync=True,
+            force_remna=True,
+        )
+        if sync_result.subscription_status == "active":
+            await message.answer("❌ У вас уже есть активная подписка.")
+            return
+    except RemnaUnavailableError:
+        await message.answer("❌ Не удалось проверить статус подписки. Попробуйте позже.")
+        return
+    except Exception as e:
+        logger.error(f"Ошибка /admin promo для {user_id}: {e}")
+        await message.answer("❌ Ошибка. Попробуйте позже.")
+        return
+
+    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or message.from_user.username or f"User_{user_id}"
+    admin_msg = (
+        f"👤 <b>Запрос на доступ (промокод /admin)</b>\n\n"
+        f"Имя: {name}\n"
+        f"Username: @{message.from_user.username or 'не указан'}\n"
+        f"Telegram ID: <code>{user_id}</code>\n\n"
+        f"Выдайте Premium или отклоните запрос."
     )
+    admin_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Выдать Premium на 1 месяц", callback_data=f"admin_promo_grant_1m_{user_id}")],
+        [types.InlineKeyboardButton(text="Выдать Premium на 3 месяца", callback_data=f"admin_promo_grant_3m_{user_id}")],
+        [types.InlineKeyboardButton(text="Выдать Premium навсегда", callback_data=f"admin_promo_grant_forever_{user_id}")],
+        [types.InlineKeyboardButton(text="Отклонить", callback_data=f"admin_promo_reject_{user_id}")],
+        [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
+    ])
+    for admin_id in (settings.ADMINS or []):
+        if isinstance(admin_id, int):
+            try:
+                await message.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_msg,
+                    reply_markup=admin_keyboard,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки /admin promo админу {admin_id}: {e}")
+    await message.answer("⏳ Запрос отправлен администратору. Ожидайте ответа.")
+
 
 @router.message(Command("payments_new"))
 async def cmd_payments_new(message: types.Message):
@@ -410,3 +468,412 @@ async def admin_reject_access(callback: types.CallbackQuery):
         await callback.answer("❌ Нет прав", show_alert=True)
         return
     await callback.answer("Запросы обрабатываются вручную", show_alert=True)
+
+
+# --- /friend handlers (NoDB subscription): Premium 1m, 3m, forever, reject ---
+
+_FRIEND_PROCESSED_MARKER = "✅ Обработано"
+
+
+def _parse_friend_user_id(callback_data: str, prefix: str) -> int | None:
+    """Извлекает user_id из callback_data: friend_grant_1m_12345 -> 12345"""
+    try:
+        suffix = callback_data[len(prefix):]
+        return int(suffix)
+    except (ValueError, TypeError):
+        return None
+
+
+_FRIEND_GRANT_MAP = {
+    "1m": ("premium_1", "1 месяц"),
+    "3m": ("premium_3", "3 месяца"),
+    "forever": ("premium_forever", "всегда"),
+}
+
+
+async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
+    """Выдаёт Premium подписку через NoDB. key: 1m, 3m, forever."""
+    if not callback.data or key not in _FRIEND_GRANT_MAP:
+        return False
+    tariff_code, period_label = _FRIEND_GRANT_MAP[key]
+    prefix = f"friend_grant_{key}_"
+    if not callback.data.startswith(prefix):
+        return False
+    user_id = _parse_friend_user_id(callback.data, prefix)
+    if not user_id:
+        await callback.answer("❌ Ошибка формата", show_alert=True)
+        return False
+
+    text = callback.message.text or ""
+    if _FRIEND_PROCESSED_MARKER in text:
+        await callback.answer("✅ Запрос уже обработан", show_alert=True)
+        return False
+
+    from app.nodb.services.remnawave_service import provision_tariff
+    from app.keyboards import get_subscription_link_keyboard
+
+    success = await provision_tariff(user_id, tariff_code, req_id=f"friend_admin_{callback.from_user.id}")
+    if not success:
+        await callback.answer("❌ Ошибка выдачи доступа. Проверьте логи.", show_alert=True)
+        return False
+
+    try:
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "✅ <b>Вам выдан доступ!</b>\n\n"
+                f"Premium на {period_label}. Нажмите «Получить ссылку» для настройки VPN."
+            ),
+            reply_markup=get_subscription_link_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
+
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n⭐ Premium на {period_label} выдан администратором."
+    await callback.message.edit_text(new_text, reply_markup=None)
+    await callback.answer(f"✅ Premium на {period_label} выдан")
+    return True
+
+
+async def _handle_friend_reject(callback: types.CallbackQuery) -> bool:
+    """Отклоняет запрос /friend."""
+    if not callback.data or not callback.data.startswith("friend_reject_"):
+        return False
+    user_id = _parse_friend_user_id(callback.data, "friend_reject_")
+    if not user_id:
+        await callback.answer("❌ Ошибка формата", show_alert=True)
+        return False
+
+    text = callback.message.text or ""
+    if _FRIEND_PROCESSED_MARKER in text:
+        await callback.answer("✅ Запрос уже обработан", show_alert=True)
+        return False
+
+    admin_username = getattr(settings, "ADMIN_SUPPORT_USERNAME", None) or "dcfrq"
+    try:
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text="❌ Ваш запрос на доступ отклонён. Свяжитесь с администратором при необходимости.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="✍️ Написать", url=f"https://t.me/{admin_username.replace('@', '')}")],
+            ]),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
+
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонён."
+    await callback.message.edit_text(new_text, reply_markup=None)
+    await callback.answer("✅ Запрос отклонён")
+    return True
+
+
+@router.callback_query(F.data.startswith("friend_grant_1m_"))
+async def friend_grant_1m(callback: types.CallbackQuery):
+    """Выдать Premium на 1 месяц."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_friend_grant(callback, "1m")
+
+
+@router.callback_query(F.data.startswith("friend_grant_3m_"))
+async def friend_grant_3m(callback: types.CallbackQuery):
+    """Выдать Premium на 3 месяца."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_friend_grant(callback, "3m")
+
+
+@router.callback_query(F.data.startswith("friend_grant_forever_"))
+async def friend_grant_forever(callback: types.CallbackQuery):
+    """Выдать Premium навсегда."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_friend_grant(callback, "forever")
+
+
+@router.callback_query(F.data.startswith("friend_reject_"))
+async def friend_reject(callback: types.CallbackQuery):
+    """Отклонить запрос на доступ."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_friend_reject(callback)
+
+
+# --- /admin promo handlers (admin_promo_grant_*, admin_promo_reject_*) ---
+
+def _parse_admin_promo_user_id(callback_data: str, prefix: str) -> int | None:
+    """Извлекает user_id из callback_data: admin_promo_grant_1m_12345 -> 12345"""
+    return _parse_friend_user_id(callback_data, prefix)
+
+
+async def _handle_admin_promo_grant(callback: types.CallbackQuery, key: str) -> bool:
+    """Выдаёт Premium через промокод /admin. key: 1m, 3m, forever."""
+    if key not in _FRIEND_GRANT_MAP:
+        return False
+    tariff_code, period_label = _FRIEND_GRANT_MAP[key]
+    prefix = f"admin_promo_grant_{key}_"
+    if not callback.data or not callback.data.startswith(prefix):
+        return False
+    user_id = _parse_admin_promo_user_id(callback.data, prefix)
+    if not user_id:
+        await callback.answer("❌ Ошибка формата", show_alert=True)
+        return False
+
+    text = callback.message.text or ""
+    if _FRIEND_PROCESSED_MARKER in text:
+        await callback.answer("✅ Запрос уже обработан", show_alert=True)
+        return False
+
+    from app.nodb.services.remnawave_service import provision_tariff
+    from app.keyboards import get_subscription_link_keyboard
+
+    success = await provision_tariff(user_id, tariff_code, req_id=f"admin_promo_{callback.from_user.id}")
+    if not success:
+        await callback.answer("❌ Ошибка выдачи доступа. Проверьте логи.", show_alert=True)
+        return False
+
+    try:
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "✅ <b>Вам выдан доступ!</b>\n\n"
+                f"Premium на {period_label}. Нажмите «Получить ссылку» для настройки VPN."
+            ),
+            reply_markup=get_subscription_link_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
+
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n⭐ Premium на {period_label} выдан администратором."
+    await callback.message.edit_text(new_text, reply_markup=None)
+    await callback.answer(f"✅ Premium на {period_label} выдан")
+    return True
+
+
+async def _handle_admin_promo_reject(callback: types.CallbackQuery) -> bool:
+    """Отклоняет запрос промокода /admin."""
+    if not callback.data or not callback.data.startswith("admin_promo_reject_"):
+        return False
+    user_id = _parse_admin_promo_user_id(callback.data, "admin_promo_reject_")
+    if not user_id:
+        await callback.answer("❌ Ошибка формата", show_alert=True)
+        return False
+
+    text = callback.message.text or ""
+    if _FRIEND_PROCESSED_MARKER in text:
+        await callback.answer("✅ Запрос уже обработан", show_alert=True)
+        return False
+
+    admin_username = getattr(settings, "ADMIN_SUPPORT_USERNAME", None) or "dcfrq"
+    try:
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text="❌ Ваш запрос на доступ отклонён. Свяжитесь с администратором при необходимости.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="✍️ Написать", url=f"https://t.me/{admin_username.replace('@', '')}")],
+            ]),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
+
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонён."
+    await callback.message.edit_text(new_text, reply_markup=None)
+    await callback.answer("✅ Запрос отклонён")
+    return True
+
+
+@router.callback_query(F.data.startswith("admin_promo_grant_1m_"))
+async def admin_promo_grant_1m(callback: types.CallbackQuery):
+    """Промокод /admin: выдать Premium на 1 месяц."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_admin_promo_grant(callback, "1m")
+
+
+@router.callback_query(F.data.startswith("admin_promo_grant_3m_"))
+async def admin_promo_grant_3m(callback: types.CallbackQuery):
+    """Промокод /admin: выдать Premium на 3 месяца."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_admin_promo_grant(callback, "3m")
+
+
+@router.callback_query(F.data.startswith("admin_promo_grant_forever_"))
+async def admin_promo_grant_forever(callback: types.CallbackQuery):
+    """Промокод /admin: выдать Premium навсегда."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_admin_promo_grant(callback, "forever")
+
+
+@router.callback_query(F.data.startswith("admin_promo_reject_"))
+async def admin_promo_reject(callback: types.CallbackQuery):
+    """Промокод /admin: отклонить запрос."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+    await _handle_admin_promo_reject(callback)
+
+
+# === Обработчики для промокода /solokhin ===
+
+@router.callback_query(F.data.startswith("promo_grant_"))
+async def promo_grant_handler(callback: types.CallbackQuery):
+    """Выдать промокод (например solokhin) — универсальный обработчик."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    # Формат: promo_grant_{promo_code}_{user_id}_{req_id}
+    parts = callback.data.replace("promo_grant_", "").split("_")
+    if len(parts) < 3:
+        await callback.answer("❌ Неверный формат данных", show_alert=True)
+        return
+
+    promo_code = parts[0]
+    try:
+        user_id = int(parts[1])
+        req_id = parts[2]
+    except (ValueError, IndexError):
+        await callback.answer("❌ Неверный формат данных", show_alert=True)
+        return
+
+    # Проверяем, не обработан ли уже
+    text = callback.message.text or ""
+    if "✅ Обработано" in text or "❌ Отклонено" in text:
+        await callback.answer("✅ Заявка уже обработана", show_alert=True)
+        return
+
+    await callback.answer("⏳ Выдаю доступ...")
+
+    # Записываем активацию промокода
+    try:
+        from app.nodb.store import record_promo_activation, log_event
+        recorded = await record_promo_activation(user_id, promo_code)
+        if not recorded:
+            # Уже активировал ранее — но всё равно выдаём (админ решил)
+            logger.warning(f"promo_grant: {promo_code} для {user_id} уже был активирован, но выдаём повторно")
+    except Exception as e:
+        logger.error(f"promo_grant: ошибка записи promo_activation: {e}")
+
+    # Provision
+    from app.nodb.services.remnawave_service import provision_tariff
+    tariff = "premium_1"  # /solokhin всегда premium_1
+    success = await provision_tariff(user_id, tariff, req_id=req_id)
+
+    if not success:
+        await callback.answer("❌ Ошибка выдачи доступа", show_alert=True)
+        return
+
+    # Логируем
+    try:
+        from app.nodb.store import log_event
+        await log_event(
+            event_type="promo_granted",
+            req_id=req_id,
+            tg_id=user_id,
+            payload={"promo_code": promo_code, "tariff": tariff, "admin_id": callback.from_user.id},
+        )
+    except Exception as e:
+        logger.error(f"promo_grant: ошибка логирования: {e}")
+
+    # Уведомляем пользователя
+    try:
+        from app.keyboards import get_subscription_link_keyboard
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "🎉 <b>Промокод активирован!</b>\n\n"
+                "Вам выдан Premium на 1 месяц. Нажмите «Получить ссылку» для настройки VPN."
+            ),
+            reply_markup=get_subscription_link_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"promo_grant: ошибка уведомления пользователя {user_id}: {e}")
+
+    # Обновляем сообщение админа
+    new_text = text.split("<pre>")[0].strip() + f"\n\n✅ Обработано\nПремиум выдан администратором {callback.from_user.id}"
+    try:
+        await callback.message.edit_text(new_text, reply_markup=None, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer("✅ Доступ выдан")
+
+
+@router.callback_query(F.data.startswith("promo_reject_"))
+async def promo_reject_handler(callback: types.CallbackQuery):
+    """Отклонить промокод — универсальный обработчик."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет прав", show_alert=True)
+        return
+
+    # Формат: promo_reject_{promo_code}_{user_id}_{req_id}
+    parts = callback.data.replace("promo_reject_", "").split("_")
+    if len(parts) < 3:
+        await callback.answer("❌ Неверный формат данных", show_alert=True)
+        return
+
+    promo_code = parts[0]
+    try:
+        user_id = int(parts[1])
+        req_id = parts[2]
+    except (ValueError, IndexError):
+        await callback.answer("❌ Неверный формат данных", show_alert=True)
+        return
+
+    # Проверяем, не обработан ли уже
+    text = callback.message.text or ""
+    if "✅ Обработано" in text or "❌ Отклонено" in text:
+        await callback.answer("✅ Заявка уже обработана", show_alert=True)
+        return
+
+    await callback.answer("⏳ Отклоняю...")
+
+    # Логируем
+    try:
+        from app.nodb.store import log_event
+        await log_event(
+            event_type="promo_rejected",
+            req_id=req_id,
+            tg_id=user_id,
+            payload={"promo_code": promo_code, "admin_id": callback.from_user.id},
+        )
+    except Exception as e:
+        logger.error(f"promo_reject: ошибка логирования: {e}")
+
+    # Уведомляем пользователя
+    try:
+        admin_username = getattr(settings, "ADMIN_SUPPORT_USERNAME", None) or "dcfrq"
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text=(
+                "❌ <b>Промокод отклонён.</b>\n\n"
+                "Если считаете это ошибкой — напишите администратору."
+            ),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="✍️ Написать", url=f"https://t.me/{admin_username.replace('@', '')}")]
+            ]),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"promo_reject: ошибка уведомления пользователя {user_id}: {e}")
+
+    # Обновляем сообщение админа
+    new_text = text.split("<pre>")[0].strip() + f"\n\n❌ Отклонено администратором {callback.from_user.id}"
+    try:
+        await callback.message.edit_text(new_text, reply_markup=None, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer("✅ Заявка отклонена")

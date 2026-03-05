@@ -2,6 +2,8 @@
 No-DB админские команды — по логам JSONL.
 /payments_new — последние 10 заявок
 /payment_find <req_id> — поиск по req_id
+
+Обработчики /friend (friend_grant_*, friend_reject_*) — в app.routers.admin
 """
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config import is_admin, settings
+from app.config import is_admin
 from app.nodb.logs import read_last_payment_requests, find_payment_by_req_id
 from app.utils.html import escape_html
 

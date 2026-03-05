@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
     CRYPTO_NETWORK: Union[str, None] = "TRC20"  # TRC20, ERC20, etc.
 
+    # Промокоды (slash-команды, NoDB)
+    PROMO_SOLOKHIN_ENABLED: bool = True
+    PROMO_ADMIN_ENABLED: bool = True
+
     # Ручная модерация платежей (обязателен только в no_db)
     PAYREQ_HMAC_SECRET: Union[str, None] = None
     payreq_hmac_secret: Union[str, None] = None

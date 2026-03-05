@@ -93,10 +93,19 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
 async def run_polling():
     """Запускает бота в режиме polling"""
     logger.info("Инициализация бота (polling режим)")
-    
+
+    # Инициализируем SQLite store для no_db режима
+    if settings.BOT_MODE != "legacy":
+        try:
+            from app.nodb.store import init_db
+            await init_db()
+            logger.info("SQLite store инициализирован")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации SQLite store: {e}")
+
     bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     logger.info("Бот создан успешно")
-    
+
     dp = await setup_dispatcher(bot)
 
     try:
@@ -168,12 +177,21 @@ async def run_webhook():
     """Запускает бота в режиме webhook"""
     if not settings.TELEGRAM_WEBHOOK_URL:
         raise ValueError("TELEGRAM_WEBHOOK_URL должен быть указан в конфигурации для webhook режима")
-    
+
     logger.info("Инициализация бота (webhook режим)")
-    
+
+    # Инициализируем SQLite store для no_db режима
+    if settings.BOT_MODE != "legacy":
+        try:
+            from app.nodb.store import init_db
+            await init_db()
+            logger.info("SQLite store инициализирован")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации SQLite store: {e}")
+
     bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     logger.info("Бот создан успешно")
-    
+
     dp = await setup_dispatcher(bot)
 
     try:

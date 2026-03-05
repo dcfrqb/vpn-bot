@@ -2,10 +2,12 @@
 No-DB роутер платежей — ручная модерация.
 Пользователь выбирает тариф → заявка → админ ✅/❌ → Remnawave provision.
 Callback: payreq:approve, payreq:reject, payreq:dm (без payload в callback_data).
+
+Anti-spam: Redis с in-memory fallback.
+Хранилище: SQLite (nodb.store).
 """
-from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -24,41 +26,11 @@ from app.nodb.payreq import (
     verify_payreq,
 )
 from app.nodb.services.remnawave_service import provision_tariff
-from app.nodb.logs import (
-    log_payment_event,
-    EVENT_PAYMENT_REQUEST_CREATED,
-    EVENT_ADMIN_NOTIFIED,
-    EVENT_ADMIN_ACTION_APPROVE_CLICKED,
-    EVENT_ADMIN_ACTION_REJECT_CLICKED,
-    EVENT_PAYMENT_APPROVED,
-    EVENT_PAYMENT_REJECTED,
-    EVENT_TELEGRAM_ERROR,
-    EVENT_PAYREQ_SIGNATURE_INVALID,
-    EVENT_PAYREQ_ALREADY_RESOLVED,
-)
+from app.nodb.antispam import check_antispam, record_antispam
 from app.nodb.tariffs import to_tariff_code
 
 
 router = Router(name="nodb_payments")
-
-# Anti-spam: recent_req_by_user[tg_id] = (req_id, ts). 120 сек.
-_RECENT_REQ_BY_USER: Dict[int, Tuple[str, float]] = {}
-_ANTI_SPAM_SECONDS = 120
-
-
-def _check_anti_spam(tg_id: int) -> Tuple[bool, Optional[str]]:
-    """Возвращает (can_create, existing_req_id). Если недавно создавал — нельзя."""
-    now = datetime.now(timezone.utc).timestamp()
-    if tg_id in _RECENT_REQ_BY_USER:
-        req_id, ts = _RECENT_REQ_BY_USER[tg_id]
-        if now - ts < _ANTI_SPAM_SECONDS:
-            return False, req_id
-        del _RECENT_REQ_BY_USER[tg_id]
-    return True, None
-
-
-def _record_req(tg_id: int, req_id: str) -> None:
-    _RECENT_REQ_BY_USER[tg_id] = (req_id, datetime.now(timezone.utc).timestamp())
 
 
 def _parse_pay_callback_data(data: str, prefix: str) -> tuple:
@@ -82,8 +54,8 @@ async def handle_payment_request(callback: types.CallbackQuery):
     """Обработчик 'Оплатить' — создаёт заявку и отправляет админу."""
     tg_id = callback.from_user.id
 
-    # Anti-spam: 120 сек
-    can_create, existing_req_id = _check_anti_spam(tg_id)
+    # Anti-spam: 120 сек (Redis с in-memory fallback)
+    can_create, existing_req_id = await check_antispam(tg_id)
     if not can_create and existing_req_id:
         await callback.answer("⏳ Заявка уже отправлена", show_alert=False)
         await callback.message.edit_text(
@@ -91,7 +63,6 @@ async def handle_payment_request(callback: types.CallbackQuery):
             "Пожалуйста, подождите подтверждения. Повторная отправка через 2 минуты.",
             reply_markup=get_back_to_plans_keyboard(),
         )
-        # Опционально: повторно пингуем админа тем же req_id (если есть сохранённая карточка — не делаем, т.к. нет доступа)
         return
 
     await callback.answer("⏳ Создаю заявку...")
@@ -113,7 +84,7 @@ async def handle_payment_request(callback: types.CallbackQuery):
         tariff = to_tariff_code(plan_code, period_months)
 
         req_id = generate_req_id()
-        _record_req(tg_id, req_id)
+        await record_antispam(tg_id, req_id)
         username = f"@{callback.from_user.username}" if callback.from_user.username else f"ID:{callback.from_user.id}"
         name = f"{callback.from_user.first_name or ''} {callback.from_user.last_name or ''}".strip() or username
 

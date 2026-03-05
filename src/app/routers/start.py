@@ -825,12 +825,145 @@ async def admin_panel_callback(callback: types.CallbackQuery):
     )
 
 
+async def _handle_solokhin_promo(message: types.Message) -> bool:
+    """
+    Обрабатывает промокод Solokhin: отправляет заявку админам на Premium 1 месяц.
+    Возвращает True если заявка отправлена.
+
+    Проверки:
+    - Активная подписка → отказ
+    - Уже активировал → отказ
+    - Антиспам → отказ
+    """
+    from app.nodb.store import has_promo_activation, record_promo_activation, log_event
+    from app.nodb.antispam import check_antispam, record_antispam
+    from app.nodb.payreq import generate_req_id, build_payreq_block
+
+    user_id = message.from_user.id
+    promo_code = "solokhin"
+
+    # 1. Проверяем активную подписку
+    try:
+        sync_service = SyncService()
+        sync_result = await sync_service.sync_user_and_subscription(
+            telegram_id=user_id,
+            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            use_fallback=False,
+            use_cache=True,
+        )
+        if sync_result.subscription_status == "active":
+            await message.answer(
+                "❌ У вас уже есть активная подписка. Промокод недоступен.",
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+            )
+            return True  # Обработано, но не выдано
+    except RemnaUnavailableError:
+        await message.answer(
+            "❌ Не удалось проверить статус подписки. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"/solokhin: ошибка проверки подписки для {user_id}: {e}")
+
+    # 2. Проверяем, уже активировал ли этот промокод
+    try:
+        already_used = await has_promo_activation(user_id, promo_code)
+        if already_used:
+            await message.answer(
+                "❌ Вы уже использовали этот промокод.",
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+            )
+            return True
+    except Exception as e:
+        logger.error(f"/solokhin: ошибка проверки promo_activations для {user_id}: {e}")
+
+    # 3. Антиспам (120 сек между заявками)
+    can_create, existing_req_id = await check_antispam(user_id)
+    if not can_create:
+        await message.answer(
+            "⏳ Заявка уже отправлена. Ожидайте ответа администратора.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
+
+    # 4. Создаём заявку и отправляем админам
+    req_id = generate_req_id()
+    await record_antispam(user_id, req_id)
+
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
+    tariff = "premium_1"
+
+    payreq_block = build_payreq_block(
+        req_id=req_id,
+        tg_id=user_id,
+        username=username,
+        name=name,
+        tariff=tariff,
+        amount=0,  # Промо — бесплатно
+        currency="PROMO",
+    )
+
+    # Логируем в SQLite
+    try:
+        await log_event(
+            event_type="promo_request_created",
+            req_id=req_id,
+            tg_id=user_id,
+            payload={"promo_code": promo_code, "tariff": tariff, "username": username},
+        )
+    except Exception as e:
+        logger.error(f"/solokhin: ошибка логирования: {e}")
+
+    # Сообщение пользователю
+    await message.answer(
+        "✅ <b>Заявка на промокод отправлена администратору.</b>\n\n"
+        "После подтверждения вам будет выдан Premium на 1 месяц.",
+        reply_markup=get_main_menu_keyboard(user_id=user_id),
+    )
+
+    # Сообщение админам
+    admin_msg = (
+        f"🎁 <b>ПРОМОКОД SOLOKHIN</b>\n\n"
+        f"👤 <b>Пользователь:</b> {username}\n"
+        f"🆔 <b>Telegram ID:</b> {user_id}\n"
+        f"📝 <b>Имя:</b> {name}\n\n"
+        f"📦 <b>Тариф:</b> Premium 1 месяц\n"
+        f"🎫 <b>Промокод:</b> solokhin\n\n"
+        f"<pre>{payreq_block}</pre>"
+    )
+    admin_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Выдать Premium", callback_data=f"promo_grant_{promo_code}_{user_id}_{req_id}")],
+        [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"promo_reject_{promo_code}_{user_id}_{req_id}")],
+        [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
+    ])
+
+    for admin_id in (settings.ADMINS or []):
+        if isinstance(admin_id, int):
+            try:
+                await message.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_msg,
+                    reply_markup=admin_keyboard,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки промо-заявки админу {admin_id}: {e}")
+
+    return True
+
+
 @router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод /solokhin — отключён (БД удалена). Напишите администратору."""
+    """Промокод Solokhin — отправляет заявку админам на Premium 1 месяц (только slash-команда)."""
+    if not getattr(settings, "PROMO_SOLOKHIN_ENABLED", True):
+        return
+    if await _handle_solokhin_promo(message):
+        return
     await message.answer(
-        "Промокод обрабатывается вручную. Напишите администратору: @dcfrq",
-        reply_markup=get_main_menu_keyboard(user_id=message.from_user.id)
+        "❌ Не удалось обработать промокод. Попробуйте позже или напишите администратору.",
+        reply_markup=get_main_menu_keyboard(user_id=message.from_user.id),
     )
 
 
@@ -921,16 +1054,21 @@ async def cmd_friend(message: types.Message):
         f"Имя: {name}\n"
         f"Username: @{message.from_user.username or 'не указан'}\n"
         f"Telegram ID: <code>{user_id}</code>\n\n"
-        f"Выдайте доступ вручную через Remnawave или напишите пользователю."
+        f"Выдайте Premium или отклоните запрос."
     )
+    admin_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="Выдать Premium на 1 месяц", callback_data=f"friend_grant_1m_{user_id}")],
+        [types.InlineKeyboardButton(text="Выдать Premium на 3 месяца", callback_data=f"friend_grant_3m_{user_id}")],
+        [types.InlineKeyboardButton(text="Выдать Premium навсегда", callback_data=f"friend_grant_forever_{user_id}")],
+        [types.InlineKeyboardButton(text="Отклонить", callback_data=f"friend_reject_{user_id}")],
+        [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
+    ])
     for admin_id in settings.ADMINS:
         try:
             await message.bot.send_message(
                 chat_id=admin_id,
                 text=admin_msg,
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
-                ]),
+                reply_markup=admin_keyboard,
                 parse_mode="HTML"
             )
         except Exception as e:

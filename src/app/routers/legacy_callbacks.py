@@ -111,6 +111,14 @@ async def legacy_callback_handler(callback: types.CallbackQuery):
     # Пропускаем admin grant/reject callbacks (обрабатываются в admin.py)
     if callback.data.startswith("admin_grant_") or callback.data.startswith("admin_reject_"):
         return
+
+    # Пропускаем /friend grant/reject (обрабатываются в admin.py)
+    if callback.data.startswith("friend_grant_") or callback.data.startswith("friend_reject_"):
+        return
+
+    # Пропускаем /admin promo grant/reject (обрабатываются в admin.py)
+    if callback.data.startswith("admin_promo_grant_") or callback.data.startswith("admin_promo_reject_"):
+        return
     
     user_id = callback.from_user.id
     logger.info(f"Legacy callback от пользователя {user_id}: {callback.data}")
