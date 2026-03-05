@@ -257,7 +257,7 @@ async def set_cached_sync_result(telegram_id: int, sync_data: Dict[str, Any], tt
         logger.debug(f"Ошибка сохранения SyncResult в кэш для {telegram_id}: {e}")
 
 
-CHECK_PAYMENT_RATE_LIMIT_TTL = 10  # секунд
+CHECK_PAYMENT_RATE_LIMIT_TTL = 5  # секунд — защита от спама, не мешать повторной проверке
 CHECK_PAYMENT_RATE_PREFIX = "check_payment:"
 AUTORECHECK_SCHEDULED_PREFIX = "autorecheck_scheduled:"
 AUTORECHECK_SCHEDULED_TTL = 180  # 3 минуты — защита от повторного планирования

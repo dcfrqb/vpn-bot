@@ -13,10 +13,7 @@ class TestPreflight:
         env_backup = os.environ.copy()
         try:
             os.environ.clear()
-            os.environ["DATABASE_URL"] = "postgresql://u:p@h/d"
             os.environ["REDIS_URL"] = "redis://localhost/0"
-            os.environ["YOOKASSA_SHOP_ID"] = "shop"
-            os.environ["YOOKASSA_API_KEY"] = "key"
             os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
             # BOT_TOKEN отсутствует
@@ -29,8 +26,8 @@ class TestPreflight:
             os.environ.clear()
             os.environ.update(env_backup)
 
-    def test_preflight_fails_without_database_url_in_docker(self):
-        """В Docker без DATABASE_URL — SystemExit с сообщением о DATABASE_URL."""
+    def test_preflight_fails_without_remna_in_docker(self):
+        """В Docker без REMNA_API_BASE — SystemExit с сообщением о Remna."""
         from app.utils.preflight import run_preflight
 
         env_backup = os.environ.copy()
@@ -38,16 +35,13 @@ class TestPreflight:
             os.environ.clear()
             os.environ["BOT_TOKEN"] = "token"
             os.environ["REDIS_URL"] = "redis://localhost/0"
-            os.environ["YOOKASSA_SHOP_ID"] = "shop"
-            os.environ["YOOKASSA_API_KEY"] = "key"
-            os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
-            # DATABASE_URL отсутствует
+            # REMNA_API_BASE отсутствует
 
             with pytest.raises(SystemExit) as exc_info:
                 run_preflight(in_docker=True)
 
-            assert "DATABASE_URL" in str(exc_info.value)
+            assert "REMNA" in str(exc_info.value) or "Remna" in str(exc_info.value)
         finally:
             os.environ.clear()
             os.environ.update(env_backup)
@@ -60,10 +54,7 @@ class TestPreflight:
         try:
             os.environ.clear()
             os.environ["BOT_TOKEN"] = "token"
-            os.environ["DATABASE_URL"] = "postgresql://u:p@h/d"
             os.environ["REDIS_URL"] = "redis://localhost/0"
-            os.environ["YOOKASSA_SHOP_ID"] = "shop"
-            os.environ["YOOKASSA_API_KEY"] = "key"
             os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
 
@@ -72,8 +63,8 @@ class TestPreflight:
             os.environ.clear()
             os.environ.update(env_backup)
 
-    def test_preflight_dev_skips_db_redis_requirement(self):
-        """PREFLIGHT_DEV=1 — DATABASE_URL и REDIS_URL не обязательны."""
+    def test_preflight_dev_skips_redis_requirement(self):
+        """PREFLIGHT_DEV=1 — REDIS_URL не обязателен."""
         from app.utils.preflight import run_preflight
 
         env_backup = os.environ.copy()
@@ -81,11 +72,8 @@ class TestPreflight:
             os.environ.clear()
             os.environ["PREFLIGHT_DEV"] = "1"
             os.environ["BOT_TOKEN"] = "token"
-            os.environ["YOOKASSA_SHOP_ID"] = "shop"
-            os.environ["YOOKASSA_API_KEY"] = "key"
             os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
-            # DATABASE_URL, REDIS_URL отсутствуют
 
             run_preflight(in_docker=False)
         finally:

@@ -53,8 +53,8 @@ build() {
 test_unit() {
     info "Запуск unit тестов..."
     
-    # Запускаем зависимости (БД и Redis)
-    docker-compose up -d db redis
+    # Запускаем Redis (unit тесты не требуют БД)
+    docker-compose up -d redis
     sleep 5
     
     # Запускаем unit тесты в временном контейнере (без интеграционных)
@@ -149,24 +149,36 @@ run() {
         fi
     fi
     
-    # Запускаем db и redis
-    docker-compose up -d db redis
-    info "Ожидание готовности db/redis..."
-    sleep 10
-    
-    # Миграции (one-shot)
-    info "Применение миграций..."
-    docker-compose --profile migrate run --rm migrate || {
-        error "Ошибка применения миграций"
-        return 1
-    }
-    
+    # BOT_MODE: legacy = db + migrate, no_db = только redis (env имеет приоритет над .env)
+    BOT_MODE=${BOT_MODE:-$(grep -E '^BOT_MODE=' .env 2>/dev/null | cut -d= -f2)}
+    BOT_MODE=${BOT_MODE:-legacy}
+    export BOT_MODE  # Передать в docker-compose для подстановки в environment
+
+    # Запускаем redis (всегда)
+    docker-compose up -d redis
+    info "Ожидание готовности redis..."
+    sleep 5
+
+    if [ "$BOT_MODE" = "legacy" ]; then
+        info "Режим legacy: запуск db + миграции..."
+        docker-compose --profile legacy up -d db
+        info "Ожидание готовности db..."
+        sleep 10
+        info "Применение миграций..."
+        docker-compose --profile legacy run --rm migrate || {
+            error "Ошибка применения миграций"
+            return 1
+        }
+    else
+        info "Режим no_db: миграции не требуются"
+    fi
+
     # Запускаем bot и webhook-api
     docker-compose up -d bot webhook-api
-    
+
     info "Ожидание готовности сервисов..."
     sleep 5
-    
+
     # Проверяем статус
     docker-compose ps
     

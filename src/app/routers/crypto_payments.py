@@ -374,7 +374,7 @@ async def back_to_main_cleanup(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("crypto_paid_"))
 async def handle_payment_confirmation(callback: types.CallbackQuery):
-    """Обработчик кнопки 'Я оплатил'"""
+    """Обработчик кнопки 'Я оплатил' — доступ сразу, оплата на проверке, уведомление админу."""
     try:
         # Парсим информацию из callback_data: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{qr_message_id}
         parts = callback.data.replace("crypto_paid_", "").split("_")
@@ -407,7 +407,7 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         payment_id = f"crypto_{user_id}_{timestamp}"
         
         # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("Отправляю уведомление администратору...")
+        await callback.answer("Выдаю доступ...")
         
         # Удаляем сообщение с QR-кодом если знаем его ID
         if qr_message_id:
@@ -423,12 +423,101 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
         # Удаляем сообщения об оплате USDT
         await delete_crypto_payment_messages(callback.bot, None, callback.from_user.id)
         
-        # Получаем информацию о пользователе
-        from app.db.session import SessionLocal
         from app.db.models import TelegramUser
         from sqlalchemy import select
         from datetime import datetime
+        from app.services.users import get_or_create_telegram_user
+        from app.services.payments.yookassa import handle_successful_payment
+        from app.keyboards import get_subscription_link_keyboard
         
+        if not SessionLocal:
+            await callback.message.edit_text(
+                "❌ База данных не настроена. Обратитесь в поддержку.",
+                reply_markup=get_back_to_plans_keyboard()
+            )
+            return
+        
+        # 1. Создаём Payment в БД (status=pending) и сразу выдаём доступ
+        async with SessionLocal() as session:
+            # Получаем или создаём пользователя
+            await get_or_create_telegram_user(
+                telegram_id=user_id,
+                username=callback.from_user.username,
+                first_name=callback.from_user.first_name,
+                create_trial=False
+            )
+            
+            # Проверяем, не создан ли уже платёж (повторное нажатие)
+            result = await session.execute(
+                select(PaymentModel).where(PaymentModel.external_id == payment_id)
+            )
+            existing_payment = result.scalar_one_or_none()
+            
+            if existing_payment and existing_payment.subscription_id:
+                # Уже выдан доступ — показываем сообщение с кнопкой
+                logger.info(f"crypto_paid: доступ уже выдан payment_id={payment_id}")
+                await callback.message.delete()
+                await callback.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=(
+                        "✅ <b>Доступ уже выдан</b>\n\n"
+                        "Оплата на проверке. При проблемах администратор напишет или вы можете написать администратору."
+                    ),
+                    reply_markup=get_subscription_link_keyboard(),
+                    parse_mode="HTML"
+                )
+                return
+            
+            if not existing_payment:
+                now = datetime.utcnow()
+                description = f"CRS VPN - {plan_name} ({period_text})"
+                new_payment = PaymentModel(
+                    telegram_user_id=user_id,
+                    provider="crypto_usdt_trc20",
+                    external_id=payment_id,
+                    amount=amount_rub,
+                    currency="RUB",
+                    status="pending",
+                    description=description,
+                    payment_metadata={
+                        "plan_code": plan_code,
+                        "period_months": period_months,
+                        "provisioned_before_confirm": True,
+                        "created_at": now.isoformat(),
+                    }
+                )
+                session.add(new_payment)
+                await session.commit()
+                await session.refresh(new_payment)
+                payment_db = new_payment
+            else:
+                payment_db = existing_payment
+            
+            # 2. Выдаём доступ (подписка + Remna URL)
+            custom_message = (
+                "✅ <b>Доступ выдан</b>\n\n"
+                "Оплата на проверке. При проблемах администратор напишет или вы можете написать администратору."
+            )
+            try:
+                await handle_successful_payment(
+                    session=session,
+                    payment_id=payment_db.id,
+                    telegram_user_id=user_id,
+                    amount=float(amount_rub),
+                    description=payment_db.description or "CRS VPN",
+                    bot=callback.bot,
+                    provision_for_verification=True,
+                    custom_message=custom_message,
+                )
+            except Exception as prov_err:
+                logger.error(f"Ошибка при выдаче доступа crypto payment_id={payment_id}: {prov_err}")
+                await callback.message.edit_text(
+                    "❌ Ошибка при выдаче доступа. Обратитесь в поддержку: @dcfrq",
+                    reply_markup=get_back_to_plans_keyboard()
+                )
+                return
+        
+        # 3. Уведомление админам
         username = callback.from_user.username or "неизвестен"
         if SessionLocal:
             try:
@@ -441,105 +530,78 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
                         username = user.username
             except Exception as e:
                 logger.debug(f"Ошибка при получении информации о пользователе: {e}")
-            
-            # Отправляем уведомление админам
-            from app.config import settings, is_admin
-            # Получаем список админов из настроек
-            admin_ids = []
-            if settings.ADMINS:
-                if isinstance(settings.ADMINS, list):
-                    admin_ids = settings.ADMINS
-                elif isinstance(settings.ADMINS, str):
-                    # Парсим строку с ID через запятую
-                    try:
-                        admin_ids = [int(admin_id.strip()) for admin_id in settings.ADMINS.split(',') if admin_id.strip()]
-                    except:
-                        admin_ids = []
-            
-            # Если админы не найдены, логируем предупреждение
-            if not admin_ids:
-                logger.warning(f"⚠️ Администраторы не настроены в ADMINS. Платеж {payment_id} не может быть обработан.")
-                # UI EXCEPTION: ошибка конфигурации, показываем пользователю
-                await callback.message.edit_text(
-                    "⚠️ Администраторы не настроены. Обратитесь в поддержку.",
-                    reply_markup=get_back_to_plans_keyboard()
-                )
-                return
-            
-            # Формируем сообщение для админа
-            from app.config import settings
-            crypto_address = settings.CRYPTO_USDT_TRC20_ADDRESS or "N/A"
-            created_time = datetime.utcnow().strftime('%d.%m.%Y %H:%M')
-            
-            admin_message = (
-                f"💳 <b>Новый крипто-платеж</b>\n\n"
-                f"👤 <b>Пользователь:</b> @{username} (ID: {user_id})\n"
-                f"💰 <b>Сумма:</b> {amount_rub}₽ ({get_usdt_amount(plan_code, period_months)} USDT)\n"
-                f"📝 <b>Тариф:</b> {plan_name} - {period_text}\n"
-                f"🆔 <b>ID платежа:</b> <code>{payment_id}</code>\n"
-                f"📅 <b>Создан:</b> {created_time}\n"
-                f"🔗 <b>Адрес:</b> <code>{crypto_address}</code>\n\n"
-                f"Проверьте транзакцию и подтвердите выдачу подписки:"
-            )
-            
-            # Клавиатура для админа
-            # Сохраняем информацию о тарифе в callback_data для использования при подтверждении
-            # Формат: admin_approve_crypto_{payment_id}_{plan_code}_{period_months}_{amount_rub}
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="✅ Да, выдать подписку",
-                    callback_data=f"admin_approve_crypto_{payment_id}_{plan_code}_{period_months}_{amount_rub}"
-                )],
-                [InlineKeyboardButton(
-                    text="❌ Нет, отклонить",
-                    callback_data=f"admin_reject_crypto_{payment_id}"
-                )]
-            ])
-            
-            # Отправляем всем админам
-            sent_count = 0
-            for admin_id in admin_ids:
-                try:
-                    await callback.bot.send_message(
-                        chat_id=admin_id,
-                        text=admin_message,
-                        reply_markup=admin_keyboard,
-                        parse_mode="HTML"
-                    )
-                    sent_count += 1
-                except Exception as e:
-                    logger.error(f"Ошибка при отправке уведомления админу {admin_id}: {e}")
-            
-            if sent_count > 0:
-                # Удаляем текущее сообщение с кнопками
-                try:
-                    await callback.message.delete()
-                except Exception as e:
-                    logger.debug(f"Не удалось удалить сообщение: {e}")
-                
-                # Отправляем новое сообщение
+        
+        admin_ids = settings.ADMINS if isinstance(settings.ADMINS, list) else []
+        if not admin_ids and isinstance(settings.ADMINS, str):
+            try:
+                admin_ids = [int(a.strip()) for a in settings.ADMINS.split(',') if a.strip()]
+            except Exception:
+                admin_ids = []
+        
+        if not admin_ids:
+            logger.warning(f"⚠️ Администраторы не настроены. Платеж {payment_id} не может быть обработан.")
+        
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        
+        crypto_address = settings.CRYPTO_USDT_TRC20_ADDRESS or "N/A"
+        created_time = datetime.utcnow().strftime('%d.%m.%Y %H:%M')
+        
+        admin_message = (
+            f"💳 <b>Пользователь сообщил об оплате (крипто)</b>\n\n"
+            f"👤 <b>Пользователь:</b> @{username} (ID: {user_id})\n"
+            f"💰 <b>Сумма:</b> {amount_rub}₽ ({get_usdt_amount(plan_code, period_months)} USDT)\n"
+            f"📝 <b>Тариф:</b> {plan_name} - {period_text}\n"
+            f"🆔 <b>ID платежа:</b> <code>{payment_id}</code>\n"
+            f"📅 <b>Создан:</b> {created_time}\n"
+            f"🔗 <b>Адрес:</b> <code>{crypto_address}</code>\n\n"
+            f"Подтвердите платёж, заблокируйте или напишите пользователю:"
+        )
+        
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ Подтвердить платёж",
+                callback_data=f"admin_approve_crypto_{payment_id}_{plan_code}_{period_months}_{amount_rub}"
+            )],
+            [InlineKeyboardButton(
+                text="❌ Заблокировать",
+                callback_data=f"admin_reject_crypto_{payment_id}"
+            )],
+            [InlineKeyboardButton(
+                text="✍️ Написать пользователю",
+                url=f"tg://user?id={user_id}"
+            )]
+        ])
+        
+        sent_count = 0
+        for admin_id in admin_ids:
+            try:
                 await callback.bot.send_message(
-                    chat_id=callback.from_user.id,
-                    text=(
-                        "✅ <b>Уведомление отправлено администратору</b>\n\n"
-                        "Администратор проверит платеж и активирует вашу подписку.\n"
-                        "Вы получите уведомление после подтверждения.\n\n"
-                        "💡 <b>Пока ожидаете:</b>\n"
-                        "• Изучите инструкции по настройке VPN\n"
-                        "• Подготовьте устройство для подключения"
-                    ),
-                    reply_markup=get_main_menu_keyboard(user_id=user_id),
+                    chat_id=admin_id,
+                    text=admin_message,
+                    reply_markup=admin_keyboard,
                     parse_mode="HTML"
                 )
-                return
-            else:
-                # UI EXCEPTION: ошибка отправки уведомления администратору
-                await callback.message.edit_text(
-                    "⚠️ Не удалось отправить уведомление администратору.\n"
-                    "Пожалуйста, свяжитесь с поддержкой вручную.",
-                    reply_markup=get_back_to_plans_keyboard()
-                )
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления админу {admin_id}: {e}")
+        
+        # Удаляем текущее сообщение с кнопками
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        
+        if sent_count == 0 and not admin_ids:
+            await callback.bot.send_message(
+                chat_id=callback.from_user.id,
+                text="⚠️ Администраторы не настроены. Обратитесь в поддержку.",
+                reply_markup=get_back_to_plans_keyboard()
+            )
+            return
         
     except Exception as e:
         logger.error(f"Ошибка при обработке подтверждения оплаты: {e}")
@@ -711,48 +773,57 @@ async def admin_approve_crypto_payment(callback: types.CallbackQuery):
             
             # Обрабатываем успешный платеж
             from app.services.payments.yookassa import handle_successful_payment
+            from datetime import datetime as dt
             
-            try:
-                await handle_successful_payment(
-                    session=session,
-                    payment_id=payment.id,
-                    telegram_user_id=payment.telegram_user_id,
-                    amount=float(payment.amount),
-                    description=payment.description,
-                    bot=callback.bot
-                )
-                logger.info(f"Платеж {payment_id} успешно обработан, подписка активирована для пользователя {payment.telegram_user_id}")
-                
-                # UI EXCEPTION: подтверждение платежа администратором
+            # Если доступ уже выдан (provisioned_before_confirm) — только обновляем статус
+            if payment.subscription_id and (payment.payment_metadata or {}).get("provisioned_before_confirm"):
+                payment.status = "succeeded"
+                payment.paid_at = dt.utcnow()
+                await session.commit()
+                logger.info(f"Платеж {payment_id} подтвержден (доступ уже был выдан)")
                 await callback.message.edit_text(
                     f"✅ Платеж подтвержден\n\n"
-                    f"Пользователю {payment.telegram_user_id} отправлено уведомление об активации подписки."
+                    f"Доступ пользователю {payment.telegram_user_id} уже был выдан ранее."
                 )
-            except Exception as payment_error:
-                logger.error(f"Ошибка при обработке успешного платежа: {payment_error}")
-                import traceback
-                logger.debug(traceback.format_exc())
-                # Отправляем уведомление пользователю вручную, если handle_successful_payment не сработал
+            else:
                 try:
-                    await callback.bot.send_message(
-                        chat_id=payment.telegram_user_id,
-                        text=(
-                            "✅ Платеж подтвержден\n\n"
-                            "Ваш платеж был подтвержден администратором.\n"
-                            "Подписка активируется, пожалуйста, подождите несколько минут.\n\n"
-                            "Если подписка не активировалась, напишите в поддержку: @dcfrq"
-                        )
+                    await handle_successful_payment(
+                        session=session,
+                        payment_id=payment.id,
+                        telegram_user_id=payment.telegram_user_id,
+                        amount=float(payment.amount),
+                        description=payment.description,
+                        bot=callback.bot
                     )
-                    logger.info(f"Резервное уведомление отправлено пользователю {payment.telegram_user_id}")
-                except Exception as notify_error:
-                    logger.error(f"Ошибка при отправке резервного уведомления: {notify_error}")
-                
-                # UI EXCEPTION: прямой вызов UI метода
-                await callback.message.edit_text(
-                    f"⚠️ Платеж подтвержден, но возникла ошибка при активации подписки.\n\n"
-                    f"Пользователю {payment.telegram_user_id} отправлено уведомление.\n"
-                    f"Ошибка: {str(payment_error)[:100]}"
-                )
+                    logger.info(f"Платеж {payment_id} успешно обработан, подписка активирована для пользователя {payment.telegram_user_id}")
+                    
+                    await callback.message.edit_text(
+                        f"✅ Платеж подтвержден\n\n"
+                        f"Пользователю {payment.telegram_user_id} отправлено уведомление об активации подписки."
+                    )
+                except Exception as payment_error:
+                    logger.error(f"Ошибка при обработке успешного платежа: {payment_error}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                    try:
+                        await callback.bot.send_message(
+                            chat_id=payment.telegram_user_id,
+                            text=(
+                                "✅ Платеж подтвержден\n\n"
+                                "Ваш платеж был подтвержден администратором.\n"
+                                "Подписка активируется, пожалуйста, подождите несколько минут.\n\n"
+                                "Если подписка не активировалась, напишите в поддержку: @dcfrq"
+                            )
+                        )
+                        logger.info(f"Резервное уведомление отправлено пользователю {payment.telegram_user_id}")
+                    except Exception as notify_error:
+                        logger.error(f"Ошибка при отправке резервного уведомления: {notify_error}")
+                    
+                    await callback.message.edit_text(
+                        f"⚠️ Платеж подтвержден, но возникла ошибка при активации подписки.\n\n"
+                        f"Пользователю {payment.telegram_user_id} отправлено уведомление.\n"
+                        f"Ошибка: {str(payment_error)[:100]}"
+                    )
             
     except Exception as e:
         logger.error(f"Ошибка при подтверждении платежа админом: {e}")

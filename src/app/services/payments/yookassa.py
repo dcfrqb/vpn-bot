@@ -370,8 +370,12 @@ async def handle_successful_payment(
     description: str,
     bot,
     trace_id: Optional[str] = None,
+    provision_for_verification: bool = False,
+    custom_message: Optional[str] = None,
 ) -> None:
-    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку."""
+    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку.
+    provision_for_verification=True: оставляет status=pending, отправляет custom_message (для crypto).
+    """
     trace_id = trace_id or str(uuid.uuid4())
     try:
         from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
@@ -495,8 +499,9 @@ async def handle_successful_payment(
         payment = payment_result.scalar_one_or_none()
         if payment:
             payment.subscription_id = subscription.id
-            payment.status = "succeeded"
-            payment.paid_at = datetime.utcnow()
+            if not provision_for_verification:
+                payment.status = "succeeded"
+                payment.paid_at = datetime.utcnow()
             await session.commit()
         
         subscription_url = await get_or_create_remna_user_and_get_subscription_url(
@@ -522,13 +527,16 @@ async def handle_successful_payment(
             logger.info(f"[{trace_id}] subscription notified already: payment_id={payment_id}, skip send")
             return
 
-        message_text = (
-            "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
-            f"💳 <b>Тариф:</b> {plan_name}\n"
-            f"📅 <b>Действует до:</b> {valid_until.strftime('%d.%m.%Y %H:%M')}\n"
-            f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
-            "🎉 Теперь вы можете получить ссылку для настройки VPN."
-        )
+        if custom_message:
+            message_text = custom_message
+        else:
+            message_text = (
+                "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
+                f"💳 <b>Тариф:</b> {plan_name}\n"
+                f"📅 <b>Действует до:</b> {valid_until.strftime('%d.%m.%Y %H:%M')}\n"
+                f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
+                "🎉 Теперь вы можете получить ссылку для настройки VPN."
+            )
         
         from app.keyboards import get_subscription_link_keyboard
         await bot.send_message(

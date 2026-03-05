@@ -1,6 +1,10 @@
+import json
+from pathlib import Path
+
 from aiogram import Router, types, F
 from aiogram.filters import Command
-from app.config import is_admin
+from app.config import is_admin, settings
+from app.utils.html import escape_html
 from app.logger import logger
 from app.services.stats import get_statistics, get_users_list, get_payments_list
 from app.ui.screen_manager import get_screen_manager
@@ -40,6 +44,83 @@ async def admin_panel(message: types.Message):
         edit=False,
         user_id=message.from_user.id
     )
+
+@router.message(Command("payments_new"))
+async def cmd_payments_new(message: types.Message):
+    """Показывает новые заявки на оплату из logs/payments.jsonl"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        return
+    log_dir = Path(getattr(settings, "LOG_DIR", None) or Path(__file__).resolve().parents[3] / "logs")
+    path = log_dir / "payments.jsonl"
+    if not path.exists():
+        await message.answer("📋 Лог платежей пуст")
+        return
+    lines = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if rec.get("event") == "payment_request_created":
+                    lines.append(rec)
+            except json.JSONDecodeError:
+                continue
+    if not lines:
+        await message.answer("📋 Новых заявок нет")
+        return
+    text = "📋 <b>Новые заявки на оплату</b>\n\n"
+    for i, rec in enumerate(lines[-10:], 1):
+        payload = rec.get("payload", {})
+        req_id = escape_html(str(rec.get("req_id", "")))
+        tg_id = escape_html(str(rec.get("tg_id", "")))
+        amount = escape_html(str(payload.get("amount", "")))
+        text += f"{i}. req_id={req_id} tg_id={tg_id} {amount} RUB\n"
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("payment_find"))
+async def cmd_payment_find(message: types.Message):
+    """Ищет заявку по req_id в logs/payments.jsonl"""
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        return
+    parts = message.text.split(maxsplit=1)
+    req_id = parts[1].strip() if len(parts) > 1 else None
+    if not req_id:
+        await message.answer("Использование: /payment_find PRQ-XXXXX")
+        return
+    log_dir = Path(getattr(settings, "LOG_DIR", None) or Path(__file__).resolve().parents[3] / "logs")
+    path = log_dir / "payments.jsonl"
+    if not path.exists():
+        await message.answer("📋 Лог платежей пуст")
+        return
+    found = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if rec.get("req_id") == req_id:
+                    found.append(rec)
+            except json.JSONDecodeError:
+                continue
+    if not found:
+        await message.answer(f"Заявка {escape_html(req_id)} не найдена")
+        return
+    text = f"📋 <b>Заявка {escape_html(req_id)}</b>\n\n"
+    for rec in found:
+        ev = escape_html(str(rec.get("event", "")))
+        ts = escape_html(str(rec.get("ts", "")))
+        tg_id = escape_html(str(rec.get("tg_id", "")))
+        payload_str = escape_html(str(rec.get("payload", {})))
+        text += f"event={ev} ts={ts}\ntg_id={tg_id} payload={payload_str}\n\n"
+    await message.answer(text, parse_mode="HTML")
+
 
 @router.message(Command("stats"))
 async def admin_stats(message: types.Message):
@@ -306,356 +387,26 @@ async def admin_back_callback(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_grant_forever_"))
 async def admin_grant_forever(callback: types.CallbackQuery):
-    """Обработчик выдачи премиум навсегда (до 31.12.2099). Идемпотентен."""
+    """Запросы обрабатываются вручную через Remnawave."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("❌ У вас нет прав администратора", show_alert=True)
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
-
-    try:
-        parts = callback.data.split("_")
-        if len(parts) != 4:
-            await callback.answer("❌ Неверный формат запроса", show_alert=True)
-            return
-
-        request_id = int(parts[3])
-        target_user_id = None
-
-        from app.services.access_request import get_request_by_id, approve_request
-        access_request = await get_request_by_id(request_id)
-
-        if not access_request:
-            await callback.answer("❌ Запрос не найден", show_alert=True)
-            await callback.message.edit_text("❌ Запрос не найден")
-            return
-
-        target_user_id = access_request.telegram_id
-
-        if access_request.status != "pending":
-            await callback.answer("✅ Уже обработано")
-            valid_until_str = "31.12.2099"
-            await callback.message.edit_text(
-                "✅ <b>Премиум навсегда уже выдан</b>\n\n"
-                f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
-                f"Действует до: {valid_until_str}\n\n"
-                f"(Запрос обработан ранее, статус: {access_request.status})"
-            )
-            return
-
-        await callback.answer("⏳ Обрабатываю запрос...")
-
-        from datetime import datetime
-        from app.db.session import SessionLocal
-        from app.repositories.subscription_repo import SubscriptionRepo
-        from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-        from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
-
-        # naive datetime — PostgreSQL TIMESTAMP WITHOUT TIME ZONE
-        expires_at = datetime(2099, 12, 31, 23, 59, 59)
-
-        async with SessionLocal() as session:
-            from app.services.users import get_or_create_telegram_user
-            await get_or_create_telegram_user(
-                telegram_id=target_user_id,
-                username=access_request.username,
-                first_name=access_request.name,
-                last_name=None,
-                create_trial=False,
-            )
-
-            sub_repo = SubscriptionRepo(session)
-            subscription = await sub_repo.upsert_subscription(
-                telegram_user_id=target_user_id,
-                defaults={
-                    "plan_code": "premium",
-                    "plan_name": "Премиум",
-                    "active": True,
-                    "valid_until": expires_at,
-                    "last_expiry_notice_at": None,
-                    "is_lifetime": True,
-                    "config_data": {"source": "admin_forever"},
-                },
-            )
-
-            await session.commit()
-            await session.refresh(subscription)
-
-            logger.info(
-                f"[ADMIN] admin grant forever: target_user_id={target_user_id} request_id={request_id} "
-                f"subscription_id={subscription.id}"
-            )
-
-            try:
-                subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                    telegram_user_id=target_user_id,
-                    subscription_id=subscription.id
-                )
-                if subscription_url:
-                    if not subscription.config_data:
-                        subscription.config_data = {}
-                    subscription.config_data["subscription_url"] = subscription_url
-                    await session.commit()
-            except Exception as remna_error:
-                logger.error(f"Ошибка при создании пользователя в Remna API: {remna_error}")
-
-            await invalidate_user_cache(target_user_id)
-            await invalidate_subscription_cache(target_user_id)
-            await approve_request(request_id, callback.from_user.id)
-
-            try:
-                user_message = (
-                    "✅ <b>Ваш запрос на доступ одобрен!</b>\n\n"
-                    "💳 <b>Тариф:</b> Премиум (навсегда)\n"
-                    "📅 <b>Действует до:</b> 31.12.2099\n\n"
-                    "🎉 Ваша подписка активирована! Теперь вы можете получить ссылку для настройки VPN."
-                )
-                from app.keyboards import get_subscription_link_keyboard
-                await callback.bot.send_message(
-                    chat_id=target_user_id,
-                    text=user_message,
-                    reply_markup=get_subscription_link_keyboard(),
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"Ошибка при отправке сообщения пользователю {target_user_id}: {e}")
-
-            valid_until_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            await callback.message.edit_text(
-                "✅ <b>Премиум навсегда выдан</b>\n\n"
-                f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
-                f"Действует до: {valid_until_str}\n\n"
-                "Пользователю отправлено уведомление."
-            )
-
-    except Exception as e:
-        logger.error(f"Ошибка при выдаче премиум навсегда: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        await callback.answer("❌ Произошла ошибка при выдаче доступа", show_alert=True)
-        try:
-            await callback.message.edit_text(
-                "❌ Произошла ошибка при выдаче доступа. Проверьте логи."
-            )
-        except Exception:
-            pass
+    await callback.answer("Используйте Remnawave для выдачи доступа", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin_grant_"))
 async def admin_grant_access(callback: types.CallbackQuery):
-    """Обработчик выдачи доступа администратором"""
+    """Запросы на доступ обрабатываются вручную через Remnawave."""
     if not is_admin(callback.from_user.id):
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("❌ У вас нет прав администратора", show_alert=True)
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
-    
-    try:
-        # Парсим callback_data: admin_grant_{request_id}_{tariff}_{months}
-        parts = callback.data.split("_")
-        if len(parts) != 5:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.answer("❌ Неверный формат запроса", show_alert=True)
-            return
-        
-        request_id = int(parts[2])
-        tariff = parts[3]  # basic или premium
-        months = int(parts[4])  # 1 или 3
-        
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("⏳ Обрабатываю запрос...")
-        
-        # Получаем запрос
-        from app.services.access_request import get_request_by_id, approve_request
-        access_request = await get_request_by_id(request_id)
-        
-        if not access_request:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text("❌ Запрос не найден")
-            return
-        
-        if access_request.status != "pending":
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(f"❌ Запрос уже обработан (статус: {access_request.status})")
-            return
-        
-        telegram_user_id = access_request.telegram_id
-        
-        # Создаем подписку
-        from datetime import datetime, timedelta
-        from app.db.session import SessionLocal
-        from app.db.models import Subscription, TelegramUser
-        from sqlalchemy import select
-        from app.repositories.subscription_repo import SubscriptionRepo
-        from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-        from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
-        
-        async with SessionLocal() as session:
-            # Получаем или создаем пользователя
-            from app.services.users import get_or_create_telegram_user
-            telegram_user = await get_or_create_telegram_user(
-                telegram_id=telegram_user_id,
-                username=access_request.username,
-                first_name=access_request.name,
-                create_trial=False
-            )
-            
-            # Определяем plan_name
-            plan_name = "Премиум" if tariff == "premium" else "Базовый"
-            period_days = months * 30
-            valid_until = datetime.utcnow() + timedelta(days=period_days)
-            
-            # Создаем или обновляем подписку
-            sub_repo = SubscriptionRepo(session)
-            subscription = await sub_repo.upsert_subscription(
-                telegram_user_id=telegram_user_id,
-                defaults={
-                    'plan_code': tariff,
-                    'plan_name': plan_name,
-                    'active': True,
-                    'valid_until': valid_until,
-                    'config_data': {'source': 'admin_grant'}
-                }
-            )
-            
-            await session.commit()
-            await session.refresh(subscription)
-            
-            logger.info(f"Подписка создана для пользователя {telegram_user_id}: {tariff} на {months} месяцев (admin grant)")
-            
-            # Создаем пользователя в Remna API и получаем subscription URL
-            try:
-                subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                    telegram_user_id=telegram_user_id,
-                    subscription_id=subscription.id
-                )
-                
-                if subscription_url:
-                    if not subscription.config_data:
-                        subscription.config_data = {}
-                    subscription.config_data["subscription_url"] = subscription_url
-                    await session.commit()
-            except Exception as remna_error:
-                logger.error(f"Ошибка при создании пользователя в Remna API: {remna_error}")
-                # Продолжаем, даже если Remna API недоступна
-            
-            # Инвалидируем кэш
-            await invalidate_user_cache(telegram_user_id)
-            await invalidate_subscription_cache(telegram_user_id)
-            
-            # Помечаем запрос как одобренный
-            await approve_request(request_id, callback.from_user.id)
-            
-            # Отправляем сообщение пользователю
-            try:
-                user_message = (
-                    f"✅ <b>Ваш запрос на доступ одобрен!</b>\n\n"
-                    f"💳 <b>Тариф:</b> {plan_name}\n"
-                    f"📅 <b>Действует до:</b> {valid_until.strftime('%d.%m.%Y %H:%M')}\n\n"
-                    f"🎉 Ваша подписка активирована! Теперь вы можете получить ссылку для настройки VPN."
-                )
-                
-                from app.keyboards import get_subscription_link_keyboard
-                await callback.bot.send_message(
-                    chat_id=telegram_user_id,
-                    text=user_message,
-                    reply_markup=get_subscription_link_keyboard(),
-                    parse_mode="HTML"
-                )
-                logger.info(f"Пользователю {telegram_user_id} отправлено сообщение об активации подписки")
-            except Exception as e:
-                logger.error(f"Ошибка при отправке сообщения пользователю {telegram_user_id}: {e}")
-            
-            # Обновляем сообщение администратора
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(
-                f"✅ <b>Доступ выдан</b>\n\n"
-                f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
-                f"Тариф: {plan_name}\n"
-                f"Период: {months} {'месяц' if months == 1 else 'месяца'}\n"
-                f"Действует до: {valid_until.strftime('%d.%m.%Y %H:%M')}\n\n"
-                f"Пользователю отправлено уведомление."
-            )
-            
-            logger.info(f"Администратор {callback.from_user.id} выдал доступ пользователю {telegram_user_id}: {tariff} на {months} месяцев")
-            
-    except Exception as e:
-        logger.error(f"Ошибка при выдаче доступа администратором {callback.from_user.id}: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("❌ Произошла ошибка при выдаче доступа", show_alert=True)
-        try:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text("❌ Произошла ошибка при выдаче доступа. Проверьте логи.")
-        except:
-            pass
+    await callback.answer("Используйте Remnawave для выдачи доступа", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin_reject_"))
 async def admin_reject_access(callback: types.CallbackQuery):
-    """Обработчик отклонения запроса администратором"""
+    """Запросы обрабатываются вручную."""
     if not is_admin(callback.from_user.id):
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("❌ У вас нет прав администратора", show_alert=True)
+        await callback.answer("❌ Нет прав", show_alert=True)
         return
-    
-    try:
-        # Парсим callback_data: admin_reject_{request_id}
-        parts = callback.data.split("_")
-        if len(parts) != 3:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.answer("❌ Неверный формат запроса", show_alert=True)
-            return
-        
-        request_id = int(parts[2])
-        
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("⏳ Обрабатываю запрос...")
-        
-        # Получаем запрос
-        from app.services.access_request import get_request_by_id, reject_request
-        access_request = await get_request_by_id(request_id)
-        
-        if not access_request:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text("❌ Запрос не найден")
-            return
-        
-        if access_request.status != "pending":
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(f"❌ Запрос уже обработан (статус: {access_request.status})")
-            return
-        
-        # Отклоняем запрос
-        await reject_request(request_id, callback.from_user.id)
-        
-        # Отправляем сообщение пользователю
-        try:
-            await callback.bot.send_message(
-                chat_id=access_request.telegram_id,
-                text="❌ Ваш запрос на доступ был отклонен администратором.",
-                parse_mode="HTML"
-            )
-            logger.info(f"Пользователю {access_request.telegram_id} отправлено сообщение об отклонении запроса")
-        except Exception as e:
-            logger.error(f"Ошибка при отправке сообщения пользователю {access_request.telegram_id}: {e}")
-        
-        # Обновляем сообщение администратора
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.message.edit_text(
-            f"❌ <b>Запрос отклонен</b>\n\n"
-            f"Пользователь: {access_request.name} (@{access_request.username or 'не указан'})\n"
-            f"Пользователю отправлено уведомление."
-        )
-        
-        logger.info(f"Администратор {callback.from_user.id} отклонил запрос {request_id}")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при отклонении запроса администратором {callback.from_user.id}: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("❌ Произошла ошибка при отклонении запроса", show_alert=True)
-        try:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text("❌ Произошла ошибка при отклонении запроса. Проверьте логи.")
-        except:
-            pass
+    await callback.answer("Запросы обрабатываются вручную", show_alert=True)

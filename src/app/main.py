@@ -62,18 +62,27 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     logger.info("Middleware подключены")
 
     from app.routers.start import router as start_router
-    from app.routers.payments import router as payments_router
     from app.routers.admin import router as admin_router
-    from app.routers.crypto_payments import router as crypto_payments_router
     from app.routers.ui import router as ui_router
     from app.routers.legacy_callbacks import router as legacy_router
-    
+
     # UI router должен быть первым для обработки ui: callbacks
     dp.include_router(ui_router)
-    # Legacy router должен быть последним (catch-all для старых форматов)
     dp.include_router(start_router)
-    dp.include_router(payments_router)
-    dp.include_router(crypto_payments_router)
+
+    if settings.BOT_MODE == "legacy":
+        from app.legacy.routers.payments import router as legacy_payments_router
+        from app.routers.crypto_payments import router as crypto_payments_router
+        dp.include_router(legacy_payments_router)
+        dp.include_router(crypto_payments_router)
+        logger.info("Режим legacy: YooKassa + crypto + БД")
+    else:
+        from app.nodb.routers.payments import router as nodb_payments_router
+        from app.nodb.routers.admin import router as nodb_admin_router
+        dp.include_router(nodb_payments_router)
+        dp.include_router(nodb_admin_router)
+        logger.info("Режим no_db: ручная модерация, JSONL")
+
     dp.include_router(admin_router)
     dp.include_router(legacy_router)  # В конце для обратной совместимости
     logger.info("Роутеры подключены")
@@ -206,9 +215,7 @@ async def run_webhook():
     webhook_requests_handler.register(app, path=webhook_path)
     setup_application(app, dp, bot=bot)
     
-    from app.routers.payments import yookassa_webhook_handler
-    app.router.add_post("/webhook/yookassa", yookassa_webhook_handler)
-    logger.info("Webhook endpoint для YooKassa зарегистрирован: /webhook/yookassa")
+    # YooKassa webhook отключён — платежи обрабатываются вручную администратором
     
     logger.info("=" * 50)
     logger.info("БОТ РАБОТАЕТ В WEBHOOK РЕЖИМЕ!")

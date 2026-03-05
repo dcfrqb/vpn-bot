@@ -1,13 +1,16 @@
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AnyHttpUrl, field_validator
 
 
 class Settings(BaseSettings):
+    # legacy = с БД, YooKassa webhook; no_db = без БД, ручная модерация
+    BOT_MODE: Literal["legacy", "no_db"] = "legacy"
     BOT_TOKEN: Union[str, None] = None
     ADMINS: Union[str, list[int], None] = None
     admin_ids: Union[str, None] = None
+    ADMIN_SUPPORT_USERNAME: Union[str, None] = None  # Username админа для кнопки «Написать»
 
     DATABASE_URL: Union[str, None] = None
     REDIS_URL: Union[str, None] = None
@@ -21,7 +24,9 @@ class Settings(BaseSettings):
     REMNA_API_KEY: Union[str, None] = None
     remna_base_url: Union[AnyHttpUrl, None] = None
     remna_api_token: Union[str, None] = None
-    
+    REMNAWAVE_API_URL: Union[str, None] = None  # Алиас REMNA_API_BASE
+    REMNAWAVE_API_TOKEN: Union[str, None] = None  # Алиас REMNA_API_KEY
+
     REMNA_USERNAME: Union[str, None] = None
     REMNA_PASSWORD: Union[str, None] = None
 
@@ -33,7 +38,12 @@ class Settings(BaseSettings):
     CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
     CRYPTO_NETWORK: Union[str, None] = "TRC20"  # TRC20, ERC20, etc.
 
-    # Путь к .env файлу: сначала проверяем /opt/crs-vpn-bot/.env, затем TGBot/.env
+    # Ручная модерация платежей (обязателен только в no_db)
+    PAYREQ_HMAC_SECRET: Union[str, None] = None
+    payreq_hmac_secret: Union[str, None] = None
+    LOG_DIR: str = "./logs"
+
+    # Путь к .env файлу
     _base_path = Path("/opt/crs-vpn-bot/.env")
     _local_path = Path(__file__).resolve().parents[2] / ".env"
     _env_path = str(_base_path if _base_path.exists() else _local_path)
@@ -64,6 +74,18 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         if not self.ADMINS and self.admin_ids:
             self.ADMINS = self._parse_admins(self.admin_ids)
+        if self.PAYREQ_HMAC_SECRET is None and getattr(self, "payreq_hmac_secret", None):
+            self.PAYREQ_HMAC_SECRET = self.payreq_hmac_secret
+        # Алиасы Remnawave: REMNAWAVE_* → REMNA_* (оба формата env работают)
+        if self.REMNA_API_BASE is None and self.REMNAWAVE_API_URL:
+            self.REMNA_API_BASE = self.REMNAWAVE_API_URL
+        if self.REMNA_API_KEY is None and self.REMNAWAVE_API_TOKEN:
+            self.REMNA_API_KEY = self.REMNAWAVE_API_TOKEN
+        # Обратный маппинг: REMNA_* → REMNAWAVE_* для совместимости
+        if self.REMNAWAVE_API_URL is None and self.REMNA_API_BASE:
+            self.REMNAWAVE_API_URL = self.REMNA_API_BASE
+        if self.REMNAWAVE_API_TOKEN is None and self.REMNA_API_KEY:
+            self.REMNAWAVE_API_TOKEN = self.REMNA_API_KEY
 
 
 settings = Settings()

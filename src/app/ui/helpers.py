@@ -72,8 +72,8 @@ async def get_main_menu_viewmodel(
                 force_sync=force_sync
             )
         except RemnaUnavailableError:
-            # Remna недоступна, используем данные из БД
-            logger.warning(f"Remna недоступна для {telegram_id}, используем данные из БД")
+            # Remna недоступна, fallback на кэш
+            logger.warning(f"Remna недоступна для {telegram_id}")
             subscription = await get_user_active_subscription(telegram_id, use_cache=True)
             subscription_status = "none"
             expires_at = None
@@ -91,11 +91,10 @@ async def get_main_menu_viewmodel(
                 user_remna_uuid=None,
                 subscription_status=subscription_status,
                 expires_at=expires_at,
-                source="db_fallback"
+                source="remna_fallback"
             )
         except Exception as e:
             logger.error(f"Ошибка синхронизации для {telegram_id}: {e}")
-            # Используем данные из БД как последний fallback
             subscription = await get_user_active_subscription(telegram_id, use_cache=True)
             subscription_status = "none"
             expires_at = None
@@ -113,7 +112,7 @@ async def get_main_menu_viewmodel(
                 user_remna_uuid=None,
                 subscription_status=subscription_status,
                 expires_at=expires_at,
-                source="db_fallback"
+                source="remna_fallback"
             )
     
     # Создаем SubscriptionViewModel
@@ -143,7 +142,7 @@ async def get_main_menu_viewmodel(
             subscription_status=subscription_status,
             expires_at=expires_at,
             days_left=None,
-            source="db_fallback"
+            source="remna_fallback"
         )
     
     # Создаем MainMenuViewModel

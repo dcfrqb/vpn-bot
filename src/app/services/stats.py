@@ -1,17 +1,27 @@
-"""Сервис для получения статистики"""
-from datetime import datetime, timedelta
+"""Статистика. В legacy — из БД. В no_db — из JSONL или «недоступно»."""
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
-from sqlalchemy import select, func, and_
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import TelegramUser, Subscription, Payment
-from app.db.session import SessionLocal
-from app.logger import logger
+from app.config import settings
 
 
-async def get_statistics() -> Dict[str, Any]:
-    """Получает общую статистику бота"""
-    if not SessionLocal:
+def _empty_stats() -> Dict[str, Any]:
+    return {
+        "total_users": 0,
+        "active_subscriptions": 0,
+        "total_payments": 0,
+        "total_revenue": 0.0,
+        "today_users": 0,
+        "today_payments": 0,
+        "today_revenue": 0.0,
+    }
+
+
+def _no_db_stats_from_jsonl() -> Dict[str, Any]:
+    """Считает по payments.jsonl: payment_request_created, payment_approved, payment_rejected, revenue."""
+    try:
+        from app.nodb.logs import read_last_payment_events
+    except ImportError:
         return {
             "total_users": 0,
             "active_subscriptions": 0,
@@ -19,59 +29,116 @@ async def get_statistics() -> Dict[str, Any]:
             "total_revenue": 0.0,
             "today_users": 0,
             "today_payments": 0,
-            "today_revenue": 0.0
+            "today_revenue": 0.0,
+            "no_db_note": "Статистика в no_db режиме ограничена (только заявки из JSONL)",
         }
-    
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    events = read_last_payment_events(limit=500)
+    today_created = 0
+    today_approved = 0
+    today_revenue = 0.0
+    approved_count = 0
+    approved_revenue = 0.0
+    rejected_count = 0
+    req_ids_seen = set()
+
+    for rec in events:
+        ts_str = rec.get("ts", "")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        ev = rec.get("event")
+        if ev == "payment_request_created":
+            if ts >= today_start:
+                today_created += 1
+        if ev == "payment_approved":
+            req_id = rec.get("req_id")
+            if req_id and req_id not in req_ids_seen:
+                req_ids_seen.add(req_id)
+                approved_count += 1
+                payload = rec.get("payload", {})
+                amt = float(payload.get("amount", 0) or 0)
+                approved_revenue += amt
+                if ts >= today_start:
+                    today_approved += 1
+                    today_revenue += amt
+        if ev == "payment_rejected":
+            rejected_count += 1
+
+    return {
+        "total_users": 0,
+        "active_subscriptions": 0,
+        "total_payments": approved_count,
+        "total_revenue": approved_revenue,
+        "today_users": 0,
+        "today_payments": today_created,
+        "today_revenue": today_revenue,
+        "no_db_note": "В no_db: только заявки из JSONL. Пользователи/подписки — в Remnawave.",
+    }
+
+
+async def get_statistics() -> Dict[str, Any]:
+    """В legacy — из БД. В no_db — из JSONL или «недоступно»."""
+    if settings.BOT_MODE != "legacy":
+        return _no_db_stats_from_jsonl()
+
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models import TelegramUser, Subscription, Payment
+        from sqlalchemy import select, func
+    except ImportError:
+        return _empty_stats()
+
+    if not SessionLocal:
+        return _empty_stats()
+
     async with SessionLocal() as session:
         now = datetime.utcnow()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        total_users_result = await session.execute(
-            select(func.count(TelegramUser.telegram_id))
-        )
+
+        total_users_result = await session.execute(select(func.count(TelegramUser.telegram_id)))
         total_users = total_users_result.scalar() or 0
-        
+
         today_users_result = await session.execute(
-            select(func.count(TelegramUser.telegram_id))
-            .where(TelegramUser.created_at >= today_start)
+            select(func.count(TelegramUser.telegram_id)).where(TelegramUser.created_at >= today_start)
         )
         today_users = today_users_result.scalar() or 0
-        
+
         active_subs_result = await session.execute(
-            select(func.count(Subscription.id))
-            .where(
+            select(func.count(Subscription.id)).where(
                 Subscription.active == True,
-                (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now)
+                (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now),
             )
         )
         active_subscriptions = active_subs_result.scalar() or 0
-        
-        total_payments_result = await session.execute(
-            select(func.count(Payment.id))
-        )
+
+        total_payments_result = await session.execute(select(func.count(Payment.id)))
         total_payments = total_payments_result.scalar() or 0
-        
+
         today_payments_result = await session.execute(
-            select(func.count(Payment.id))
-            .where(Payment.created_at >= today_start)
+            select(func.count(Payment.id)).where(Payment.created_at >= today_start)
         )
         today_payments = today_payments_result.scalar() or 0
-        
+
         total_revenue_result = await session.execute(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(Payment.status == "succeeded")
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == "succeeded")
         )
         total_revenue = float(total_revenue_result.scalar() or 0)
-        
+
         today_revenue_result = await session.execute(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
                 Payment.status == "succeeded",
-                Payment.created_at >= today_start
+                Payment.created_at >= today_start,
             )
         )
         today_revenue = float(today_revenue_result.scalar() or 0)
-        
+
         return {
             "total_users": total_users,
             "active_subscriptions": active_subscriptions,
@@ -79,82 +146,63 @@ async def get_statistics() -> Dict[str, Any]:
             "total_revenue": total_revenue,
             "today_users": today_users,
             "today_payments": today_payments,
-            "today_revenue": today_revenue
+            "today_revenue": today_revenue,
         }
 
 
 async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
-    """
-    Получает список пользователей с пагинацией
-    
-    ОПТИМИЗАЦИЯ: Использует LEFT JOIN для избежания N+1 запросов
-    """
-    import time
-    query_start = time.monotonic()
-    
+    """В legacy + DATABASE_URL — из БД. Иначе — пустой список."""
+    if settings.BOT_MODE != "legacy":
+        return {"users": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models import TelegramUser, Subscription
+        from sqlalchemy import select, func, and_
+    except ImportError:
+        return {"users": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+
     if not SessionLocal:
-        return {
-            "users": [],
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0
-        }
-    
+        return {"users": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+
     async with SessionLocal() as session:
         now = datetime.utcnow()
-        
-        # Оптимизация: один запрос с LEFT JOIN вместо N+1
-        # Используем подзапрос для получения последней активной подписки каждого пользователя
-        from sqlalchemy import outerjoin
-        
-        # Подзапрос для получения последней активной подписки каждого пользователя
         subquery = (
             select(
                 Subscription.telegram_user_id,
                 Subscription.plan_code,
-                Subscription.created_at,
                 func.row_number().over(
                     partition_by=Subscription.telegram_user_id,
-                    order_by=Subscription.created_at.desc()
-                ).label('rn')
+                    order_by=Subscription.created_at.desc(),
+                ).label("rn"),
             )
             .where(
                 Subscription.active == True,
-                (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now)
+                (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now),
             )
             .subquery()
         )
-        
-        # Основной запрос с LEFT JOIN
-        total_result = await session.execute(
-            select(func.count(TelegramUser.telegram_id))
-        )
+
+        total_result = await session.execute(select(func.count(TelegramUser.telegram_id)))
         total = total_result.scalar() or 0
-        
         offset = (page - 1) * page_size
-        
-        # Запрос пользователей с подписками одним JOIN
+
         users_with_subs = (
-            select(
-                TelegramUser,
-                subquery.c.plan_code.label('subscription_plan')
-            )
+            select(TelegramUser, subquery.c.plan_code.label("subscription_plan"))
             .outerjoin(
                 subquery,
                 and_(
                     TelegramUser.telegram_id == subquery.c.telegram_user_id,
-                    subquery.c.rn == 1
-                )
+                    subquery.c.rn == 1,
+                ),
             )
             .order_by(TelegramUser.created_at.desc())
             .limit(page_size)
             .offset(offset)
         )
-        
         result = await session.execute(users_with_subs)
         rows = result.all()
-        
+
         users_data = []
         for user, subscription_plan in rows:
             users_data.append({
@@ -165,67 +213,75 @@ async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
                 "has_active_subscription": subscription_plan is not None,
                 "subscription_plan": subscription_plan,
                 "created_at": user.created_at,
-                "last_activity": user.last_activity_at
+                "last_activity": user.last_activity_at,
             })
-        
-        query_duration = (time.monotonic() - query_start) * 1000
-        logger.debug(f"[PERF] get_users_list page={page} duration={query_duration:.2f}ms users={len(users_data)}")
-        
+
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
-        
         return {
             "users": users_data,
             "total": total,
             "page": page,
             "page_size": page_size,
-            "total_pages": total_pages
+            "total_pages": total_pages,
         }
 
 
 async def get_payments_list(page: int = 1, page_size: int = 10, status: str = None) -> Dict[str, Any]:
-    """
-    Получает список платежей с пагинацией и фильтрацией
-    
-    ОПТИМИЗАЦИЯ: Использует JOIN для избежания N+1 запросов
-    """
-    import time
-    query_start = time.monotonic()
-    
+    """В legacy + DATABASE_URL — из БД. Иначе — пустой список."""
+    if settings.BOT_MODE != "legacy":
+        return {
+            "payments": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+            "status_filter": status,
+        }
+
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models import TelegramUser, Payment
+        from sqlalchemy import select, func
+    except ImportError:
+        return {
+            "payments": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+            "status_filter": status,
+        }
+
     if not SessionLocal:
         return {
             "payments": [],
             "total": 0,
             "page": page,
             "page_size": page_size,
-            "total_pages": 0
+            "total_pages": 0,
+            "status_filter": status,
         }
-    
+
     async with SessionLocal() as session:
-        # Оптимизация: JOIN вместо N+1 запросов
         base_query = (
             select(Payment, TelegramUser.username)
             .outerjoin(TelegramUser, Payment.telegram_user_id == TelegramUser.telegram_id)
         )
-        
         if status:
             base_query = base_query.where(Payment.status == status)
-        
+
         count_query = select(func.count(Payment.id))
         if status:
             count_query = count_query.where(Payment.status == status)
-        
         total_result = await session.execute(count_query)
         total = total_result.scalar() or 0
-        
+
         offset = (page - 1) * page_size
         payments_result = await session.execute(
-            base_query
-            .order_by(Payment.created_at.desc())
-            .limit(page_size)
-            .offset(offset)
+            base_query.order_by(Payment.created_at.desc()).limit(page_size).offset(offset)
         )
         rows = payments_result.all()
-        
+
         payments_data = []
         for payment, username in rows:
             payments_data.append({
@@ -239,61 +295,47 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
                 "external_id": payment.external_id,
                 "description": payment.description,
                 "created_at": payment.created_at,
-                "paid_at": payment.paid_at
+                "paid_at": payment.paid_at,
             })
-        
-        query_duration = (time.monotonic() - query_start) * 1000
-        logger.debug(f"[PERF] get_payments_list page={page} status={status} duration={query_duration:.2f}ms payments={len(payments_data)}")
-        
+
         total_pages = (total + page_size - 1) // page_size if total > 0 else 0
-        
         return {
             "payments": payments_data,
             "total": total,
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
-            "status_filter": status
+            "status_filter": status,
         }
 
 
 async def get_user_payment_stats(telegram_id: int) -> Dict[str, Any]:
-    """
-    Получает статистику платежей пользователя
-    
-    Args:
-        telegram_id: ID пользователя в Telegram
-        
-    Returns:
-        Dict с ключами:
-        - total_payments: количество успешных платежей
-        - total_spent: общая сумма потраченных средств
-    """
+    """В legacy + DATABASE_URL — из БД. Иначе — пустая статистика."""
+    if settings.BOT_MODE != "legacy":
+        return {"total_payments": 0, "total_spent": 0.0}
+
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models import Payment
+        from sqlalchemy import select, func
+    except ImportError:
+        return {"total_payments": 0, "total_spent": 0.0}
+
     if not SessionLocal:
-        return {
-            "total_payments": 0,
-            "total_spent": 0.0
-        }
-    
+        return {"total_payments": 0, "total_spent": 0.0}
+
     async with SessionLocal() as session:
         payments_result = await session.execute(
-            select(func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0))
-            .where(
+            select(func.count(Payment.id), func.coalesce(func.sum(Payment.amount), 0)).where(
                 Payment.telegram_user_id == telegram_id,
-                Payment.status == "succeeded"
+                Payment.status == "succeeded",
             )
         )
         result = payments_result.first()
-        
         if result:
             total_payments = result[0] or 0
             total_spent = float(result[1] or 0)
         else:
             total_payments = 0
             total_spent = 0.0
-        
-        return {
-            "total_payments": total_payments,
-            "total_spent": total_spent
-        }
-
+        return {"total_payments": total_payments, "total_spent": total_spent}

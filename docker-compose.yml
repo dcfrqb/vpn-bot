@@ -3,6 +3,8 @@ services:
     image: postgres:14
     container_name: crs_vpn_db
     restart: unless-stopped
+    profiles:
+      - legacy
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-crs_vpn}
       POSTGRES_USER: ${POSTGRES_USER:-crs_user}
@@ -17,6 +19,24 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crs_vpn_migrate
+    profiles:
+      - legacy
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./src/app/db/migrations:/app/src/app/db/migrations
+    command: ["sh", "-c", "PYTHONPATH=/app/src python3 -m alembic upgrade head"]
+
   redis:
     image: redis:7-alpine
     container_name: crs_vpn_redis
@@ -29,24 +49,6 @@ services:
       timeout: 5s
       retries: 5
 
-  migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: crs_vpn_migrate
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./src/app/db/migrations:/app/src/app/db/migrations
-    command: ["sh", "-c", "PYTHONPATH=/app/src python3 -m alembic upgrade head"]
-    profiles:
-      - migrate
-
   bot:
     build:
       context: .
@@ -56,12 +58,10 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - BOT_MODE=${BOT_MODE:-legacy}
       - PREFLIGHT_DOCKER=1
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
@@ -84,13 +84,11 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-crs_user}:${POSTGRES_PASSWORD:-crs_pass}@db:5432/${POSTGRES_DB:-crs_vpn}}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - BOT_MODE=${BOT_MODE:-legacy}
       - WEBHOOK_API_PORT=${WEBHOOK_API_PORT:-8001}
       - PREFLIGHT_DOCKER=1
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       bot:
@@ -113,4 +111,4 @@ services:
         max-file: "3"
 
 volumes:
-  db_data:
+  db_data: {}

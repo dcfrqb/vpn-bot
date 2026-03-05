@@ -26,7 +26,7 @@ from app.keyboards import (
 # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
 from app.ui.screens import ScreenID
 from app.ui.helpers import get_main_menu_viewmodel
-from app.config import is_admin
+from app.config import is_admin, settings
 from app.navigation.callback_schema import CallbackAction
 from datetime import datetime
 
@@ -183,7 +183,6 @@ async def cmd_start(m: types.Message):
             logger.warning(f"Remna недоступна для {m.from_user.id}, используем fallback")
             # Fallback уже должен был вернуть результат
             if not sync_result:
-                # Если fallback не сработал, используем данные из БД напрямую
                 subscription = await get_user_active_subscription(m.from_user.id, use_cache=True)
                 subscription_status = "none"
                 expires_at = None
@@ -201,14 +200,13 @@ async def cmd_start(m: types.Message):
                     user_remna_uuid=None,
                     subscription_status=subscription_status,
                     expires_at=expires_at,
-                    source="db_fallback"
+                    source="remna_fallback"
                 )
         except Exception as e:
             logger.error(
                 f"Ошибка синхронизации для пользователя {m.from_user.id}: {e}\n"
                 f"Traceback: {traceback.format_exc()}"
             )
-            # Используем данные из БД как последний fallback
             subscription = await get_user_active_subscription(m.from_user.id, use_cache=True)
             subscription_status = "none"
             expires_at = None
@@ -226,7 +224,7 @@ async def cmd_start(m: types.Message):
                 user_remna_uuid=None,
                 subscription_status=subscription_status,
                 expires_at=expires_at,
-                source="db_fallback"
+                source="remna_fallback"
             )
         
         # Проверяем, что sync_result не None
@@ -304,78 +302,7 @@ async def cmd_start(m: types.Message):
         )
         return
     
-    # Обработка deep links (если есть) - запускается в фоне, не блокирует MAIN_MENU
-    if start_param == "payment_success":
-        # Пользователь вернулся после оплаты через ЮКассу
-        logger.info(f"[{request_id}] Deep link: payment_success для user_id={telegram_id}")
-        
-        # Обрабатываем в фоне, не блокируем показ MAIN_MENU
-        async def handle_payment_success_deeplink():
-            try:
-                from app.db.session import SessionLocal
-                from app.db.models import Payment as PaymentModel
-                from sqlalchemy import select
-                from app.services.payments.yookassa import check_payment_status, handle_successful_payment
-                
-                subscription = await get_user_active_subscription(telegram_id, use_cache=False)
-                
-                if subscription:
-                    # Подписка уже активирована - отправляем уведомление отдельным сообщением
-                    await m.bot.send_message(
-                        chat_id=telegram_id,
-                        text=(
-                            "✅ <b>Спасибо за оплату!</b>\n\n"
-                            "Ваш платеж успешно обработан. Подписка активирована!\n\n"
-                            "Теперь вы можете получить ссылку для настройки VPN."
-                        ),
-                        reply_markup=get_subscription_info_keyboard(has_subscription=True),
-                        parse_mode="HTML"
-                    )
-                    return
-                
-                # Проверяем последний платеж (быстрая проверка)
-                if SessionLocal:
-                    try:
-                        async with SessionLocal() as session:
-                            result = await session.execute(
-                                select(PaymentModel)
-                                .where(
-                                    PaymentModel.telegram_user_id == telegram_id,
-                                    PaymentModel.provider == "yookassa"
-                                )
-                                .order_by(PaymentModel.created_at.desc())
-                                .limit(1)
-                            )
-                            payment = result.scalar_one_or_none()
-                            
-                            if payment and payment.status == "pending":
-                                payment_status = await check_payment_status(payment.external_id)
-                                if payment_status and payment_status.get("status") == "succeeded":
-                                    await handle_successful_payment(
-                                        session=session,
-                                        payment_id=payment.id,
-                                        telegram_user_id=telegram_id,
-                                        amount=payment_status.get("amount", payment.amount),
-                                        description=payment.description or "CRS VPN 30 дней",
-                                        bot=m.bot
-                                    )
-                                    await m.bot.send_message(
-                                        chat_id=telegram_id,
-                                        text=(
-                                            "✅ <b>Платеж успешно обработан!</b>\n\n"
-                                            "Ваша подписка активирована. Теперь вы можете получить ссылку для настройки VPN."
-                                        ),
-                                        reply_markup=get_subscription_info_keyboard(has_subscription=True),
-                                        parse_mode="HTML"
-                                    )
-                                    logger.info(f"Платеж {payment.external_id} обработан после возврата пользователя")
-                    except Exception as e:
-                        logger.error(f"Ошибка при обработке возврата после оплаты: {e}")
-            except Exception as e:
-                logger.error(f"Ошибка в фоновой задаче обработки deep link: {e}")
-        
-        # Запускаем обработку deep link в фоне
-        asyncio.create_task(handle_payment_success_deeplink())
+    # Deep link payment_success отключён — платежи обрабатываются вручную администратором
         
     # ВСЕГДА показываем MAIN_MENU через Navigator с RenderMode.OPEN
     # (независимо от start_param - deep links обрабатываются отдельно в фоне)
@@ -428,13 +355,6 @@ async def buy_subscription(callback: types.CallbackQuery):
     # Мгновенный фидбек
     # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
-    
-    # Удаляем сообщения об оплате USDT в фоне (не блокируем)
-    try:
-        from app.routers.crypto_payments import delete_crypto_payment_messages
-        asyncio.create_task(delete_crypto_payment_messages(callback.bot, None, callback.from_user.id))
-    except:
-        pass
     
     # Показываем экран выбора тарифов
     # UI EXCEPTION: импорт для передачи в ScreenManager
@@ -727,13 +647,6 @@ async def back_to_main(callback: types.CallbackQuery):
     # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
     
-    # Удаляем сообщения об оплате USDT, если они есть (не блокируем)
-    try:
-        from app.routers.crypto_payments import delete_crypto_payment_messages
-        asyncio.create_task(delete_crypto_payment_messages(callback.bot, None, callback.from_user.id))
-    except:
-        pass
-    
     # Используем ScreenManager для обработки BACK действия через Navigator
     from app.ui.screen_manager import get_screen_manager
     screen_manager = get_screen_manager()
@@ -914,82 +827,10 @@ async def admin_panel_callback(callback: types.CallbackQuery):
 
 @router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод /solokhin — 1 месяц basic для новых пользователей (без подписок)"""
-    user_id = message.from_user.id
-    logger.info(f"Пользователь {user_id} вызвал промокод /solokhin")
-
-    from sqlalchemy import select, func
-    from app.db.session import SessionLocal
-    from app.db.models import Subscription
-    from app.repositories.subscription_repo import SubscriptionRepo
-    from app.services.users import get_or_create_telegram_user
-    from app.services.cache import invalidate_user_cache, invalidate_subscription_cache
-
-    if not SessionLocal:
-        await message.answer("❌ Сервис временно недоступен. Попробуйте позже.")
-        return
-
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(func.count(Subscription.id)).where(
-                Subscription.telegram_user_id == user_id
-            )
-        )
-        count = result.scalar() or 0
-
-    if count > 0:
-        await message.answer(
-            "Промокод доступен только новым пользователям.",
-            reply_markup=get_main_menu_keyboard(user_id=user_id)
-        )
-        return
-
-    async with SessionLocal() as session:
-        await get_or_create_telegram_user(
-            telegram_id=user_id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            create_trial=False
-        )
-
-        from datetime import datetime, timedelta
-        now = datetime.utcnow()
-        expires_at = now + timedelta(days=30)
-
-        sub_repo = SubscriptionRepo(session)
-        subscription = await sub_repo.upsert_subscription(
-            telegram_user_id=user_id,
-            defaults={
-                "plan_code": "basic",
-                "plan_name": "Базовый",
-                "active": True,
-                "valid_until": expires_at,
-                "config_data": {"source": "promo_solokhin"},
-            },
-        )
-        await session.commit()
-        await session.refresh(subscription)
-
-        try:
-            from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-            subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                telegram_user_id=user_id,
-                subscription_id=subscription.id
-            )
-            if subscription_url:
-                if not subscription.config_data:
-                    subscription.config_data = {}
-                subscription.config_data["subscription_url"] = subscription_url
-                await session.commit()
-        except Exception as remna_err:
-            logger.warning(f"Remna API недоступна для промо solokhin: {remna_err}")
-
-        await invalidate_user_cache(user_id)
-        await invalidate_subscription_cache(user_id)
-
+    """Промокод /solokhin — отключён (БД удалена). Напишите администратору."""
     await message.answer(
-        "Вам выдан 1 месяц бесплатного доступа 🎉",
-        reply_markup=get_main_menu_keyboard(user_id=user_id)
+        "Промокод обрабатывается вручную. Напишите администратору: @dcfrq",
+        reply_markup=get_main_menu_keyboard(user_id=message.from_user.id)
     )
 
 
@@ -1041,243 +882,74 @@ async def cmd_profile(message: types.Message):
 
 @router.message(Command("friend"))
 async def cmd_friend(message: types.Message):
-    """Команда /friend - запрос на выдачу VPN-доступа с подтверждением администратором"""
+    """Команда /friend - уведомление администратору о запросе доступа"""
     user_id = message.from_user.id
     logger.info(f"Пользователь {user_id} вызвал команду /friend")
-    
     try:
-        # ПРИНУДИТЕЛЬНАЯ проверка подписки через Remna API (без кэша и fallback)
-        logger.info(f"Принудительная проверка подписки через Remna API для команды /friend (user_id={user_id})")
-        
-        tg_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
-        if not tg_name:
-            tg_name = message.from_user.username or f"User_{user_id}"
-        
         sync_service = SyncService()
-        try:
-            sync_result = await sync_service.sync_user_and_subscription(
-                telegram_id=user_id,
-                tg_name=tg_name,
-                use_fallback=False,      # НЕ используем fallback из БД
-                use_cache=False,          # НЕ используем кэш
-                force_sync=True,          # Принудительная синхронизация
-                force_remna=True         # ПРИНУДИТЕЛЬНО только Remna API
-            )
-            
-            logger.info(
-                f"Результат проверки подписки для /friend (user_id={user_id}): "
-                f"status={sync_result.subscription_status}, "
-                f"expires_at={sync_result.expires_at}"
-            )
-            
-            # Проверяем статус подписки из Remna
-            if sync_result.subscription_status == "active":
-                # Есть активная подписка в Remna - запрещаем создание запроса
-                logger.info(f"Пользователь {user_id} имеет активную подписку в Remna, /friend недоступен")
-                # UI EXCEPTION: прямой вызов UI метода
-                await message.answer(
-                    "❌ У вас уже есть активная подписка. Команда /friend недоступна при активной подписке.",
-                    reply_markup=get_main_menu_keyboard(user_id=user_id)
-                )
-                return
-            
-            # Подписка отсутствует или истекла - можно создать запрос
-            logger.info(
-                f"Пользователь {user_id} не имеет активной подписки в Remna "
-                f"(status={sync_result.subscription_status}), можно создать запрос"
-            )
-            
-        except RemnaUnavailableError as e:
-            # Remna недоступна - не используем старые данные
-            logger.error(f"Remna API недоступна для проверки подписки в /friend (user_id={user_id}): {e}")
-            # UI EXCEPTION: прямой вызов UI метода
-            await message.answer(
-                "❌ Не удалось проверить статус подписки. Попробуйте позже.",
-                reply_markup=get_main_menu_keyboard(user_id=user_id)
-            )
-            return
-        except Exception as e:
-            logger.error(f"Ошибка при проверке подписки через Remna для /friend (user_id={user_id}): {e}")
-            # UI EXCEPTION: прямой вызов UI метода
-            await message.answer(
-                "❌ Не удалось проверить статус подписки. Попробуйте позже.",
-                reply_markup=get_main_menu_keyboard(user_id=user_id)
-            )
-            return
-        
-        # Проверяем возможность создания запроса (rate-limit и pending)
-        from app.services.access_request import can_create_request
-        can_create, error_message = await can_create_request(user_id)
-        
-        if not can_create:
-            # UI EXCEPTION: прямой вызов UI метода
-            await message.answer(
-                f"❌ {error_message}",
-                reply_markup=get_main_menu_keyboard(user_id=user_id)
-            )
-            return
-        
-        # Показываем подтверждение
-        from app.keyboards import get_friend_request_keyboard
-        # UI EXCEPTION: прямой вызов UI метода
-        await message.answer(
-            "❓ Вы хотите попросить доступ к VPN у администратора?",
-            reply_markup=get_friend_request_keyboard()
+        sync_result = await sync_service.sync_user_and_subscription(
+            telegram_id=user_id,
+            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            use_fallback=False,
+            use_cache=False,
+            force_sync=True,
+            force_remna=True,
         )
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обработке команды /friend для пользователя {user_id}: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        # UI EXCEPTION: прямой вызов UI метода
+        if sync_result.subscription_status == "active":
+            await message.answer(
+                "❌ У вас уже есть активная подписка.",
+                reply_markup=get_main_menu_keyboard(user_id=user_id)
+            )
+            return
+    except RemnaUnavailableError:
         await message.answer(
-            "❌ Произошла ошибка. Попробуйте позже.",
+            "❌ Не удалось проверить статус подписки. Попробуйте позже.",
             reply_markup=get_main_menu_keyboard(user_id=user_id)
         )
+        return
+    except Exception as e:
+        logger.error(f"Ошибка /friend для {user_id}: {e}")
+        await message.answer(
+            "❌ Ошибка. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id)
+        )
+        return
+
+    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or message.from_user.username or f"User_{user_id}"
+    admin_msg = (
+        f"👤 <b>Запрос на доступ (/friend)</b>\n\n"
+        f"Имя: {name}\n"
+        f"Username: @{message.from_user.username or 'не указан'}\n"
+        f"Telegram ID: <code>{user_id}</code>\n\n"
+        f"Выдайте доступ вручную через Remnawave или напишите пользователю."
+    )
+    for admin_id in settings.ADMINS:
+        try:
+            await message.bot.send_message(
+                chat_id=admin_id,
+                text=admin_msg,
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
+                ]),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки /friend админу {admin_id}: {e}")
+    await message.answer(
+        "⏳ Запрос отправлен администратору. Ожидайте ответа.",
+        reply_markup=get_main_menu_keyboard(user_id=user_id)
+    )
 
 
 @router.callback_query(lambda c: c.data == "friend_request_yes")
 async def friend_request_yes(callback: types.CallbackQuery):
-    """Обработчик кнопки 'Да' для запроса на доступ"""
-    user_id = callback.from_user.id
-    logger.info(f"Пользователь {user_id} подтвердил запрос на доступ")
-    
-    try:
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer()
-        
-        # ПРИНУДИТЕЛЬНАЯ проверка подписки через Remna API (без кэша и fallback)
-        logger.info(f"Принудительная проверка подписки через Remna API для friend_request_yes (user_id={user_id})")
-        
-        tg_name = f"{callback.from_user.first_name or ''} {callback.from_user.last_name or ''}".strip()
-        if not tg_name:
-            tg_name = callback.from_user.username or f"User_{user_id}"
-        
-        sync_service = SyncService()
-        try:
-            sync_result = await sync_service.sync_user_and_subscription(
-                telegram_id=user_id,
-                tg_name=tg_name,
-                use_fallback=False,      # НЕ используем fallback из БД
-                use_cache=False,          # НЕ используем кэш
-                force_sync=True,          # Принудительная синхронизация
-                force_remna=True         # ПРИНУДИТЕЛЬНО только Remna API
-            )
-            
-            logger.info(
-                f"Результат проверки подписки для friend_request_yes (user_id={user_id}): "
-                f"status={sync_result.subscription_status}"
-            )
-            
-            # Проверяем статус подписки из Remna
-            if sync_result.subscription_status == "active":
-                # Есть активная подписка в Remna - запрещаем создание запроса
-                logger.info(f"Пользователь {user_id} имеет активную подписку в Remna, запрос не может быть создан")
-                # UI EXCEPTION: обработка ошибки активной подписки (legacy handler, будет переведен на ScreenManager)
-                await callback.message.edit_text(
-                    "❌ У вас уже есть активная подписка. Запрос не может быть создан.",
-                    reply_markup=None
-                )
-                return
-            
-            # Подписка отсутствует или истекла - можно создать запрос
-            logger.info(
-                f"Пользователь {user_id} не имеет активной подписки в Remna "
-                f"(status={sync_result.subscription_status}), можно создать запрос"
-            )
-            
-        except RemnaUnavailableError as e:
-            # Remna недоступна - не используем старые данные
-            logger.error(f"Remna API недоступна для проверки подписки в friend_request_yes (user_id={user_id}): {e}")
-            # UI EXCEPTION: обработка ошибки Remna недоступна (legacy handler, будет переведен на ScreenManager)
-            await callback.message.edit_text(
-                "❌ Не удалось проверить статус подписки. Попробуйте позже.",
-                reply_markup=None
-            )
-            return
-        except Exception as e:
-            logger.error(f"Ошибка при проверке подписки через Remna для friend_request_yes (user_id={user_id}): {e}")
-            # UI EXCEPTION: обработка ошибки проверки подписки (legacy handler, будет переведен на ScreenManager)
-            await callback.message.edit_text(
-                "❌ Не удалось проверить статус подписки. Попробуйте позже.",
-                reply_markup=None
-            )
-            return
-        
-        # Проверяем возможность создания запроса
-        from app.services.access_request import can_create_request, has_pending_request
-        can_create, error_message = await can_create_request(user_id)
-        
-        if not can_create:
-            # UI EXCEPTION: обработка ошибки создания запроса (legacy handler, будет переведен на ScreenManager)
-            await callback.message.edit_text(
-                f"❌ {error_message}",
-                reply_markup=None
-            )
-            return
-        
-        # Создаем запрос
-        from app.services.access_request import create_access_request
-        name = f"{callback.from_user.first_name or ''} {callback.from_user.last_name or ''}".strip()
-        if not name:
-            name = callback.from_user.username or f"User_{user_id}"
-        
-        access_request = await create_access_request(
-            telegram_id=user_id,
-            name=name,
-            username=callback.from_user.username
-        )
-        
-        if not access_request:
-            # UI EXCEPTION: обработка ошибки создания запроса (legacy handler, будет переведен на ScreenManager)
-            await callback.message.edit_text(
-                "❌ Ошибка при создании запроса. Попробуйте позже.",
-                reply_markup=None
-            )
-            return
-        
-        # UI EXCEPTION: уведомление об отправке запроса (legacy handler, будет переведен на ScreenManager)
-        # Отправляем сообщение пользователю
-        await callback.message.edit_text(
-            "⏳ Запрос отправлен администратору. Ожидайте подтверждения.",
-            reply_markup=None
-        )
-        
-        # Отправляем сообщение администраторам
-        from app.config import settings
-        from app.keyboards import get_admin_access_request_keyboard
-        
-        admin_message = (
-            f"👤 <b>Запрос на доступ</b>\n\n"
-            f"Имя: {name}\n"
-            f"Username: @{callback.from_user.username if callback.from_user.username else 'не указан'}\n"
-            f"Telegram ID: <code>{user_id}</code>\n\n"
-            f"Выберите вариант доступа:"
-        )
-        
-        for admin_id in settings.ADMINS:
-            try:
-                await callback.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_message,
-                    reply_markup=get_admin_access_request_keyboard(access_request.id),
-                    parse_mode="HTML"
-                )
-                logger.info(f"Запрос на доступ {access_request.id} отправлен администратору {admin_id}")
-            except Exception as e:
-                logger.error(f"Ошибка при отправке запроса администратору {admin_id}: {e}")
-        
-    except Exception as e:
-        logger.error(f"Ошибка при обработке подтверждения запроса для пользователя {user_id}: {e}")
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.answer("❌ Произошла ошибка. Попробуйте позже.", show_alert=True)
+    """Устаревший handler — /friend теперь без подтверждения."""
+    await callback.answer("Используйте команду /friend", show_alert=True)
 
 
 @router.callback_query(lambda c: c.data == "friend_request_no")
 async def friend_request_no(callback: types.CallbackQuery):
     """Обработчик кнопки 'Нет' для запроса на доступ"""
-    # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
-    # UI EXCEPTION: уведомление об отмене запроса (legacy handler, будет переведен на ScreenManager)
     await callback.message.edit_text("Запрос отменён", reply_markup=None)
 

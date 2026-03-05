@@ -1,5 +1,5 @@
 """
-FastAPI приложение для обработки webhook'ов от ЮKassa
+FastAPI приложение — webhook ЮKassa отключён (платежи вручную).
 """
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
@@ -9,7 +9,6 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.config import settings
 from app.logger import logger
-from app.services.payments.yookassa import process_payment_webhook
 
 
 # Глобальная переменная для хранения экземпляра бота
@@ -117,21 +116,12 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
             logger.error("Бот не инициализирован")
             raise HTTPException(status_code=500, detail="Bot not initialized")
         
-        # Обрабатываем webhook
-        success = await process_payment_webhook(data, bot_instance)
-        
-        if success:
-            logger.info(f"Webhook успешно обработан: {event}")
-            return JSONResponse(
-                status_code=200,
-                content={"status": "ok", "event": event}
-            )
-        else:
-            logger.warning(f"Ошибка при обработке webhook: {event}")
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "event": event, "message": "Error processing webhook"}
-            )
+        # Webhook отключён — платежи обрабатываются вручную администратором
+        logger.info(f"Webhook получен (игнорируется): {event}")
+        return JSONResponse(
+            status_code=200,
+            content={"status": "ok", "message": "Webhooks disabled, manual payments only"}
+        )
             
     except HTTPException:
         raise

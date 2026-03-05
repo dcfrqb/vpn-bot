@@ -38,11 +38,8 @@ def run_preflight(
 ) -> None:
     """
     Проверяет обязательные переменные окружения.
-    При отсутствии обязательной переменной — падает с понятной ошибкой.
-
-    Args:
-        strict_env: если True (STRICT_ENV=1), YOOKASSA_WEBHOOK_SECRET обязателен
-        in_docker: если True, DATABASE_URL и REDIS_URL обязательны. None = автоопределение
+    legacy: DATABASE_URL обязателен.
+    no_db: PAYREQ_HMAC_SECRET, ADMIN_IDS, Remnawave обязательны; DATABASE_URL не проверяется.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -50,50 +47,51 @@ def run_preflight(
     if in_docker is None:
         in_docker = _in_docker()
 
-    # Всегда обязательные (в Docker)
-    if in_docker:
-        if not _get("DATABASE_URL"):
-            errors.append("DATABASE_URL — обязателен в Docker (postgresql://user:pass@host:5432/dbname)")
-        if not _get("REDIS_URL"):
-            errors.append("REDIS_URL — обязателен в Docker (redis://redis:6379/0)")
+    bot_mode = _get("BOT_MODE") or "legacy"
 
-    # Telegram
+    # Telegram — всегда
     if not _get("BOT_TOKEN"):
         errors.append("BOT_TOKEN — токен Telegram бота от @BotFather")
 
-    # YooKassa (для платежей)
-    if not _get("YOOKASSA_SHOP_ID"):
-        errors.append("YOOKASSA_SHOP_ID — ID магазина YooKassa")
-    if not _get("YOOKASSA_API_KEY"):
-        errors.append("YOOKASSA_API_KEY — секретный ключ YooKassa")
-
-    # Remna (VPN API)
-    remna_base = _get("REMNA_API_BASE") or _get("REMNA_BASE_URL") or _get("remna_base_url")
-    remna_key = _get("REMNA_API_KEY") or _get("REMNA_API_TOKEN") or _get("remna_api_token")
+    # Remnawave — всегда (и legacy, и no_db)
+    remna_base = (
+        _get("REMNA_API_BASE") or _get("REMNAWAVE_API_URL")
+        or _get("REMNA_BASE_URL") or _get("remna_base_url")
+    )
+    remna_key = (
+        _get("REMNA_API_KEY") or _get("REMNAWAVE_API_TOKEN")
+        or _get("REMNA_API_TOKEN") or _get("remna_api_token")
+    )
     if not remna_base:
-        errors.append("REMNA_API_BASE — URL Remna API (https://your-remna-api.com)")
+        errors.append("REMNA_API_BASE или REMNAWAVE_API_URL — URL Remna API")
     if not remna_key:
-        errors.append("REMNA_API_KEY — ключ доступа к Remna API")
+        errors.append("REMNA_API_KEY или REMNAWAVE_API_TOKEN — ключ доступа к Remna API")
 
-    # Webhook mode
-    if _get("TELEGRAM_WEBHOOK_URL"):
-        # В webhook режиме TELEGRAM_WEBHOOK_URL обязателен — уже проверен
-        pass
+    if bot_mode == "legacy":
+        # legacy: DATABASE_URL обязателен (в docker)
+        if in_docker and not _get("DATABASE_URL"):
+            errors.append("DATABASE_URL — обязателен в legacy режиме (PostgreSQL)")
+        if not _get("YOOKASSA_SHOP_ID"):
+            warnings.append("YOOKASSA_SHOP_ID не задан — платежи только вручную")
+        if not _get("YOOKASSA_WEBHOOK_SECRET"):
+            if strict_env:
+                errors.append("YOOKASSA_WEBHOOK_SECRET — обязателен при STRICT_ENV=1")
+            else:
+                warnings.append("YOOKASSA_WEBHOOK_SECRET не задан (только для dev!)")
+    else:
+        # no_db: DATABASE_URL НЕ проверяется
+        if not _get("ADMINS") and not _get("admin_ids"):
+            errors.append("ADMINS или ADMIN_IDS — обязательны в no_db режиме")
+        if not _get("PAYREQ_HMAC_SECRET") and not _get("payreq_hmac_secret"):
+            if in_docker or strict_env:
+                errors.append("PAYREQ_HMAC_SECRET — обязателен в no_db режиме (prod)")
+            else:
+                warnings.append("PAYREQ_HMAC_SECRET не задан — dev-секрет (только для разработки!)")
 
-    # YOOKASSA_WEBHOOK_SECRET: warning в PROD, ошибка при STRICT_ENV
-    if not _get("YOOKASSA_WEBHOOK_SECRET"):
-        if strict_env:
-            errors.append(
-                "YOOKASSA_WEBHOOK_SECRET — обязателен при STRICT_ENV=1 "
-                "(секрет для проверки webhook от YooKassa)"
-            )
-        else:
-            warnings.append(
-                "YOOKASSA_WEBHOOK_SECRET не задан — webhook принимает любые запросы (только для dev!)"
-            )
+    if in_docker and not _get("REDIS_URL"):
+        warnings.append("REDIS_URL не задан — FSM в памяти (при рестарте состояние теряется)")
 
-    # ADMINS — желательно, но не блокируем старт
-    if not _get("ADMINS") and not _get("admin_ids"):
+    if bot_mode == "legacy" and (not _get("ADMINS") and not _get("admin_ids")):
         warnings.append("ADMINS не задан — административные команды недоступны")
 
     for w in warnings:
