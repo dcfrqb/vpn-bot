@@ -862,6 +862,11 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         return True
     except Exception as e:
         logger.error(f"/solokhin: ошибка проверки подписки для {user_id}: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при проверке подписки. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
 
     # 2. Создаём заявку и отправляем админам
     req_id = generate_req_id()

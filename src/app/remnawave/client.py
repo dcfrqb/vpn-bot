@@ -295,14 +295,19 @@ class RemnaClient:
             payload["activeInternalSquads"] = active_internal_squads
         return await self.request("POST", "/api/users", json=payload)
 
-    async def create_user_with_name(self, telegram_id: int, name: str) -> RemnaUser:
+    async def create_user_with_name(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
         """
         Создать пользователя в Remna с telegram_id и именем.
         Генерирует username и password автоматически.
-        
+
+        Args:
+            telegram_id: Telegram ID пользователя
+            name: Имя пользователя
+            expire_at: Дата истечения (по умолчанию: +2 дня, trial)
+
         Returns:
             RemnaUser созданного пользователя
-            
+
         Raises:
             httpx.HTTPStatusError: если пользователь уже существует или другая ошибка API
         """
@@ -311,11 +316,17 @@ class RemnaClient:
         # Генерируем случайный пароль (Remna требует пароль)
         import secrets
         password = secrets.token_urlsafe(16)
-        
+
+        # Если expire_at не передан, используем +2 дня (trial)
+        if not expire_at:
+            from datetime import datetime, timezone, timedelta
+            expire_at = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         try:
             response = await self.create_user(
                 username=username,
                 password=password,
+                expire_at=expire_at,
                 telegram_id=telegram_id
             )
             
