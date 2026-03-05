@@ -1,6 +1,5 @@
 """
 Сессия БД. Инициализируется только при DATABASE_URL.
-Используется только в legacy режиме (BOT_MODE=legacy).
 """
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.config import settings

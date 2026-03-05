@@ -1,5 +1,5 @@
 """
-FastAPI приложение — webhook ЮKassa для no_db режима.
+FastAPI приложение — webhook ЮKassa.
 Полноценная обработка: проверка подписи, идемпотентность, provision.
 """
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -15,6 +15,9 @@ from app.logger import logger
 
 # Глобальная переменная для хранения экземпляра бота
 bot_instance: Bot = None
+
+# Простой in-memory set для идемпотентности (сбрасывается при рестарте)
+_processed_payments: set = set()
 
 
 @asynccontextmanager
@@ -40,15 +43,6 @@ async def lifespan(app: FastAPI):
         logger.error(f"Ошибка инициализации бота: {e}")
         raise
 
-    # Инициализируем SQLite store
-    if settings.BOT_MODE != "legacy":
-        try:
-            from app.nodb.store import init_db
-            await init_db()
-            logger.info("SQLite store инициализирован для webhook API")
-        except Exception as e:
-            logger.error(f"Ошибка инициализации SQLite store: {e}")
-
     yield
 
     # Закрытие бота при остановке
@@ -72,7 +66,7 @@ async def root():
         "status": "ok",
         "service": "CRS VPN Webhook API",
         "version": "2.0.0",
-        "mode": settings.BOT_MODE or "no_db"
+        "mode": "legacy"
     }
 
 
@@ -82,23 +76,18 @@ async def health_check():
     return {
         "status": "healthy",
         "bot_initialized": bot_instance is not None,
-        "mode": settings.BOT_MODE or "no_db"
+        "mode": "legacy"
     }
 
 
 async def _process_yookassa_payment(data: dict) -> dict:
     """
-    Обрабатывает успешный платеж YooKassa в no_db режиме.
+    Обрабатывает успешный платеж YooKassa.
     Возвращает dict с результатом.
     """
     from yookassa.domain.notification import WebhookNotification
-    from app.nodb.store import (
-        check_webhook_provisioned,
-        record_webhook_event,
-        mark_webhook_provisioned,
-        log_event,
-    )
-    from app.nodb.services.remnawave_service import provision_tariff
+    from app.services.remna_service import provision_tariff
+    from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
     from app.keyboards import get_subscription_link_keyboard
 
     notification = WebhookNotification(data)
@@ -121,21 +110,10 @@ async def _process_yookassa_payment(data: dict) -> dict:
 
     tg_id = int(tg_id)
 
-    # Записываем событие (idempotency check)
-    is_new = await record_webhook_event(
-        external_id=payment_id,
-        event_type=data.get("event", "unknown"),
-        status=status,
-        tg_id=tg_id,
-        amount=amount,
-        processed=True,
-    )
-
-    # Проверяем, был ли уже provision
-    already_provisioned = await check_webhook_provisioned(payment_id)
-    if already_provisioned:
-        logger.info(f"Webhook {payment_id}: already provisioned, skipping")
-        return {"status": "already_provisioned", "processed": True}
+    # Идемпотентность: проверяем, обрабатывали ли уже этот платеж
+    if payment_id in _processed_payments:
+        logger.info(f"Webhook {payment_id}: already processed, skipping")
+        return {"status": "already_processed", "processed": True}
 
     # Определяем тариф
     if not tariff:
@@ -158,9 +136,9 @@ async def _process_yookassa_payment(data: dict) -> dict:
     success = await provision_tariff(tg_id, tariff, req_id=f"yookassa_{payment_id}")
 
     if success:
-        await mark_webhook_provisioned(payment_id)
-        await log_event(
-            event_type="yookassa_provision_success",
+        _processed_payments.add(payment_id)
+        log_payment_event(
+            event=EVENT_REMNAWAVE_PROVISION_SUCCESS,
             req_id=f"yookassa_{payment_id}",
             tg_id=tg_id,
             payload={"tariff": tariff, "amount": amount, "payment_id": payment_id},
@@ -202,8 +180,8 @@ async def _process_yookassa_payment(data: dict) -> dict:
 
         return {"status": "provisioned", "tariff": tariff, "processed": True}
     else:
-        await log_event(
-            event_type="yookassa_provision_failed",
+        log_payment_event(
+            event=EVENT_REMNAWAVE_PROVISION_FAILED,
             req_id=f"yookassa_{payment_id}",
             tg_id=tg_id,
             payload={"tariff": tariff, "amount": amount, "payment_id": payment_id},
@@ -223,7 +201,7 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
     - refund.succeeded - возврат (логируем)
 
     Защита: X-Webhook-Secret header.
-    Идемпотентность: SQLite webhook_events table.
+    Идемпотентность: in-memory set.
     """
     try:
         # Проверка секрета
@@ -265,32 +243,22 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
 
         elif event == "payment.canceled":
             logger.info(f"Webhook {payment_id}: payment canceled")
-            # Логируем для аудита
-            if settings.BOT_MODE != "legacy":
-                from app.nodb.store import record_webhook_event, log_event
-                await record_webhook_event(
-                    external_id=payment_id,
-                    event_type=event,
-                    status="canceled",
-                    processed=True,
-                )
-                await log_event(
-                    event_type="yookassa_payment_canceled",
-                    req_id=f"yookassa_{payment_id}",
-                    payload=data.get("object", {}),
-                )
+            from app.services.jsonl_logger import log_payment_event
+            log_payment_event(
+                event="yookassa_payment_canceled",
+                req_id=f"yookassa_{payment_id}",
+                payload=data.get("object", {}),
+            )
             return JSONResponse(status_code=200, content={"status": "ok", "event": "canceled"})
 
         elif event == "refund.succeeded":
             logger.info(f"Webhook {payment_id}: refund succeeded")
-            # Логируем для аудита
-            if settings.BOT_MODE != "legacy":
-                from app.nodb.store import log_event
-                await log_event(
-                    event_type="yookassa_refund",
-                    req_id=f"yookassa_{payment_id}",
-                    payload=data.get("object", {}),
-                )
+            from app.services.jsonl_logger import log_payment_event
+            log_payment_event(
+                event="yookassa_refund",
+                req_id=f"yookassa_{payment_id}",
+                payload=data.get("object", {}),
+            )
             return JSONResponse(status_code=200, content={"status": "ok", "event": "refund"})
 
         else:

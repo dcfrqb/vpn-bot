@@ -38,8 +38,6 @@ def run_preflight(
 ) -> None:
     """
     Проверяет обязательные переменные окружения.
-    legacy: DATABASE_URL обязателен.
-    no_db: PAYREQ_HMAC_SECRET, ADMIN_IDS, Remnawave обязательны; DATABASE_URL не проверяется.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -47,13 +45,11 @@ def run_preflight(
     if in_docker is None:
         in_docker = _in_docker()
 
-    bot_mode = _get("BOT_MODE") or "legacy"
-
     # Telegram — всегда
     if not _get("BOT_TOKEN"):
         errors.append("BOT_TOKEN — токен Telegram бота от @BotFather")
 
-    # Remnawave — всегда (и legacy, и no_db)
+    # Remnawave — всегда
     remna_base = (
         _get("REMNA_API_BASE") or _get("REMNAWAVE_API_URL")
         or _get("REMNA_BASE_URL") or _get("remna_base_url")
@@ -67,31 +63,21 @@ def run_preflight(
     if not remna_key:
         errors.append("REMNA_API_KEY или REMNAWAVE_API_TOKEN — ключ доступа к Remna API")
 
-    if bot_mode == "legacy":
-        # legacy: DATABASE_URL обязателен (в docker)
-        if in_docker and not _get("DATABASE_URL"):
-            errors.append("DATABASE_URL — обязателен в legacy режиме (PostgreSQL)")
-        if not _get("YOOKASSA_SHOP_ID"):
-            warnings.append("YOOKASSA_SHOP_ID не задан — платежи только вручную")
-        if not _get("YOOKASSA_WEBHOOK_SECRET"):
-            if strict_env:
-                errors.append("YOOKASSA_WEBHOOK_SECRET — обязателен при STRICT_ENV=1")
-            else:
-                warnings.append("YOOKASSA_WEBHOOK_SECRET не задан (только для dev!)")
-    else:
-        # no_db: DATABASE_URL НЕ проверяется
-        if not _get("ADMINS") and not _get("admin_ids"):
-            errors.append("ADMINS или ADMIN_IDS — обязательны в no_db режиме")
-        if not _get("PAYREQ_HMAC_SECRET") and not _get("payreq_hmac_secret"):
-            if in_docker or strict_env:
-                errors.append("PAYREQ_HMAC_SECRET — обязателен в no_db режиме (prod)")
-            else:
-                warnings.append("PAYREQ_HMAC_SECRET не задан — dev-секрет (только для разработки!)")
+    # DATABASE_URL обязателен (в docker)
+    if in_docker and not _get("DATABASE_URL"):
+        errors.append("DATABASE_URL — обязателен (PostgreSQL)")
+    if not _get("YOOKASSA_SHOP_ID"):
+        warnings.append("YOOKASSA_SHOP_ID не задан — платежи только вручную")
+    if not _get("YOOKASSA_WEBHOOK_SECRET"):
+        if strict_env:
+            errors.append("YOOKASSA_WEBHOOK_SECRET — обязателен при STRICT_ENV=1")
+        else:
+            warnings.append("YOOKASSA_WEBHOOK_SECRET не задан (только для dev!)")
 
     if in_docker and not _get("REDIS_URL"):
         warnings.append("REDIS_URL не задан — FSM в памяти (при рестарте состояние теряется)")
 
-    if bot_mode == "legacy" and (not _get("ADMINS") and not _get("admin_ids")):
+    if not _get("ADMINS") and not _get("admin_ids"):
         warnings.append("ADMINS не задан — административные команды недоступны")
 
     for w in warnings:

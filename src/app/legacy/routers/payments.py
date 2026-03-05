@@ -1,6 +1,5 @@
 """
-DEPRECATED: Legacy payment flow (YooKassa webhook, БД).
-Используется только при BOT_MODE=legacy. Рекомендуется переход на BOT_MODE=no_db.
+Legacy payment flow (YooKassa webhook, БД).
 """
 import asyncio
 import json
@@ -8,8 +7,6 @@ import uuid
 from aiohttp import web
 from aiogram import Router, types, F, Bot
 from app.logger import logger
-
-logger.warning("legacy payment flow is deprecated — consider BOT_MODE=no_db")
 
 from app.services.payments.yookassa import create_payment, process_payment_webhook
 from app.services.payments.recovery import recheck_single_payment

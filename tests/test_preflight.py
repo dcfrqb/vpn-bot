@@ -57,6 +57,7 @@ class TestPreflight:
             os.environ["REDIS_URL"] = "redis://localhost/0"
             os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
+            os.environ["DATABASE_URL"] = "postgresql://user:pass@localhost/db"
 
             run_preflight(in_docker=True)
         finally:

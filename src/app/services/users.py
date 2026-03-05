@@ -71,10 +71,7 @@ async def get_user_active_subscription(telegram_id: int, use_cache: bool = True)
 
 
 async def update_user_activity(user_id: int) -> None:
-    """
-    Заглушка: обновление активности пользователя.
-    В режиме no_db/Remnawave не требуется — данные в Remna.
-    """
+    """Заглушка: обновление активности пользователя."""
     pass
 
 

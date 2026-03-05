@@ -1,11 +1,14 @@
 """
 Сервис интеграции с Remnawave.
 Remnawave — единственный источник правды по пользователям и подпискам.
+Календарные месяцы: relativedelta(months=N), base = max(now, current_expires_at).
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
-from app.remnawave.client import RemnaClient
+from dateutil.relativedelta import relativedelta
+
+from app.remnawave.client import RemnaClient, LIFETIME_EXPIRE_AT
 from app.logger import logger
 from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
 
@@ -28,6 +31,7 @@ TARIFF_TO_PLAN = {
     "premium_3": ("premium", 3),
     "premium_6": ("premium", 6),
     "premium_12": ("premium", 12),
+    "premium_forever": ("premium", -1),  # -1 = unlimited
 }
 
 
@@ -63,7 +67,8 @@ async def provision_tariff(
 ) -> bool:
     """
     Выдаёт доступ пользователю в Remnawave по тарифу.
-    tariff: PRO_1M, BASIC_1M, basic_1, premium_3 и т.д.
+    tariff: PRO_1M, BASIC_1M, basic_1, premium_3, premium_forever и т.д.
+    Календарные месяцы, продление от текущего expireAt если активна подписка.
     Возвращает True при успехе.
     """
     client = RemnaClient()
@@ -73,10 +78,6 @@ async def provision_tariff(
         )
     except Exception:
         plan_code, period_months = "basic", 1
-
-    period_days = period_months * 30
-    valid_until = datetime.now(timezone.utc) + timedelta(days=period_days)
-    valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
         remna_user_id = await ensure_user_in_remnawave(telegram_id)
@@ -88,6 +89,38 @@ async def provision_tariff(
                 payload={"error": "ensure_user_failed"},
             )
             return False
+
+        # Определяем valid_until
+        if period_months < 0:
+            valid_until_str = LIFETIME_EXPIRE_AT
+        else:
+            now = datetime.now(timezone.utc)
+            base = now
+            # Продление от текущего expireAt если ещё активна
+            try:
+                user_data = await client.get_user_by_id(remna_user_id)
+                raw = user_data.get("response", user_data) if isinstance(user_data, dict) else {}
+                if not isinstance(raw, dict):
+                    raw = {}
+                expire_raw = raw.get("expireAt") or raw.get("expires_at") or raw.get("valid_until")
+                if expire_raw:
+                    if isinstance(expire_raw, str):
+                        expire_str = expire_raw.replace("Z", "+00:00")
+                        if "+" not in expire_str and "-" not in expire_str[-6:]:
+                            expire_str += "+00:00"
+                        current_exp = datetime.fromisoformat(expire_str)
+                    else:
+                        current_exp = datetime.fromtimestamp(expire_raw)
+                    if current_exp.tzinfo:
+                        current_exp = current_exp.astimezone(timezone.utc)
+                    else:
+                        current_exp = current_exp.replace(tzinfo=timezone.utc)
+                    if current_exp > now:
+                        base = current_exp
+            except Exception as e:
+                logger.debug(f"Не удалось получить текущий expireAt для {remna_user_id}: {e}")
+            valid_until = base + relativedelta(months=period_months)
+            valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await client.update_user(remna_user_id, expire_at=valid_until_str)
 

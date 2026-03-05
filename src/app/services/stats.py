@@ -1,8 +1,6 @@
-"""Статистика. В legacy — из БД. В no_db — из JSONL или «недоступно»."""
-from datetime import datetime, timedelta, timezone
+"""Статистика из PostgreSQL."""
+from datetime import datetime
 from typing import Dict, Any
-
-from app.config import settings
 
 
 def _empty_stats() -> Dict[str, Any]:
@@ -17,76 +15,8 @@ def _empty_stats() -> Dict[str, Any]:
     }
 
 
-def _no_db_stats_from_jsonl() -> Dict[str, Any]:
-    """Считает по payments.jsonl: payment_request_created, payment_approved, payment_rejected, revenue."""
-    try:
-        from app.nodb.logs import read_last_payment_events
-    except ImportError:
-        return {
-            "total_users": 0,
-            "active_subscriptions": 0,
-            "total_payments": 0,
-            "total_revenue": 0.0,
-            "today_users": 0,
-            "today_payments": 0,
-            "today_revenue": 0.0,
-            "no_db_note": "Статистика в no_db режиме ограничена (только заявки из JSONL)",
-        }
-
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    events = read_last_payment_events(limit=500)
-    today_created = 0
-    today_approved = 0
-    today_revenue = 0.0
-    approved_count = 0
-    approved_revenue = 0.0
-    rejected_count = 0
-    req_ids_seen = set()
-
-    for rec in events:
-        ts_str = rec.get("ts", "")
-        if not ts_str:
-            continue
-        try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            continue
-        ev = rec.get("event")
-        if ev == "payment_request_created":
-            if ts >= today_start:
-                today_created += 1
-        if ev == "payment_approved":
-            req_id = rec.get("req_id")
-            if req_id and req_id not in req_ids_seen:
-                req_ids_seen.add(req_id)
-                approved_count += 1
-                payload = rec.get("payload", {})
-                amt = float(payload.get("amount", 0) or 0)
-                approved_revenue += amt
-                if ts >= today_start:
-                    today_approved += 1
-                    today_revenue += amt
-        if ev == "payment_rejected":
-            rejected_count += 1
-
-    return {
-        "total_users": 0,
-        "active_subscriptions": 0,
-        "total_payments": approved_count,
-        "total_revenue": approved_revenue,
-        "today_users": 0,
-        "today_payments": today_created,
-        "today_revenue": today_revenue,
-        "no_db_note": "В no_db: только заявки из JSONL. Пользователи/подписки — в Remnawave.",
-    }
-
-
 async def get_statistics() -> Dict[str, Any]:
-    """В legacy — из БД. В no_db — из JSONL или «недоступно»."""
-    if settings.BOT_MODE != "legacy":
-        return _no_db_stats_from_jsonl()
+    """Статистика из PostgreSQL."""
 
     try:
         from app.db.session import SessionLocal
@@ -151,10 +81,7 @@ async def get_statistics() -> Dict[str, Any]:
 
 
 async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
-    """В legacy + DATABASE_URL — из БД. Иначе — пустой список."""
-    if settings.BOT_MODE != "legacy":
-        return {"users": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
-
+    """Список пользователей из PostgreSQL."""
     try:
         from app.db.session import SessionLocal
         from app.db.models import TelegramUser, Subscription
@@ -227,17 +154,7 @@ async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
 
 
 async def get_payments_list(page: int = 1, page_size: int = 10, status: str = None) -> Dict[str, Any]:
-    """В legacy + DATABASE_URL — из БД. Иначе — пустой список."""
-    if settings.BOT_MODE != "legacy":
-        return {
-            "payments": [],
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0,
-            "status_filter": status,
-        }
-
+    """Список платежей из PostgreSQL."""
     try:
         from app.db.session import SessionLocal
         from app.db.models import TelegramUser, Payment
@@ -310,10 +227,7 @@ async def get_payments_list(page: int = 1, page_size: int = 10, status: str = No
 
 
 async def get_user_payment_stats(telegram_id: int) -> Dict[str, Any]:
-    """В legacy + DATABASE_URL — из БД. Иначе — пустая статистика."""
-    if settings.BOT_MODE != "legacy":
-        return {"total_payments": 0, "total_spent": 0.0}
-
+    """Статистика платежей пользователя из PostgreSQL."""
     try:
         from app.db.session import SessionLocal
         from app.db.models import Payment

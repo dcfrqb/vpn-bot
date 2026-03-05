@@ -832,12 +832,9 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
 
     Проверки:
     - Активная подписка → отказ
-    - Уже активировал → отказ
-    - Антиспам → отказ
     """
-    from app.nodb.store import has_promo_activation, record_promo_activation, log_event
-    from app.nodb.antispam import check_antispam, record_antispam
-    from app.nodb.payreq import generate_req_id, build_payreq_block
+    from app.services.payment_request import generate_req_id, build_payreq_block
+    from app.services.jsonl_logger import log_payment_event
 
     user_id = message.from_user.id
     promo_code = "solokhin"
@@ -866,30 +863,8 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
     except Exception as e:
         logger.error(f"/solokhin: ошибка проверки подписки для {user_id}: {e}")
 
-    # 2. Проверяем, уже активировал ли этот промокод
-    try:
-        already_used = await has_promo_activation(user_id, promo_code)
-        if already_used:
-            await message.answer(
-                "❌ Вы уже использовали этот промокод.",
-                reply_markup=get_main_menu_keyboard(user_id=user_id),
-            )
-            return True
-    except Exception as e:
-        logger.error(f"/solokhin: ошибка проверки promo_activations для {user_id}: {e}")
-
-    # 3. Антиспам (120 сек между заявками)
-    can_create, existing_req_id = await check_antispam(user_id)
-    if not can_create:
-        await message.answer(
-            "⏳ Заявка уже отправлена. Ожидайте ответа администратора.",
-            reply_markup=get_main_menu_keyboard(user_id=user_id),
-        )
-        return True
-
-    # 4. Создаём заявку и отправляем админам
+    # 2. Создаём заявку и отправляем админам
     req_id = generate_req_id()
-    await record_antispam(user_id, req_id)
 
     username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
@@ -905,10 +880,10 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         currency="PROMO",
     )
 
-    # Логируем в SQLite
+    # Логируем
     try:
-        await log_event(
-            event_type="promo_request_created",
+        log_payment_event(
+            event="promo_request_created",
             req_id=req_id,
             tg_id=user_id,
             payload={"promo_code": promo_code, "tariff": tariff, "username": username},

@@ -70,18 +70,11 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     dp.include_router(ui_router)
     dp.include_router(start_router)
 
-    if settings.BOT_MODE == "legacy":
-        from app.legacy.routers.payments import router as legacy_payments_router
-        from app.routers.crypto_payments import router as crypto_payments_router
-        dp.include_router(legacy_payments_router)
-        dp.include_router(crypto_payments_router)
-        logger.info("Режим legacy: YooKassa + crypto + БД")
-    else:
-        from app.nodb.routers.payments import router as nodb_payments_router
-        from app.nodb.routers.admin import router as nodb_admin_router
-        dp.include_router(nodb_payments_router)
-        dp.include_router(nodb_admin_router)
-        logger.info("Режим no_db: ручная модерация, JSONL")
+    from app.legacy.routers.payments import router as legacy_payments_router
+    from app.routers.crypto_payments import router as crypto_payments_router
+    dp.include_router(legacy_payments_router)
+    dp.include_router(crypto_payments_router)
+    logger.info("Режим legacy: YooKassa + crypto + БД")
 
     dp.include_router(admin_router)
     dp.include_router(legacy_router)  # В конце для обратной совместимости
@@ -93,15 +86,6 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
 async def run_polling():
     """Запускает бота в режиме polling"""
     logger.info("Инициализация бота (polling режим)")
-
-    # Инициализируем SQLite store для no_db режима
-    if settings.BOT_MODE != "legacy":
-        try:
-            from app.nodb.store import init_db
-            await init_db()
-            logger.info("SQLite store инициализирован")
-        except Exception as e:
-            logger.error(f"Ошибка инициализации SQLite store: {e}")
 
     bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     logger.info("Бот создан успешно")
@@ -179,15 +163,6 @@ async def run_webhook():
         raise ValueError("TELEGRAM_WEBHOOK_URL должен быть указан в конфигурации для webhook режима")
 
     logger.info("Инициализация бота (webhook режим)")
-
-    # Инициализируем SQLite store для no_db режима
-    if settings.BOT_MODE != "legacy":
-        try:
-            from app.nodb.store import init_db
-            await init_db()
-            logger.info("SQLite store инициализирован")
-        except Exception as e:
-            logger.error(f"Ошибка инициализации SQLite store: {e}")
 
     bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     logger.info("Бот создан успешно")

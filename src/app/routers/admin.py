@@ -509,7 +509,7 @@ async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
         await callback.answer("✅ Запрос уже обработан", show_alert=True)
         return False
 
-    from app.nodb.services.remnawave_service import provision_tariff
+    from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
 
     success = await provision_tariff(user_id, tariff_code, req_id=f"friend_admin_{callback.from_user.id}")
@@ -630,7 +630,7 @@ async def _handle_admin_promo_grant(callback: types.CallbackQuery, key: str) -> 
         await callback.answer("✅ Запрос уже обработан", show_alert=True)
         return False
 
-    from app.nodb.services.remnawave_service import provision_tariff
+    from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
 
     success = await provision_tariff(user_id, tariff_code, req_id=f"admin_promo_{callback.from_user.id}")
@@ -757,18 +757,8 @@ async def promo_grant_handler(callback: types.CallbackQuery):
 
     await callback.answer("⏳ Выдаю доступ...")
 
-    # Записываем активацию промокода
-    try:
-        from app.nodb.store import record_promo_activation, log_event
-        recorded = await record_promo_activation(user_id, promo_code)
-        if not recorded:
-            # Уже активировал ранее — но всё равно выдаём (админ решил)
-            logger.warning(f"promo_grant: {promo_code} для {user_id} уже был активирован, но выдаём повторно")
-    except Exception as e:
-        logger.error(f"promo_grant: ошибка записи promo_activation: {e}")
-
     # Provision
-    from app.nodb.services.remnawave_service import provision_tariff
+    from app.services.remna_service import provision_tariff
     tariff = "premium_1"  # /solokhin всегда premium_1
     success = await provision_tariff(user_id, tariff, req_id=req_id)
 
@@ -778,9 +768,9 @@ async def promo_grant_handler(callback: types.CallbackQuery):
 
     # Логируем
     try:
-        from app.nodb.store import log_event
-        await log_event(
-            event_type="promo_granted",
+        from app.services.jsonl_logger import log_payment_event
+        log_payment_event(
+            event="promo_granted",
             req_id=req_id,
             tg_id=user_id,
             payload={"promo_code": promo_code, "tariff": tariff, "admin_id": callback.from_user.id},
@@ -843,9 +833,9 @@ async def promo_reject_handler(callback: types.CallbackQuery):
 
     # Логируем
     try:
-        from app.nodb.store import log_event
-        await log_event(
-            event_type="promo_rejected",
+        from app.services.jsonl_logger import log_payment_event
+        log_payment_event(
+            event="promo_rejected",
             req_id=req_id,
             tg_id=user_id,
             payload={"promo_code": promo_code, "admin_id": callback.from_user.id},

@@ -1,6 +1,5 @@
 """
-DEPRECATED: Не загружается. Используется app.nodb.routers.payments при BOT_MODE=no_db.
-Оставлен для справки. Роутер платежей — ручная модерация.
+Роутер платежей — ручная модерация через админа.
 """
 from datetime import datetime, timezone
 
