@@ -406,31 +406,25 @@ class RemnaClient:
             raise
 
     async def _find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """Найти пользователя по username (поиск по всем страницам)."""
+        """
+        Найти пользователя по username.
+        Использует прямой эндпоинт API 2.6.x: GET /users/by-username/{username}
+        """
         try:
-            page_size = 100
-            start = 0  # API uses 0-based offset
-            max_pages = 50
+            response = await self.request("GET", f"/api/users/by-username/{username}")
+            user_data = response.get('response', response) if isinstance(response, dict) else response
 
-            while start < max_pages * page_size:
-                response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
-                users = []
-                if isinstance(response, dict):
-                    resp_obj = response.get('response', {})
-                    users = resp_obj.get('users', resp_obj.get('items', response.get('items', [])))
-                elif isinstance(response, list):
-                    users = response
+            if not user_data or not isinstance(user_data, dict):
+                logger.warning(f"Пользователь с username={username} не найден")
+                return None
 
-                for u in users:
-                    if u.get('username') == username:
-                        logger.info(f"Найден пользователь по username={username}: uuid={u.get('uuid')}")
-                        return u
-
-                if not users or len(users) < page_size:
-                    break
-                start += page_size
-
-            logger.warning(f"Пользователь с username={username} не найден")
+            logger.info(f"Найден пользователь по username={username}: uuid={user_data.get('uuid')}")
+            return user_data
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"Пользователь с username={username} не найден (404)")
+                return None
+            logger.error(f"Ошибка поиска по username {username}: {e}")
             return None
         except Exception as e:
             logger.error(f"Ошибка поиска по username {username}: {e}")
@@ -452,48 +446,46 @@ class RemnaClient:
     async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[RemnaUser]:
         """
         Получить пользователя Remna по telegram_id.
-        Ищет по всем пользователям (пагинация).
+        Использует прямой эндпоинт API 2.6.x: GET /users/by-telegram-id/{telegramId}
 
         Returns:
             RemnaUser если найден, None если не найден
         """
         try:
-            page_size = 100
-            start = 0  # API uses 0-based offset
-            max_pages = 50
+            response = await self.request("GET", f"/api/users/by-telegram-id/{telegram_id}")
 
-            while start < max_pages * page_size:
-                response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
-                users = []
-                if isinstance(response, dict):
-                    resp_obj = response.get('response', {})
-                    users = resp_obj.get('users', resp_obj.get('items', response.get('items', [])))
-                elif isinstance(response, list):
-                    users = response
+            # Обрабатываем ответ
+            user_data = response.get('response', response) if isinstance(response, dict) else response
 
-                for user_data in users:
-                    user_tg_id = user_data.get('telegramId') or user_data.get('telegram_id')
-                    if user_tg_id is not None:
-                        try:
-                            if int(user_tg_id) == telegram_id:
-                                uuid = user_data.get('uuid') or user_data.get('id')
-                                if uuid:
-                                    logger.info(f"Найден пользователь: uuid={uuid}, telegram_id={telegram_id}")
-                                    return RemnaUser(
-                                        uuid=str(uuid),
-                                        telegram_id=telegram_id,
-                                        username=user_data.get('username'),
-                                        name=user_data.get('name') or user_data.get('username'),
-                                        raw_data=user_data
-                                    )
-                        except (ValueError, TypeError):
-                            pass
+            # API может вернуть список пользователей или одного
+            if isinstance(user_data, list):
+                if not user_data:
+                    logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
+                    return None
+                user_data = user_data[0]
 
-                if not users or len(users) < page_size:
-                    break
-                start += page_size
+            if not user_data or not isinstance(user_data, dict):
+                logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
+                return None
 
-            logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
+            uuid = user_data.get('uuid') or user_data.get('id')
+            if not uuid:
+                logger.warning(f"Пользователь telegram_id={telegram_id} найден, но без uuid")
+                return None
+
+            logger.info(f"Найден пользователь: uuid={uuid}, telegram_id={telegram_id}")
+            return RemnaUser(
+                uuid=str(uuid),
+                telegram_id=telegram_id,
+                username=user_data.get('username'),
+                name=user_data.get('name') or user_data.get('username'),
+                raw_data=user_data
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna (404)")
+                return None
+            logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
             return None
         except Exception as e:
             logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
