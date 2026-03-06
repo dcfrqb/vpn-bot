@@ -307,13 +307,12 @@ class RemnaClient:
         Args:
             telegram_id: Telegram ID пользователя
             name: Имя пользователя
-            expire_at: Дата истечения (по умолчанию: +2 дня, trial)
+            expire_at: Дата истечения (если не указано - пользователь создается без активной подписки)
 
         Returns:
             RemnaUser
         """
         import secrets
-        from datetime import timedelta
 
         username = f"tg_{telegram_id}"
 
@@ -324,8 +323,8 @@ class RemnaClient:
             return existing
 
         # 2. Не найден — создаём
-        if not expire_at:
-            expire_at = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # НЕ устанавливаем expire_at по умолчанию - пользователь создается без активной подписки
+        # Подписка активируется только при оплате через provision_tariff
 
         password = secrets.token_urlsafe(16)
 
@@ -556,33 +555,24 @@ class RemnaClient:
         return (remna_user, subscription)
 
     async def update_user(self, user_id: str, **kwargs) -> Dict[str, Any]:
-        """Обновить данные пользователя. kwargs: expire_at/expireAt, telegram_id/telegramId, active_internal_squads/activeInternalSquads и др. (whitelist)."""
+        """
+        Обновить данные пользователя.
+
+        Remnawave API использует PATCH /api/users с uuid в теле запроса.
+
+        kwargs: expire_at/expireAt, telegram_id/telegramId, active_internal_squads/activeInternalSquads и др.
+        """
         payload = build_user_payload_from_kwargs(kwargs)
+        # Добавляем uuid в payload - Remnawave требует uuid в теле запроса
+        payload["uuid"] = user_id
+
         if payload.get("expireAt"):
             logger.debug(f"Remna update_user {user_id}: expireAt={payload['expireAt']}")
-        if not payload:
-            logger.debug("Remna update_user: пустой payload после фильтрации kwargs")
+        if len(payload) == 1:  # только uuid, нечего обновлять
+            logger.debug("Remna update_user: нет полей для обновления (только uuid)")
             return {}
-        endpoints = [
-            f"/api/user/{user_id}",
-            f"/api/users/{user_id}",
-            f"/api/users/{user_id}/update",
-        ]
-        for endpoint in endpoints:
-            try:
-                return await self.request("PUT", endpoint, json=payload)
-            except Exception as e:
-                if "404" not in str(e):
-                    raise
-                continue
-        for endpoint in endpoints:
-            try:
-                return await self.request("PATCH", endpoint, json=payload)
-            except Exception as e:
-                if "404" not in str(e):
-                    raise
-                continue
-        return await self.request("PUT", f"/api/users/{user_id}", json=payload)
+
+        return await self.request("PATCH", "/api/users", json=payload)
 
     async def get_nodes(self) -> Dict[str, Any]:
         """Получить список нод"""
