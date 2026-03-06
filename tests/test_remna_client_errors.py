@@ -199,17 +199,22 @@ async def test_update_user_uses_endpoint_constant(remna_client):
     success_response.raise_for_status = MagicMock(return_value=None)
     
     remna_client._own_client.request = AsyncMock(return_value=success_response)
-    
+
     await remna_client.update_user("test-uuid", username="new_username")
-    
+
     # Должен быть только один вызов (не перебор endpoint'ов)
     assert remna_client._own_client.request.call_count == 1
-    
-    # Endpoint должен быть правильным
+
+    # Endpoint должен быть PATCH /api/users с uuid в теле
     call_args = remna_client._own_client.request.call_args
     assert call_args is not None
+    method_arg = call_args[0][0]
     url_arg = call_args[0][1] if len(call_args[0]) > 1 else str(call_args)
-    assert "/api/users/test-uuid" in url_arg or "/api/user/test-uuid" in url_arg
+    assert method_arg == "PATCH"
+    assert "/api/users" in url_arg
+    # uuid должен быть в json payload
+    json_payload = call_args[1].get("json", {})
+    assert json_payload.get("uuid") == "test-uuid"
 
 
 # --- Тесты expireAt / normalize_expire_at / build_user_payload ---

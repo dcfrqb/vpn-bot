@@ -252,6 +252,74 @@ class RemnaClient:
             await self._own_client.aclose()
             self._own_client = None
 
+    def _sanitize_display_name(self, name: Optional[str], telegram_id: int) -> str:
+        """
+        Валидирует и очищает имя для отображения в Remnawave.
+
+        Args:
+            name: Имя из Telegram (first_name + last_name)
+            telegram_id: Telegram ID для fallback
+
+        Returns:
+            Безопасное имя для отображения (max 64 символа, без спецсимволов)
+        """
+        if not name or not name.strip():
+            return f"User {telegram_id}"
+
+        # Убираем лишние пробелы
+        clean_name = " ".join(name.split())
+
+        # Ограничиваем длину (Remnawave может иметь лимит)
+        if len(clean_name) > 64:
+            clean_name = clean_name[:61] + "..."
+
+        # Если имя состоит только из спецсимволов/эмодзи — fallback
+        import re
+        # Убираем всё кроме букв, цифр, пробелов и базовых знаков препинания
+        text_only = re.sub(r'[^\w\s\-\.]', '', clean_name, flags=re.UNICODE)
+        if not text_only.strip():
+            return f"User {telegram_id}"
+
+        return clean_name
+
+    async def _update_name_if_fallback(self, user: RemnaUser, new_name: str) -> None:
+        """
+        Обновляет имя пользователя, если текущее выглядит как fallback.
+
+        Fallback-имена: tg_*, User *, пустое имя.
+        Если new_name тоже fallback — не обновляем.
+        """
+        import re
+
+        current_name = user.name or ""
+
+        # Проверяем, является ли текущее имя fallback
+        is_current_fallback = (
+            not current_name.strip() or
+            re.match(r'^tg_\d+', current_name) or
+            re.match(r'^User[\s_]\d+', current_name)
+        )
+
+        if not is_current_fallback:
+            return  # Текущее имя нормальное, не трогаем
+
+        # Проверяем, что новое имя не fallback
+        is_new_fallback = (
+            not new_name.strip() or
+            re.match(r'^tg_\d+', new_name) or
+            re.match(r'^User[\s_]\d+', new_name)
+        )
+
+        if is_new_fallback:
+            return  # Новое имя тоже fallback, нет смысла обновлять
+
+        # Обновляем имя в Remnawave
+        try:
+            await self.update_user(user.uuid, name=new_name)
+            logger.info(f"Обновлено имя пользователя {user.uuid}: '{current_name}' -> '{new_name}'")
+        except Exception as e:
+            logger.warning(f"Не удалось обновить имя пользователя {user.uuid}: {e}")
+
     async def get_api_tokens(self) -> Dict[str, Any]:
         """Получить список API токенов"""
         return await self.request("GET", "/api/tokens")
@@ -281,7 +349,15 @@ class RemnaClient:
         """Получить список пользователей"""
         return await self.request("GET", f"/api/users?size={size}&start={start}")
 
-    async def create_user(self, username: str, password: str, expire_at: Optional[Union[str, datetime, date]] = None, telegram_id: Optional[int] = None, active_internal_squads: Optional[list] = None) -> Dict[str, Any]:
+    async def create_user(
+        self,
+        username: str,
+        password: str,
+        expire_at: Optional[Union[str, datetime, date]] = None,
+        telegram_id: Optional[int] = None,
+        active_internal_squads: Optional[list] = None,
+        display_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
         # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
         payload = {"username": username, "password": password}
@@ -293,9 +369,16 @@ class RemnaClient:
             payload["telegramId"] = int(telegram_id)
         if active_internal_squads:
             payload["activeInternalSquads"] = active_internal_squads
+        if display_name:
+            payload["name"] = display_name  # Человекочитаемое имя для админки
         return await self.request("POST", "/api/users", json=payload)
 
-    async def get_or_create_user(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
+    async def get_or_create_user(
+        self,
+        telegram_id: int,
+        name: str,
+        expire_at: Optional[str] = None,
+    ) -> RemnaUser:
         """
         Получить или создать пользователя в Remna.
 
@@ -306,7 +389,7 @@ class RemnaClient:
 
         Args:
             telegram_id: Telegram ID пользователя
-            name: Имя пользователя
+            name: Человекочитаемое имя (first_name + last_name из Telegram)
             expire_at: Дата истечения (если не указано - пользователь создается без активной подписки)
 
         Returns:
@@ -314,20 +397,28 @@ class RemnaClient:
         """
         import secrets
 
+        # username — технический идентификатор, всегда tg_{telegram_id}
         username = f"tg_{telegram_id}"
+
+        # Валидируем name для отображения в админке
+        display_name = self._sanitize_display_name(name, telegram_id)
 
         # 1. Сначала ищем по telegram_id
         existing = await self.get_user_by_telegram_id(telegram_id)
         if existing:
             logger.info(f"Найден существующий пользователь: uuid={existing.uuid}, telegram_id={telegram_id}")
+
+            # Обновляем имя, если текущее выглядит как fallback (tg_*, User *)
+            await self._update_name_if_fallback(existing, display_name)
+
             return existing
 
         # 2. Не найден — создаём
-        # Remna API требует expireAt. Если не указан - ставим минимальный (+1 сек), чтобы подписка
-        # сразу была истёкшей. Активируется только при оплате через provision_tariff.
+        # Remna API требует expireAt. Если не указан - ставим дату в прошлом, чтобы подписка
+        # сразу была неактивной. Активируется только при оплате через provision_tariff.
         from datetime import timedelta
         if not expire_at:
-            expire_at = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            expire_at = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         password = secrets.token_urlsafe(16)
 
@@ -336,7 +427,8 @@ class RemnaClient:
                 username=username,
                 password=password,
                 expire_at=expire_at,
-                telegram_id=telegram_id
+                telegram_id=telegram_id,
+                display_name=display_name,
             )
 
             user_data = response.get('response', response) if isinstance(response, dict) else response
@@ -344,12 +436,12 @@ class RemnaClient:
             if not uuid:
                 raise ValueError(f"Не удалось получить uuid из ответа: {response}")
 
-            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}")
+            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, name={display_name}")
             return RemnaUser(
                 uuid=str(uuid),
                 telegram_id=telegram_id,
                 username=username,
-                name=name,
+                name=display_name,
                 raw_data=user_data
             )
 
@@ -370,7 +462,7 @@ class RemnaClient:
                                 uuid=str(uuid),
                                 telegram_id=telegram_id,
                                 username=username,
-                                name=name,
+                                name=display_name,
                                 raw_data=found
                             )
                 except Exception as find_err:
@@ -386,17 +478,18 @@ class RemnaClient:
                         username=alt_username,
                         password=password,
                         expire_at=expire_at,
-                        telegram_id=telegram_id
+                        telegram_id=telegram_id,
+                        display_name=display_name,
                     )
                     alt_user_data = alt_response.get('response', alt_response) if isinstance(alt_response, dict) else alt_response
                     alt_uuid = alt_user_data.get('uuid') or alt_user_data.get('id')
                     if alt_uuid:
-                        logger.info(f"Создан пользователь с alt username: uuid={alt_uuid}")
+                        logger.info(f"Создан пользователь с alt username: uuid={alt_uuid}, name={display_name}")
                         return RemnaUser(
                             uuid=str(alt_uuid),
                             telegram_id=telegram_id,
                             username=alt_username,
-                            name=name,
+                            name=display_name,
                             raw_data=alt_user_data
                         )
                 except Exception as alt_err:

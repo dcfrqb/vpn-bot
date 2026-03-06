@@ -50,8 +50,12 @@ async def ensure_user_in_remnawave(
     """
     client = RemnaClient()
     try:
+        # Приоритет: name (first_name + last_name) > username > fallback
         display_name = name or username or f"User_{telegram_id}"
-        user = await client.get_or_create_user(telegram_id=telegram_id, name=display_name)
+        user = await client.get_or_create_user(
+            telegram_id=telegram_id,
+            name=display_name,
+        )
         return user.uuid
     except Exception as e:
         logger.error(f"Ошибка ensure_user_in_remnawave для tg_id={telegram_id}: {e}")
@@ -138,6 +142,16 @@ async def provision_tariff(
             tg_id=telegram_id,
             payload={"remna_user_id": remna_user_id, "tariff": tariff, "valid_until": valid_until_str},
         )
+
+        # Инвалидируем кэш, чтобы статус обновился сразу
+        try:
+            from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
+            await invalidate_subscription_cache(telegram_id)
+            await invalidate_sync_cache(telegram_id)
+            logger.debug(f"Кэш инвалидирован после provision_tariff для {telegram_id}")
+        except Exception as cache_e:
+            logger.warning(f"Не удалось инвалидировать кэш для {telegram_id}: {cache_e}")
+
         return True
     except Exception as e:
         logger.error(f"Ошибка provision_tariff для tg_id={telegram_id} tariff={tariff}: {e}")
