@@ -533,10 +533,11 @@ class RemnaClient:
                     expire_dt = expire_at_raw
                     if expire_dt.tzinfo:
                         expire_dt = expire_dt.replace(tzinfo=None)
-                
-                # Подписка активна, если expireAt в будущем
+
+                # Подписка активна, если expireAt в будущем И не отозвана (subRevokedAt)
                 if expire_dt:
-                    is_active = expire_dt > datetime.utcnow()
+                    is_revoked = raw_data.get('subRevokedAt') is not None
+                    is_active = (expire_dt > datetime.utcnow()) and not is_revoked
             except Exception as e:
                 logger.warning(f"Ошибка парсинга expireAt для пользователя {remna_user.uuid}: {e}")
                 expire_dt = None
