@@ -41,17 +41,17 @@ async def ensure_user_in_remnawave(
     name: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Проверяет наличие пользователя в Remnawave. Если нет — создаёт.
+    Получает или создаёт пользователя в Remnawave.
     Возвращает remna_user_id (uuid) или None при ошибке.
+
+    Логика:
+    1. Найти по telegram_id → использовать
+    2. Не найден → создать с username=tg_<telegram_id>
     """
     client = RemnaClient()
     try:
-        existing = await client.get_user_by_telegram_id(telegram_id)
-        if existing:
-            return existing.uuid
-
         display_name = name or username or f"User_{telegram_id}"
-        user = await client.create_user_with_name(telegram_id=telegram_id, name=display_name)
+        user = await client.get_or_create_user(telegram_id=telegram_id, name=display_name)
         return user.uuid
     except Exception as e:
         logger.error(f"Ошибка ensure_user_in_remnawave для tg_id={telegram_id}: {e}")

@@ -875,15 +875,23 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
     tariff = "premium_1"
 
-    payreq_block = build_payreq_block(
-        req_id=req_id,
-        tg_id=user_id,
-        username=username,
-        name=name,
-        tariff=tariff,
-        amount=0,  # Промо — бесплатно
-        currency="PROMO",
-    )
+    try:
+        payreq_block = build_payreq_block(
+            req_id=req_id,
+            tg_id=user_id,
+            username=username,
+            name=name,
+            tariff=tariff,
+            amount=0,  # Промо — бесплатно
+            currency="PROMO",
+        )
+    except Exception as e:
+        logger.error(f"/solokhin: ошибка build_payreq_block: {e}")
+        await message.answer(
+            "❌ Ошибка при создании заявки. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
 
     # Логируем
     try:

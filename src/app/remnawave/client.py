@@ -295,10 +295,14 @@ class RemnaClient:
             payload["activeInternalSquads"] = active_internal_squads
         return await self.request("POST", "/api/users", json=payload)
 
-    async def create_user_with_name(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
+    async def get_or_create_user(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
         """
-        Создать пользователя в Remna с telegram_id и именем.
-        Генерирует username и password автоматически.
+        Получить или создать пользователя в Remna.
+
+        Логика:
+        1. Попробовать найти по telegram_id
+        2. Если не найден — создать нового
+        3. Если username занят — найти по username и добавить telegramId
 
         Args:
             telegram_id: Telegram ID пользователя
@@ -306,21 +310,24 @@ class RemnaClient:
             expire_at: Дата истечения (по умолчанию: +2 дня, trial)
 
         Returns:
-            RemnaUser созданного пользователя
-
-        Raises:
-            httpx.HTTPStatusError: если пользователь уже существует или другая ошибка API
+            RemnaUser
         """
-        # Генерируем username из telegram_id (уникальный)
-        username = f"tg_{telegram_id}"
-        # Генерируем случайный пароль (Remna требует пароль)
         import secrets
-        password = secrets.token_urlsafe(16)
+        from datetime import timedelta
 
-        # Если expire_at не передан, используем +2 дня (trial)
+        username = f"tg_{telegram_id}"
+
+        # 1. Сначала ищем по telegram_id
+        existing = await self.get_user_by_telegram_id(telegram_id)
+        if existing:
+            logger.info(f"Найден существующий пользователь: uuid={existing.uuid}, telegram_id={telegram_id}")
+            return existing
+
+        # 2. Не найден — создаём
         if not expire_at:
-            from datetime import datetime, timezone, timedelta
             expire_at = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        password = secrets.token_urlsafe(16)
 
         try:
             response = await self.create_user(
@@ -329,23 +336,13 @@ class RemnaClient:
                 expire_at=expire_at,
                 telegram_id=telegram_id
             )
-            
-            logger.debug(f"Ответ Remna API при создании пользователя {telegram_id}: {type(response)}, keys: {list(response.keys()) if isinstance(response, dict) else 'not dict'}")
-            
-            # Извлекаем данные созданного пользователя
+
             user_data = response.get('response', response) if isinstance(response, dict) else response
-            
-            if not isinstance(user_data, dict):
-                logger.error(f"Неожиданный формат ответа от Remna API: {type(user_data)}, значение: {user_data}")
-                raise ValueError(f"Неожиданный формат ответа от Remna API: ожидался dict, получен {type(user_data)}")
-            
-            uuid = user_data.get('uuid') or user_data.get('id') or user_data.get('_id')
+            uuid = user_data.get('uuid') or user_data.get('id')
             if not uuid:
-                logger.error(f"Не удалось получить uuid из ответа Remna API. Ответ: {response}, user_data: {user_data}")
-                raise ValueError(f"Не удалось получить uuid созданного пользователя из ответа: {response}")
-            
-            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, username={username}")
-            
+                raise ValueError(f"Не удалось получить uuid из ответа: {response}")
+
+            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}")
             return RemnaUser(
                 uuid=str(uuid),
                 telegram_id=telegram_id,
@@ -353,34 +350,55 @@ class RemnaClient:
                 name=name,
                 raw_data=user_data
             )
-            
+
         except httpx.HTTPStatusError as e:
-            # Если пользователь уже существует (409 или подобное)
-            if e.response.status_code in (409, 400):
-                error_text = e.response.text.lower()
-                if 'already exists' in error_text or 'duplicate' in error_text or 'exists' in error_text:
-                    # Пытаемся найти существующего пользователя
-                    logger.warning(f"Пользователь с telegram_id={telegram_id} уже существует, ищем его...")
-                    try:
-                        existing_user = await self.get_user_by_telegram_id(telegram_id)
-                        if existing_user:
-                            logger.info(f"Найден существующий пользователь: uuid={existing_user.uuid}")
-                            return existing_user
-                        else:
-                            logger.warning(f"Пользователь не найден после конфликта, пробрасываем ошибку")
-                    except Exception as find_error:
-                        logger.error(f"Ошибка при поиске пользователя после конфликта: {find_error}")
-            # Пробрасываем ошибку дальше
-            logger.error(f"HTTP ошибка при создании пользователя {telegram_id}: {e.response.status_code}, текст: {e.response.text}")
+            # 3. Username уже занят — ищем по username и добавляем telegramId
+            if e.response.status_code in (400, 409) and 'exists' in e.response.text.lower():
+                logger.warning(f"Username {username} занят, ищем пользователя и добавляем telegramId")
+                try:
+                    found = await self._find_user_by_username(username)
+                    if found:
+                        uuid = found.get('uuid') or found.get('id')
+                        if uuid:
+                            # Обновляем telegramId
+                            await self.update_user(uuid, telegramId=telegram_id)
+                            logger.info(f"Обновлён telegramId для пользователя {uuid}")
+                            return RemnaUser(
+                                uuid=str(uuid),
+                                telegram_id=telegram_id,
+                                username=username,
+                                name=name,
+                                raw_data=found
+                            )
+                except Exception as update_err:
+                    logger.error(f"Не удалось обновить telegramId: {update_err}")
+
+            logger.error(f"Ошибка создания пользователя {telegram_id}: {e.response.status_code}")
             raise
+
+    async def _find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Найти пользователя по username (одна страница, быстрый поиск)."""
+        try:
+            response = await self.request("GET", f"/api/users?size=100&start=1")
+            users = []
+            if isinstance(response, dict):
+                resp_obj = response.get('response', {})
+                users = resp_obj.get('users', resp_obj.get('items', response.get('items', [])))
+            elif isinstance(response, list):
+                users = response
+
+            for u in users:
+                if u.get('username') == username:
+                    return u
+            return None
         except Exception as e:
-            # Логируем любые другие ошибки
-            import traceback
-            logger.error(
-                f"Неожиданная ошибка при создании пользователя {telegram_id}: {e}\n"
-                f"Traceback: {traceback.format_exc()}"
-            )
-            raise
+            logger.error(f"Ошибка поиска по username {username}: {e}")
+            return None
+
+    # Алиас для обратной совместимости
+    async def create_user_with_name(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
+        """Алиас для get_or_create_user (обратная совместимость)."""
+        return await self.get_or_create_user(telegram_id, name, expire_at)
 
     async def delete_user(self, user_id: str) -> Dict[str, Any]:
         """Удалить пользователя"""
@@ -393,108 +411,38 @@ class RemnaClient:
     async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[RemnaUser]:
         """
         Получить пользователя Remna по telegram_id.
-        Ищет через /api/users, перебирая все страницы.
-        
+        Пробует прямой endpoint /api/users/telegram/{id}.
+
         Returns:
             RemnaUser если найден, None если не найден
         """
         try:
-            page_size = 100
-            start = 1
-            total_checked = 0
-            max_pages = 50  # Ограничиваем поиск 50 страницами (5000 пользователей)
-            
-            logger.info(f"🔍 Начинаю поиск пользователя с telegram_id={telegram_id} в Remna API...")
-            
-            while start <= max_pages * page_size:
-                try:
-                    response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
-                    
-                    # Обрабатываем разные форматы ответа
-                    users = []
-                    if isinstance(response, list):
-                        users = response
-                    elif isinstance(response, dict):
-                        response_obj = response.get('response', {})
-                        users = response_obj.get('users', 
-                            response_obj.get('items', 
-                                response.get('items', 
-                                    response.get('data', []))))
-                    
-                    total_checked += len(users)
-                    page_num = (start - 1) // page_size + 1
-                    
-                    # Логируем только первую страницу кратко (без детального списка всех пользователей)
-                    if page_num == 1 and len(users) > 0:
-                        all_telegram_ids = []
-                        for u in users:
-                            tg_id = u.get('telegramId') or u.get('telegram_id')
-                            if tg_id:
-                                all_telegram_ids.append(int(tg_id))
-                        logger.debug(f"📄 Страница {page_num}: {len(users)} пользователей, {len(all_telegram_ids)} с telegramId")
-                        # Логируем только если искомый ID найден в списке
-                        if telegram_id in all_telegram_ids:
-                            logger.info(f"✅ Искомый telegram_id={telegram_id} найден в списке на странице {page_num}")
-                    
-                    # Ищем пользователя по telegramId - проверяем ВСЕХ пользователей
-                    for idx, user_data in enumerate(users):
-                        user_telegram_id = user_data.get('telegramId') or user_data.get('telegram_id')
-                        
-                        if user_telegram_id is not None:
-                            try:
-                                # Приводим к int для сравнения
-                                user_tg_id_int = int(user_telegram_id)
-                                if user_tg_id_int == telegram_id:
-                                    # Нашли пользователя!
-                                    uuid = user_data.get('uuid') or user_data.get('id') or user_data.get('_id')
-                                    if not uuid:
-                                        logger.warning(f"⚠️ Найден пользователь с telegram_id={telegram_id}, но нет uuid: {user_data}")
-                                        continue
-                                    
-                                    username = user_data.get('username')
-                                    name = user_data.get('name') or user_data.get('displayName') or username
-                                    
-                                    logger.info(f"✅ Найден пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, username={username}, страница={page_num}, позиция={idx+1}")
-                                    return RemnaUser(
-                                        uuid=str(uuid),
-                                        telegram_id=telegram_id,
-                                        username=username,
-                                        name=name,
-                                        raw_data=user_data
-                                    )
-                            except (ValueError, TypeError) as e:
-                                logger.debug(f"Ошибка парсинга telegram_id: {e}, user_telegram_id={user_telegram_id}")
-                    
-                    # Если список пуст - больше страниц нет
-                    if not users:
-                        logger.debug(f"📄 Страница {page_num} пуста, завершаю поиск")
-                        break
-                    
-                    # Если список меньше page_size - это последняя страница
-                    if len(users) < page_size:
-                        logger.debug(f"📄 Страница {page_num} содержит {len(users)} пользователей (меньше {page_size}), это последняя страница")
-                        break
-                    
-                    start += page_size
-                    
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 404:
-                        logger.debug(f"📄 Страница {start} не найдена (404), завершаю поиск")
-                        break
-                    raise
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при поиске пользователя по telegram_id={telegram_id} на странице {start}: {e}")
-                    raise
-            
-            pages_checked = (start - 1) // page_size if start > 1 else 0
-            logger.warning(f"❌ Пользователь с telegram_id={telegram_id} не найден в Remna после проверки {total_checked} пользователей на {pages_checked + 1} страницах")
-            return None
-            
-        except httpx.RequestError as e:
-            logger.error(f"Ошибка сети при поиске пользователя по telegram_id={telegram_id}: {e}")
+            # Пробуем прямой endpoint
+            response = await self.request("GET", f"/api/users/telegram/{telegram_id}")
+
+            user_data = response.get('response', response) if isinstance(response, dict) else response
+            if not isinstance(user_data, dict):
+                return None
+
+            uuid = user_data.get('uuid') or user_data.get('id')
+            if not uuid:
+                return None
+
+            logger.info(f"Найден пользователь Remna: uuid={uuid}, telegram_id={telegram_id}")
+            return RemnaUser(
+                uuid=str(uuid),
+                telegram_id=telegram_id,
+                username=user_data.get('username'),
+                name=user_data.get('name') or user_data.get('username'),
+                raw_data=user_data
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
+                return None
             raise
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при поиске пользователя по telegram_id={telegram_id}: {e}")
+            logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
             raise
 
     async def get_user_with_subscription_by_telegram_id(self, telegram_id: int) -> Optional[tuple[RemnaUser, Optional[RemnaSubscription]]]:
