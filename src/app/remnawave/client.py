@@ -323,8 +323,11 @@ class RemnaClient:
             return existing
 
         # 2. Не найден — создаём
-        # НЕ устанавливаем expire_at по умолчанию - пользователь создается без активной подписки
-        # Подписка активируется только при оплате через provision_tariff
+        # Remna API требует expireAt. Если не указан - ставим минимальный (+1 сек), чтобы подписка
+        # сразу была истёкшей. Активируется только при оплате через provision_tariff.
+        from datetime import timedelta
+        if not expire_at:
+            expire_at = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         password = secrets.token_urlsafe(16)
 
@@ -406,10 +409,10 @@ class RemnaClient:
         """Найти пользователя по username (поиск по всем страницам)."""
         try:
             page_size = 100
-            start = 1
+            start = 0  # API uses 0-based offset
             max_pages = 50
 
-            while start <= max_pages * page_size:
+            while start < max_pages * page_size:
                 response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
                 users = []
                 if isinstance(response, dict):
@@ -456,10 +459,10 @@ class RemnaClient:
         """
         try:
             page_size = 100
-            start = 1
+            start = 0  # API uses 0-based offset
             max_pages = 50
 
-            while start <= max_pages * page_size:
+            while start < max_pages * page_size:
                 response = await self.request("GET", f"/api/users?size={page_size}&start={start}")
                 users = []
                 if isinstance(response, dict):
