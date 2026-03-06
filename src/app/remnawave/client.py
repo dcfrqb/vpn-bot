@@ -352,15 +352,16 @@ class RemnaClient:
             )
 
         except httpx.HTTPStatusError as e:
-            # 3. Username уже занят — ищем по username и добавляем telegramId
+            # 3. Username уже занят
             if e.response.status_code in (400, 409) and 'exists' in e.response.text.lower():
-                logger.warning(f"Username {username} занят, ищем пользователя и добавляем telegramId")
+                logger.warning(f"Username {username} занят, пробуем найти или создать с суффиксом")
+
+                # Сначала пробуем найти существующего пользователя
                 try:
                     found = await self._find_user_by_username(username)
                     if found:
                         uuid = found.get('uuid') or found.get('id')
                         if uuid:
-                            # Обновляем telegramId
                             await self.update_user(uuid, telegramId=telegram_id)
                             logger.info(f"Обновлён telegramId для пользователя {uuid}")
                             return RemnaUser(
@@ -370,8 +371,34 @@ class RemnaClient:
                                 name=name,
                                 raw_data=found
                             )
-                except Exception as update_err:
-                    logger.error(f"Не удалось обновить telegramId: {update_err}")
+                except Exception as find_err:
+                    logger.debug(f"Не удалось найти по username: {find_err}")
+
+                # Пользователь не найден в API — создаём с альтернативным username
+                import time
+                alt_username = f"tg_{telegram_id}_{int(time.time())}"
+                logger.info(f"Создаём пользователя с альтернативным username: {alt_username}")
+
+                try:
+                    alt_response = await self.create_user(
+                        username=alt_username,
+                        password=password,
+                        expire_at=expire_at,
+                        telegram_id=telegram_id
+                    )
+                    alt_user_data = alt_response.get('response', alt_response) if isinstance(alt_response, dict) else alt_response
+                    alt_uuid = alt_user_data.get('uuid') or alt_user_data.get('id')
+                    if alt_uuid:
+                        logger.info(f"Создан пользователь с alt username: uuid={alt_uuid}")
+                        return RemnaUser(
+                            uuid=str(alt_uuid),
+                            telegram_id=telegram_id,
+                            username=alt_username,
+                            name=name,
+                            raw_data=alt_user_data
+                        )
+                except Exception as alt_err:
+                    logger.error(f"Не удалось создать с альтернативным username: {alt_err}")
 
             logger.error(f"Ошибка создания пользователя {telegram_id}: {e.response.status_code}")
             raise
