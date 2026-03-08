@@ -377,13 +377,8 @@ async def handle_successful_payment(
     provision_for_verification=True: оставляет status=pending, отправляет custom_message (для crypto).
     """
     trace_id = trace_id or str(uuid.uuid4())
-    try:
-        from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
-        await invalidate_subscription_cache(telegram_user_id)
-        await invalidate_sync_cache(telegram_user_id)
-    except Exception as e:
-        logger.debug(f"[{trace_id}] cache invalidation: {e}")
-    
+    # NOTE: cache invalidation перенесён ПОСЛЕ commit (см. ниже)
+
     try:
         payment_result = await session.execute(
             select(PaymentModel).where(PaymentModel.id == payment_id)
@@ -506,7 +501,8 @@ async def handle_successful_payment(
         
         subscription_url = await get_or_create_remna_user_and_get_subscription_url(
             telegram_user_id=telegram_user_id,
-            subscription_id=subscription.id
+            subscription_id=subscription.id,
+            period_months=period_months,  # P1: продлеваем expireAt от текущего в Remnawave
         )
         
         if subscription_url:
@@ -514,6 +510,15 @@ async def handle_successful_payment(
                 subscription.config_data = {}
             subscription.config_data["subscription_url"] = subscription_url
             await session.commit()
+
+        # P2: cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
+        try:
+            from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
+            await invalidate_subscription_cache(telegram_user_id)
+            await invalidate_sync_cache(telegram_user_id)
+            logger.debug(f"[{trace_id}] cache invalidated after commit")
+        except Exception as cache_e:
+            logger.warning(f"[{trace_id}] cache invalidation failed: {cache_e}")
 
         # Re-lock payment для атомарной проверки/установки notified (гонка при повторных webhook)
         pay_lock = await session.execute(
@@ -616,8 +621,13 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
 
 async def get_or_create_remna_user_and_get_subscription_url(
     telegram_user_id: int,
-    subscription_id: int
+    subscription_id: int,
+    period_months: Optional[int] = None,
 ) -> Optional[str]:
+    """
+    period_months: если передан — продлевает expireAt в Remna от текущего
+    expireAt (как provision_tariff). Если None — fallback на subscription.valid_until.
+    """
     """Получает или создает пользователя в Remna API и возвращает subscription URL"""
     try:
         if not SessionLocal:
@@ -646,22 +656,65 @@ async def get_or_create_remna_user_and_get_subscription_url(
             
             try:
                 if telegram_user.remna_user_id:
-                    # Если пользователь уже существует, обновляем сквад согласно текущей подписке
+                    # Если пользователь уже существует, обновляем expireAt и сквад
+                    remna_user_id = str(telegram_user.remna_user_id)
+
+                    # КРИТИЧНО: Обновляем expireAt в Remnawave (source of truth)
+                    # Если period_months передан — продлеваем от текущего expireAt (как provision_tariff).
+                    # Иначе — fallback на subscription.valid_until (старое поведение).
+                    try:
+                        if period_months is not None:
+                            from datetime import timezone
+                            from dateutil.relativedelta import relativedelta
+                            now_utc = datetime.now(timezone.utc)
+                            base = now_utc
+                            try:
+                                remna_data = await client.get_user_by_id(remna_user_id)
+                                raw = remna_data.get("response", remna_data) if isinstance(remna_data, dict) else {}
+                                if not isinstance(raw, dict):
+                                    raw = {}
+                                expire_raw = raw.get("expireAt") or raw.get("expires_at") or raw.get("valid_until")
+                                if expire_raw:
+                                    expire_str = str(expire_raw).replace("Z", "+00:00")
+                                    current_exp = datetime.fromisoformat(expire_str)
+                                    if current_exp.tzinfo is None:
+                                        current_exp = current_exp.replace(tzinfo=timezone.utc)
+                                    else:
+                                        current_exp = current_exp.astimezone(timezone.utc)
+                                    if current_exp > now_utc:
+                                        base = current_exp
+                                        logger.info(f"📝 Продлеваю expireAt от текущего: {current_exp.isoformat()}")
+                            except Exception as fetch_e:
+                                logger.debug(f"Не удалось получить текущий expireAt для {remna_user_id}: {fetch_e}")
+                            new_expire = base + relativedelta(months=period_months)
+                            new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            logger.info(f"📝 Обновляю expireAt для существующего пользователя {remna_user_id}: {new_expire_str}")
+                            await client.update_user(remna_user_id, expire_at=new_expire_str)
+                            logger.info(f"✅ expireAt обновлен в Remna для пользователя {remna_user_id}")
+                        elif subscription.valid_until:
+                            # Fallback: старое поведение — используем valid_until из local DB
+                            logger.info(f"📝 Обновляю expireAt для существующего пользователя {remna_user_id}: {subscription.valid_until} (fallback)")
+                            await client.update_user(remna_user_id, expire_at=subscription.valid_until)
+                            logger.info(f"✅ expireAt обновлен в Remna для пользователя {remna_user_id}")
+                    except Exception as expire_update_e:
+                        logger.warning(f"⚠️ Не удалось обновить expireAt для пользователя {remna_user_id}: {expire_update_e}")
+
+                    # Обновляем сквад согласно текущей подписке
                     squad_name = await get_squad_name_for_plan(subscription.plan_code)
                     if squad_name:
                         try:
                             squad = await client.get_squad_by_name(squad_name)
                             if squad:
                                 squad_uuid = squad.get('uuid')
-                                logger.info(f"📝 Обновляю сквад для существующего пользователя {telegram_user.remna_user_id}: {squad_name}")
+                                logger.info(f"📝 Обновляю сквад для существующего пользователя {remna_user_id}: {squad_name}")
                                 try:
-                                    await client.update_user(str(telegram_user.remna_user_id), activeInternalSquads=[squad_uuid])
-                                    logger.info(f"✅ Сквад обновлен в Remna для пользователя {telegram_user.remna_user_id}")
+                                    await client.update_user(remna_user_id, activeInternalSquads=[squad_uuid])
+                                    logger.info(f"✅ Сквад обновлен в Remna для пользователя {remna_user_id}")
                                 except Exception as squad_update_e:
-                                    logger.warning(f"⚠️ Не удалось обновить сквад для пользователя {telegram_user.remna_user_id}: {squad_update_e}")
+                                    logger.warning(f"⚠️ Не удалось обновить сквад для пользователя {remna_user_id}: {squad_update_e}")
                         except Exception as squad_e:
                             logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
-                    
+
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
                     if subscription_url:
                         # Закрываем клиент перед возвратом
@@ -672,8 +725,13 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 # Генерируем пароль, соответствующий требованиям Remna API
                 password = generate_remna_password(length=24)
                 
-                # Дата истечения: клиент нормализует (навсегда -> 2099-12-31T23:59:59Z)
-                expire_at = subscription.valid_until
+                # Дата истечения: используем relativedelta для точных календарных месяцев (как provision_tariff)
+                if period_months is not None and period_months > 0:
+                    from datetime import timezone as _tz
+                    from dateutil.relativedelta import relativedelta as _rd
+                    expire_at = datetime.now(_tz.utc) + _rd(months=period_months)
+                else:
+                    expire_at = subscription.valid_until
                 
                 # Получаем сквад для плана подписки перед созданием пользователя
                 squad_name = await get_squad_name_for_plan(subscription.plan_code)
@@ -807,9 +865,35 @@ async def get_or_create_remna_user_and_get_subscription_url(
                                 if user_uuid:
                                     logger.info(f"✅ Найден существующий пользователь: {user_uuid}")
                                     
-                                    # Обновляем expireAt в Remna для существующего пользователя (snake_case -> camelCase в клиенте)
-                                    if subscription.valid_until:
-                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}")
+                                    # Обновляем expireAt в Remna: продлеваем от текущего (как provision_tariff)
+                                    if period_months is not None and period_months > 0:
+                                        from datetime import timezone as _tz
+                                        from dateutil.relativedelta import relativedelta as _rd
+                                        _now_utc = datetime.now(_tz.utc)
+                                        _base = _now_utc
+                                        _expire_raw = found_user.get("expireAt") or found_user.get("expires_at")
+                                        if _expire_raw:
+                                            try:
+                                                _exp_str = str(_expire_raw).replace("Z", "+00:00")
+                                                _current_exp = datetime.fromisoformat(_exp_str)
+                                                if _current_exp.tzinfo is None:
+                                                    _current_exp = _current_exp.replace(tzinfo=_tz.utc)
+                                                else:
+                                                    _current_exp = _current_exp.astimezone(_tz.utc)
+                                                if _current_exp > _now_utc:
+                                                    _base = _current_exp
+                                                    logger.info(f"📝 Продлеваю expireAt от текущего: {_current_exp.isoformat()}")
+                                            except Exception:
+                                                pass
+                                        _new_expire_str = (_base + _rd(months=period_months)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}: {_new_expire_str}")
+                                        try:
+                                            await client.update_user(str(user_uuid), expire_at=_new_expire_str)
+                                            logger.info(f"✅ expireAt обновлен в Remna")
+                                        except Exception as update_e:
+                                            logger.warning(f"⚠️ Не удалось обновить expireAt: {update_e}")
+                                    elif subscription.valid_until:
+                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}: {subscription.valid_until} (fallback)")
                                         try:
                                             await client.update_user(str(user_uuid), expire_at=subscription.valid_until)
                                             logger.info(f"✅ expireAt обновлен в Remna")

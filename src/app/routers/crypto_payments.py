@@ -153,16 +153,13 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
         # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}
         # Это позволит восстановить всю информацию без обращения к БД
         
-        # Отправляем сообщение с адресом (без QR-кода)
+        # Отправляем единое сообщение: текст + кнопки (step 1 — без кнопок, чтобы получить message_id)
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         info_message = await callback.message.answer(message_text, parse_mode="HTML")
         info_message_id = info_message.message_id
-        
-        # Отправляем сообщение с кнопками после адреса
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        # Формируем callback_data для возврата к выбору способа оплаты (включая info_message_id)
+
+        # Step 2: строим клавиатуру с корректным info_message_id и добавляем к тому же сообщению
         change_payment_callback = f"change_payment_method_{plan_code}_{period_months}_{amount_rub}_{info_message_id}"
-        # Формируем callback_data для кнопки "Я оплатил" с полной информацией о платеже
-        # Формат: crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}
         crypto_paid_callback = f"crypto_paid_{plan_code}_{period_months}_{amount_rub}_{user_id}_{timestamp}_{info_message_id}"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
@@ -182,15 +179,9 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
                 callback_data=f"back_to_main_cleanup_{info_message_id}"
             )]
         ])
-        
-        # UI EXCEPTION: прямой вызов UI метода
-        buttons_message = await callback.message.answer(
-            "Используйте кнопки ниже для управления оплатой:",
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-        
-        # Сохраняем message_id сообщений в payment_metadata для последующего удаления
+        await info_message.edit_reply_markup(reply_markup=keyboard)
+
+        # Сохраняем message_id сообщения в payment_metadata для последующего удаления
         if payment_id and SessionLocal:
             try:
                 async with SessionLocal() as session:
@@ -201,8 +192,8 @@ async def handle_crypto_payment(callback: types.CallbackQuery):
                     if payment:
                         if not payment.payment_metadata:
                             payment.payment_metadata = {}
-                        payment.payment_metadata["qr_message_id"] = info_message.message_id
-                        payment.payment_metadata["buttons_message_id"] = buttons_message.message_id
+                        payment.payment_metadata["qr_message_id"] = info_message_id
+                        payment.payment_metadata["buttons_message_id"] = info_message_id
                         payment.payment_metadata["chat_id"] = callback.message.chat.id
                         await session.commit()
             except Exception as e:
