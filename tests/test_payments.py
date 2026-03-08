@@ -560,11 +560,11 @@ async def test_handle_successful_payment_premium():
             session=mock_session,
             payment_id=1,
             telegram_user_id=123456789,
-            amount=249.0,
+            amount=199.0,  # 199₽ = premium_1 (249₽ = basic_3 по таблице цен)
             description="CRS VPN - Премиум тариф (30 дней)",
             bot=mock_bot
         )
-        
+
         # Проверяем сообщение
         call_args = mock_bot.send_message.call_args
         assert "Премиум" in call_args.kwargs["text"]
