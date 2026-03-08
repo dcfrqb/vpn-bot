@@ -255,6 +255,6 @@ async def recheck_pending_payments(bot) -> Dict[str, Any]:
                         result["updated"] += 1
         except Exception as e:
             result["errors"] += 1
-            logger.debug(f"recheck pending payment_id={payment.id}: {e}")
+            logger.warning(f"recheck_pending_payments: payment_id={payment.id} error: {e}")
 
     return result

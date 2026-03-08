@@ -74,6 +74,9 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     from app.routers.crypto_payments import router as crypto_payments_router
     dp.include_router(legacy_payments_router)
     dp.include_router(crypto_payments_router)
+    # ВАЖНО: app.routers.payments (payments.py) НЕ регистрируется намеренно —
+    # он содержит дублирующий обработчик pay_yookassa_ и pay_crypto_,
+    # что конфликтует с legacy_payments_router и crypto_payments_router.
     logger.info("Режим legacy: YooKassa + crypto + БД")
 
     dp.include_router(admin_router)

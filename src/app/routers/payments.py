@@ -1,5 +1,10 @@
 """
 Роутер платежей — ручная модерация через админа.
+
+ВНИМАНИЕ: этот роутер НЕ регистрируется в main.py намеренно.
+Причина: содержит обработчик pay_yookassa_ / pay_crypto_, который дублирует
+legacy/routers/payments.py и routers/crypto_payments.py.
+Регистрация этого роутера вместе с legacy роутерами создаст конфликт хендлеров.
 """
 from datetime import datetime, timezone
 

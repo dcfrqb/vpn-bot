@@ -16,8 +16,11 @@ from app.logger import logger
 # Глобальная переменная для хранения экземпляра бота
 bot_instance: Bot = None
 
-# Простой in-memory set для идемпотентности (сбрасывается при рестарте)
-_processed_payments: set = set()
+# Идемпотентность webhook обеспечивается через local DB в process_payment_webhook():
+# - проверка payment.status (FSM transitions)
+# - проверка payment.subscription_id
+# - проверка payment_metadata["notified"]
+# In-memory set НЕ используется (не устойчив к рестарту).
 
 
 @asynccontextmanager
@@ -116,16 +119,26 @@ async def _process_yookassa_payment(data: dict) -> dict:
         return {"status": "already_processed", "processed": True}
 
     # Определяем тариф
+    # ПРИМЕЧАНИЕ: _process_yookassa_payment не вызывается с ЭТАПА 1 (используется process_payment_webhook).
+    # Fallback по сумме оставлен корректным на случай использования функции напрямую.
     if not tariff:
-        # Пытаемся определить по сумме
-        if amount <= 150:
-            tariff = "basic_1"
-        elif amount <= 300:
-            tariff = "premium_1"
-        elif amount <= 500:
-            tariff = "premium_3"
-        else:
+        logger.warning(f"Webhook {payment_id}: tariff missing in metadata, using amount fallback amount={amount}")
+        if amount >= 1799:
+            tariff = "premium_12"
+        elif amount >= 999:
             tariff = "premium_6"
+        elif amount >= 899:
+            tariff = "basic_12"
+        elif amount >= 549:
+            tariff = "premium_3"
+        elif amount >= 499:
+            tariff = "basic_6"
+        elif amount >= 249:
+            tariff = "basic_3"
+        elif amount >= 199:
+            tariff = "premium_1"
+        else:
+            tariff = "basic_1"
 
     if period and not tariff.endswith(f"_{period}"):
         tariff = f"{tariff.split('_')[0]}_{period}"
@@ -204,14 +217,17 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
     Идемпотентность: in-memory set.
     """
     try:
-        # Проверка секрета
+        # Проверка секрета — обязательна. Без настроенного секрета webhook не обрабатывается.
         secret = settings.YOOKASSA_WEBHOOK_SECRET
-        if secret and str(secret).strip():
-            if not x_webhook_secret or x_webhook_secret != str(secret).strip():
-                logger.warning("Webhook rejected: X-Webhook-Secret mismatch")
-                raise HTTPException(status_code=401, detail="Unauthorized")
-        else:
-            logger.warning("YOOKASSA_WEBHOOK_SECRET not configured — accepting all requests (UNSAFE)")
+        if not secret or not str(secret).strip():
+            logger.error("Webhook rejected: YOOKASSA_WEBHOOK_SECRET not configured — refusing request")
+            raise HTTPException(status_code=403, detail="Webhook secret not configured")
+        if not x_webhook_secret or x_webhook_secret != str(secret).strip():
+            logger.warning(
+                f"Webhook rejected: X-Webhook-Secret mismatch "
+                f"(received={'<empty>' if not x_webhook_secret else '<present>'})"
+            )
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
         # Парсим JSON
         try:
@@ -237,9 +253,11 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
 
         # Обрабатываем в зависимости от события
         if event == "payment.succeeded":
-            result = await _process_yookassa_payment(data)
-            logger.info(f"Webhook {payment_id}: result={result}")
-            return JSONResponse(status_code=200, content={"status": "ok", **result})
+            # Единая точка обработки: local DB + Remnawave + уведомление пользователя
+            from app.services.payments.yookassa import process_payment_webhook
+            success = await process_payment_webhook(data, bot_instance)
+            logger.info(f"Webhook {payment_id}: process_payment_webhook returned success={success}")
+            return JSONResponse(status_code=200, content={"status": "ok", "processed": success})
 
         elif event == "payment.canceled":
             logger.info(f"Webhook {payment_id}: payment canceled")

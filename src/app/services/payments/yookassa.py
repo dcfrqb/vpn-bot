@@ -114,8 +114,17 @@ async def create_payment(
             "payment_method_types": ["bank_card", "sbp", "yoo_money"]
         }
         
+        # Детерминированный idempotence_key: user+план+сумма+10-мин. окно.
+        # Повторный вызов с теми же параметрами в течение 10 минут вернёт тот же платёж YooKassa.
+        _time_bucket = int(datetime.utcnow().timestamp()) // 600
+        idempotence_key = f"cp_{user_id}_{plan_code or 'x'}_{period_months or 0}_{amount_rub}_{_time_bucket}"
+
+        logger.info(
+            f"[{trace_id}] calling YooKassa Payment.create: user={user_id} amount={amount_rub} "
+            f"plan={plan_code} period={period_months} idempotence_key={idempotence_key}"
+        )
         try:
-            p = Payment.create(payment_data)
+            p = Payment.create(payment_data, idempotence_key)
             payment_id = p.id
             payment_url = p.confirmation.confirmation_url
         except Exception as api_error:
@@ -344,7 +353,8 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                     )
                 else:
                     logger.info(
-                        f"[{trace_id}] subscription issued: external_id={payment_id} subscription_id={payment_db.subscription_id}"
+                        f"[{trace_id}] idempotent skip: payment already provisioned "
+                        f"external_id={payment_id} subscription_id={payment_db.subscription_id}"
                     )
         
         return True
@@ -411,33 +421,36 @@ async def handle_successful_payment(
         if not plan_code or not period_months:
             # Базовый: 99 (1 мес), 249 (3 мес), 499 (6 мес), 899 (12 мес)
             # Премиум: 199 (1 мес), 549 (3 мес), 999 (6 мес), 1799 (12 мес)
-            # Проверяем от больших сумм к меньшим
+            # Порядок: от большего к меньшему, без перекрытий диапазонов
+            logger.warning(
+                f"[{trace_id}] plan determined by amount fallback "
+                f"(metadata missing plan_code/period_months): amount={amount} payment_id={payment_id}"
+            )
             if amount >= 1799:
                 plan_code = "premium"
                 period_months = 12
             elif amount >= 999:
                 plan_code = "premium"
                 period_months = 6
-            elif amount >= 549:
-                plan_code = "premium"
-                period_months = 3
-            elif amount >= 199:
-                plan_code = "premium"
-                period_months = 1
-            elif amount >= 899:
+            elif amount >= 899:       # 899 <= amount < 999
                 plan_code = "basic"
                 period_months = 12
-            elif amount >= 499:
+            elif amount >= 549:       # 549 <= amount < 899
+                plan_code = "premium"
+                period_months = 3
+            elif amount >= 499:       # 499 <= amount < 549
                 plan_code = "basic"
                 period_months = 6
-            elif amount >= 249:
+            elif amount >= 249:       # 249 <= amount < 499
                 plan_code = "basic"
                 period_months = 3
-            elif amount >= 99:
+            elif amount >= 199:       # 199 <= amount < 249
+                plan_code = "premium"
+                period_months = 1
+            elif amount >= 99:        # 99 <= amount < 199
                 plan_code = "basic"
                 period_months = 1
             else:
-                # По умолчанию базовый на месяц
                 plan_code = "basic"
                 period_months = 1
         
@@ -557,7 +570,11 @@ async def handle_successful_payment(
         payment.payment_metadata = meta
         await session.commit()
         
-        logger.info(f"[{trace_id}] subscription issued: payment_id={payment_id} subscription_id={subscription.id} remna_user_id={subscription.remna_user_id}")
+        logger.info(
+            f"[{trace_id}] payment finalized: payment_id={payment_id} "
+            f"subscription_id={subscription.id} plan={plan_code} period={period_months}m "
+            f"user={telegram_user_id} remna_user_id={subscription.remna_user_id}"
+        )
         
     except Exception as e:
         logger.error(f"[{trace_id}] handle_successful_payment failed: payment_id={payment_id} user={telegram_user_id} err={e}")
