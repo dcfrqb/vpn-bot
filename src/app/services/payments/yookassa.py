@@ -12,6 +12,7 @@ from app.logger import logger
 from app.db.session import SessionLocal
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser, RemnaUser
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.remnawave.client import RemnaClient
 
 Configuration.account_id = settings.YOOKASSA_SHOP_ID
@@ -154,11 +155,18 @@ async def create_payment(
         for attempt in range(2):
             try:
                 async with SessionLocal() as session:
+                    # Гарантируем запись в telegram_users перед FK-зависимым insert в payments
+                    await session.execute(
+                        pg_insert(TelegramUser)
+                        .values(telegram_id=user_id)
+                        .on_conflict_do_nothing(index_elements=["telegram_id"])
+                    )
+
                     result = await session.execute(
                         select(PaymentModel).where(PaymentModel.external_id == payment_id)
                     )
                     existing_payment = result.scalar_one_or_none()
-                    
+
                     if not existing_payment:
                         new_payment = PaymentModel(
                             telegram_user_id=user_id,
