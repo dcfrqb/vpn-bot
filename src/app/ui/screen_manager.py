@@ -192,7 +192,7 @@ class ScreenManager:
         # ВАЖНО: Для редактирования (edit=True) не проверяем навигацию - это обновление существующего экрана
         if not edit and user_id:
             current_screen = self._get_current_screen(user_id)
-            if current_screen and not can_navigate(current_screen, screen_id, role):
+            if current_screen and current_screen != screen_id and not can_navigate(current_screen, screen_id, role):
                 logger.warning(
                     f"Переход запрещен: {current_screen} -> {screen_id} (role={role}, user_id={user_id})"
                 )
