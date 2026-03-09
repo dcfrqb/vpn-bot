@@ -86,6 +86,9 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
             user_id=callback.from_user.id,
             plan_code=plan_code,
             period_months=period_months,
+            username=callback.from_user.username,
+            first_name=callback.from_user.first_name,
+            last_name=callback.from_user.last_name,
         )
         
         # Обновляем сообщение с результатом (без мусорных loading сообщений)

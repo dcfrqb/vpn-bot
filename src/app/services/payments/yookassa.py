@@ -80,6 +80,9 @@ async def create_payment(
     plan_code: Optional[str] = None,
     period_months: Optional[int] = None,
     request_id: Optional[int] = None,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
 ) -> tuple[str, str]:
     """Создает платеж в YooKassa и возвращает (payment_url, external_id)"""
     trace_id = str(uuid.uuid4())
@@ -155,12 +158,24 @@ async def create_payment(
         for attempt in range(2):
             try:
                 async with SessionLocal() as session:
-                    # Гарантируем запись в telegram_users перед FK-зависимым insert в payments
-                    await session.execute(
-                        pg_insert(TelegramUser)
-                        .values(telegram_id=user_id)
-                        .on_conflict_do_nothing(index_elements=["telegram_id"])
-                    )
+                    # Гарантируем запись в telegram_users перед FK-зависимым insert в payments.
+                    # Если username/first_name переданы — обновляем их при конфликте.
+                    insert_vals: dict = {"telegram_id": user_id}
+                    if username:
+                        insert_vals["username"] = username
+                    if first_name:
+                        insert_vals["first_name"] = first_name
+                    if last_name:
+                        insert_vals["last_name"] = last_name
+                    upsert_stmt = pg_insert(TelegramUser).values(**insert_vals)
+                    if username or first_name or last_name:
+                        update_set = {k: v for k, v in insert_vals.items() if k != "telegram_id"}
+                        upsert_stmt = upsert_stmt.on_conflict_do_update(
+                            index_elements=["telegram_id"], set_=update_set
+                        )
+                    else:
+                        upsert_stmt = upsert_stmt.on_conflict_do_nothing(index_elements=["telegram_id"])
+                    await session.execute(upsert_stmt)
 
                     result = await session.execute(
                         select(PaymentModel).where(PaymentModel.external_id == payment_id)
@@ -746,7 +761,58 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         await client.close()
                         return subscription_url
                 
-                username = telegram_user.username or f"user_{telegram_user_id}"
+                # remna_user_id не сохранён в БД — ищем по telegram_id в Remnawave
+                # (пользователь мог быть создан ранее без привязки UUID к telegram_users)
+                try:
+                    found_remna = await client.get_user_by_telegram_id(telegram_user_id)
+                except Exception:
+                    found_remna = None
+
+                if found_remna:
+                    remna_user_id = found_remna.uuid
+                    logger.info(f"📝 Найден существующий Remna-пользователь по telegram_id={telegram_user_id}: uuid={remna_user_id}")
+                    telegram_user.remna_user_id = remna_user_id
+                    await session.commit()
+                    # Обновляем expireAt
+                    if period_months is not None:
+                        from datetime import timezone as _tz2
+                        from dateutil.relativedelta import relativedelta as _rd2
+                        new_expire = datetime.now(_tz2.utc) + _rd2(months=period_months)
+                        new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        try:
+                            await client.update_user(remna_user_id, expire_at=new_expire_str)
+                            logger.info(f"✅ expireAt обновлен для существующего пользователя: {new_expire_str}")
+                        except Exception as upd_e:
+                            logger.warning(f"⚠️ Не удалось обновить expireAt: {upd_e}")
+                    # Обновляем сквад
+                    _squad_name = await get_squad_name_for_plan(subscription.plan_code)
+                    if _squad_name:
+                        try:
+                            _squad = await client.get_squad_by_name(_squad_name)
+                            if _squad:
+                                await client.update_user(remna_user_id, activeInternalSquads=[_squad.get("uuid")])
+                                logger.info(f"✅ Сквад обновлен: {_squad_name}")
+                        except Exception:
+                            pass
+                    # Получаем subscription URL и сохраняем
+                    subscription_url = await client.get_user_subscription_url(remna_user_id)
+                    if subscription_url:
+                        if not subscription.config_data:
+                            subscription.config_data = {}
+                        subscription.config_data["subscription_url"] = subscription_url
+                        subscription.remna_user_id = remna_user_id
+                        await session.commit()
+                    await client.close()
+                    return subscription_url
+
+                # Формируем username: TG @handle → имя_фамилия_id → user_id
+                _tg_parts = [p for p in [telegram_user.first_name, telegram_user.last_name] if p]
+                _tg_fullname = "_".join(_tg_parts).replace(" ", "_") if _tg_parts else None
+                username = (
+                    telegram_user.username
+                    or (_tg_fullname + f"_{telegram_user_id}" if _tg_fullname else None)
+                    or f"user_{telegram_user_id}"
+                )
                 # Генерируем пароль, соответствующий требованиям Remna API
                 password = generate_remna_password(length=24)
                 
