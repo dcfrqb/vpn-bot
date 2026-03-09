@@ -39,6 +39,8 @@ async def ensure_user_in_remnawave(
     telegram_id: int,
     username: Optional[str] = None,
     name: Optional[str] = None,
+    tg_first_name: Optional[str] = None,
+    tg_last_name: Optional[str] = None,
 ) -> Optional[str]:
     """
     Получает или создаёт пользователя в Remnawave.
@@ -46,15 +48,15 @@ async def ensure_user_in_remnawave(
 
     Логика:
     1. Найти по telegram_id → использовать
-    2. Не найден → создать с username=tg_<telegram_id>
+    2. Не найден → создать с username по build_remna_username()
     """
     client = RemnaClient()
     try:
-        # Приоритет: name (first_name + last_name) > username > fallback
-        display_name = name or username or f"User_{telegram_id}"
         user = await client.get_or_create_user(
             telegram_id=telegram_id,
-            name=display_name,
+            tg_username=username,
+            tg_first_name=tg_first_name,
+            tg_last_name=tg_last_name,
         )
         return user.uuid
     except Exception as e:

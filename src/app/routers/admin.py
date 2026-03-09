@@ -57,7 +57,9 @@ async def _handle_admin_promo_request(message: types.Message):
         sync_service = SyncService()
         sync_result = await sync_service.sync_user_and_subscription(
             telegram_id=user_id,
-            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            tg_username=message.from_user.username,
+            tg_first_name=message.from_user.first_name,
+            tg_last_name=message.from_user.last_name,
             use_fallback=False,
             use_cache=False,
             force_sync=True,

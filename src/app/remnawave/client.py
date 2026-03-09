@@ -376,8 +376,11 @@ class RemnaClient:
     async def get_or_create_user(
         self,
         telegram_id: int,
-        name: str,
+        name: str = "",
         expire_at: Optional[str] = None,
+        tg_username: Optional[str] = None,
+        tg_first_name: Optional[str] = None,
+        tg_last_name: Optional[str] = None,
     ) -> RemnaUser:
         """
         Получить или создать пользователя в Remna.
@@ -388,20 +391,34 @@ class RemnaClient:
         3. Если username занят — найти по username и добавить telegramId
 
         Args:
-            telegram_id: Telegram ID пользователя
-            name: Человекочитаемое имя (first_name + last_name из Telegram)
-            expire_at: Дата истечения (если не указано - пользователь создается без активной подписки)
+            telegram_id:    Telegram ID пользователя
+            name:           Устаревший параметр display-имени (для обратной совместимости)
+            expire_at:      Дата истечения (если не указано - создаётся без активной подписки)
+            tg_username:    Telegram @username (без @)
+            tg_first_name:  Имя из Telegram
+            tg_last_name:   Фамилия из Telegram
 
         Returns:
             RemnaUser
         """
+        from app.utils.remna_username import build_remna_username, build_remna_display_name
         import secrets
 
-        # username — технический идентификатор, всегда tg_{telegram_id}
-        username = f"tg_{telegram_id}"
+        # username — по новой единой логике
+        username = build_remna_username(
+            telegram_id=telegram_id,
+            username=tg_username,
+            first_name=tg_first_name,
+            last_name=tg_last_name,
+        )
 
-        # Валидируем name для отображения в админке
-        display_name = self._sanitize_display_name(name, telegram_id)
+        # display_name: кириллица допустима
+        display_name = build_remna_display_name(
+            telegram_id=telegram_id,
+            username=tg_username,
+            first_name=tg_first_name,
+            last_name=tg_last_name,
+        ) if (tg_username or tg_first_name or tg_last_name) else self._sanitize_display_name(name or f"User {telegram_id}", telegram_id)
 
         # 1. Сначала ищем по telegram_id
         existing = await self.get_user_by_telegram_id(telegram_id)

@@ -133,7 +133,9 @@ async def cmd_start(m: types.Message):
                                 try:
                                     await sync_service.sync_user_and_subscription(
                                         telegram_id=m.from_user.id,
-                                        tg_name=tg_name,
+                                        tg_username=m.from_user.username,
+                                        tg_first_name=m.from_user.first_name,
+                                        tg_last_name=m.from_user.last_name,
                                         use_fallback=True,
                                         use_cache=False,
                                         force_sync=True
@@ -148,7 +150,9 @@ async def cmd_start(m: types.Message):
                             logger.debug(f"Кэш устарел для {m.from_user.id} (возраст: {cache_age_seconds:.1f}с), синхронизируемся")
                             sync_result = await sync_service.sync_user_and_subscription(
                                 telegram_id=m.from_user.id,
-                                tg_name=tg_name,
+                                tg_username=m.from_user.username,
+                                tg_first_name=m.from_user.first_name,
+                                tg_last_name=m.from_user.last_name,
                                 use_fallback=True,
                                 use_cache=False,
                                 force_sync=True
@@ -157,7 +161,9 @@ async def cmd_start(m: types.Message):
                         logger.debug(f"Ошибка проверки кэша: {cache_check_e}, делаем синхронизацию")
                         sync_result = await sync_service.sync_user_and_subscription(
                             telegram_id=m.from_user.id,
-                            tg_name=tg_name,
+                            tg_username=m.from_user.username,
+                            tg_first_name=m.from_user.first_name,
+                            tg_last_name=m.from_user.last_name,
                             use_fallback=True,
                             use_cache=False,
                             force_sync=True
@@ -166,7 +172,9 @@ async def cmd_start(m: types.Message):
                     # Нет времени в кэше - делаем синхронизацию
                     sync_result = await sync_service.sync_user_and_subscription(
                         telegram_id=m.from_user.id,
-                        tg_name=tg_name,
+                        tg_username=m.from_user.username,
+                        tg_first_name=m.from_user.first_name,
+                        tg_last_name=m.from_user.last_name,
                         use_fallback=True,
                         use_cache=False,
                         force_sync=True
@@ -175,7 +183,9 @@ async def cmd_start(m: types.Message):
                 # Кэша нет - делаем синхронизацию
                 sync_result = await sync_service.sync_user_and_subscription(
                     telegram_id=m.from_user.id,
-                    tg_name=tg_name,
+                    tg_username=m.from_user.username,
+                    tg_first_name=m.from_user.first_name,
+                    tg_last_name=m.from_user.last_name,
                     use_fallback=True,
                     use_cache=False,
                     force_sync=True
@@ -685,18 +695,17 @@ async def refresh_info(callback: types.CallbackQuery):
     
     # Синхронизируем пользователя с Remna (ПРИНУДИТЕЛЬНО, только Remna API)
     sync_service = SyncService()
-    tg_name = f"{callback.from_user.first_name or ''} {callback.from_user.last_name or ''}".strip()
-    if not tg_name:
-        tg_name = callback.from_user.username or f"User_{telegram_id}"
-    
+
     sync_result = None
     remna_success = False
     remna_start_time = time.time()
-    
+
     try:
         sync_result = await sync_service.sync_user_and_subscription(
             telegram_id=telegram_id,
-            tg_name=tg_name,
+            tg_username=callback.from_user.username,
+            tg_first_name=callback.from_user.first_name,
+            tg_last_name=callback.from_user.last_name,
             use_fallback=False,      # НЕ используем fallback из БД
             use_cache=False,          # НЕ используем кэш
             force_sync=True,          # Принудительная синхронизация
@@ -846,7 +855,9 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         sync_service = SyncService()
         sync_result = await sync_service.sync_user_and_subscription(
             telegram_id=user_id,
-            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            tg_username=message.from_user.username,
+            tg_first_name=message.from_user.first_name,
+            tg_last_name=message.from_user.last_name,
             use_fallback=False,
             use_cache=True,
         )
@@ -1012,7 +1023,9 @@ async def cmd_friend(message: types.Message):
         sync_service = SyncService()
         sync_result = await sync_service.sync_user_and_subscription(
             telegram_id=user_id,
-            tg_name=f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or f"User_{user_id}",
+            tg_username=message.from_user.username,
+            tg_first_name=message.from_user.first_name,
+            tg_last_name=message.from_user.last_name,
             use_fallback=False,
             use_cache=False,
             force_sync=True,

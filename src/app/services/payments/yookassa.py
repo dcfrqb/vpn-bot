@@ -805,13 +805,13 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     await client.close()
                     return subscription_url
 
-                # Формируем username: TG @handle → имя_фамилия_id → user_id
-                _tg_parts = [p for p in [telegram_user.first_name, telegram_user.last_name] if p]
-                _tg_fullname = "_".join(_tg_parts).replace(" ", "_") if _tg_parts else None
-                username = (
-                    telegram_user.username
-                    or (_tg_fullname + f"_{telegram_user_id}" if _tg_fullname else None)
-                    or f"user_{telegram_user_id}"
+                # Формируем username по единой логике
+                from app.utils.remna_username import build_remna_username
+                username = build_remna_username(
+                    telegram_id=telegram_user_id,
+                    username=telegram_user.username,
+                    first_name=telegram_user.first_name,
+                    last_name=telegram_user.last_name,
                 )
                 # Генерируем пароль, соответствующий требованиям Remna API
                 password = generate_remna_password(length=24)

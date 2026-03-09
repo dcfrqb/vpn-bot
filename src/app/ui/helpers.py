@@ -66,7 +66,9 @@ async def get_main_menu_viewmodel(
         try:
             sync_result = await sync_service.sync_user_and_subscription(
                 telegram_id=telegram_id,
-                tg_name=f"{first_name or ''} {last_name or ''}".strip() or username or f"User_{telegram_id}",
+                tg_username=username,
+                tg_first_name=first_name,
+                tg_last_name=last_name,
                 use_fallback=not force_sync,
                 use_cache=use_cache,
                 force_sync=force_sync

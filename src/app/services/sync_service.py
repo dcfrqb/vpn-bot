@@ -36,11 +36,14 @@ class SyncService:
     async def sync_user_and_subscription(
         self,
         telegram_id: int,
-        tg_name: str,
+        tg_name: str = "",
         use_fallback: bool = False,
         use_cache: bool = True,
         force_sync: bool = False,
         force_remna: bool = False,
+        tg_username: Optional[str] = None,
+        tg_first_name: Optional[str] = None,
+        tg_last_name: Optional[str] = None,
     ) -> SyncResult:
         """
         Синхронизирует пользователя с Remnawave.
@@ -88,7 +91,12 @@ class SyncService:
             raise RemnaUnavailableError(f"Remna API недоступна: {e}")
 
         if not result:
-            remna_user_id = await ensure_user_in_remnawave(telegram_id, name=tg_name)
+            remna_user_id = await ensure_user_in_remnawave(
+                telegram_id,
+                username=tg_username,
+                tg_first_name=tg_first_name,
+                tg_last_name=tg_last_name,
+            )
             if remna_user_id:
                 try:
                     await self._save_sync_result_to_cache(
