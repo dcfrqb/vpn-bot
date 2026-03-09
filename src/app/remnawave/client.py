@@ -430,13 +430,9 @@ class RemnaClient:
 
             return existing
 
-        # 2. Не найден — создаём
-        # Remna API требует expireAt. Если не указан - ставим дату в прошлом, чтобы подписка
-        # сразу была неактивной. Активируется только при оплате через provision_tariff.
-        from datetime import timedelta
-        if not expire_at:
-            expire_at = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+        # 2. Не найден — создаём без подписки.
+        # expire_at не выставляем — пользователь создаётся без активной подписки.
+        # Подписка появится только после оплаты (provision_tariff).
         password = secrets.token_urlsafe(16)
 
         try:
@@ -647,10 +643,11 @@ class RemnaClient:
                 logger.warning(f"Ошибка парсинга expireAt для пользователя {remna_user.uuid}: {e}")
                 expire_dt = None
         
-        # Если есть информация о подписке
-        if expire_dt or raw_data.get('subscription') or raw_data.get('active'):
+        # Подписка существует только если есть конкретная дата expireAt.
+        # Пользователь без expireAt = пользователь без подписки (статус "none", не "expired").
+        if expire_dt is not None:
             plan = raw_data.get('plan') or raw_data.get('planCode') or raw_data.get('plan_code')
-            
+
             subscription = RemnaSubscription(
                 active=is_active,
                 expires_at=expire_dt,
