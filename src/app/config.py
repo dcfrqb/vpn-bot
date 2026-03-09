@@ -6,7 +6,7 @@ from pydantic import AnyHttpUrl, field_validator
 
 class Settings(BaseSettings):
     BOT_TOKEN: Union[str, None] = None
-    ADMINS: Union[str, list[int], None] = None
+    ADMINS: Union[str, list[int], int, None] = None
     admin_ids: Union[str, None] = None
     ADMIN_SUPPORT_USERNAME: Union[str, None] = None  # Username админа для кнопки «Написать»
 
@@ -54,6 +54,8 @@ class Settings(BaseSettings):
             return []
         if isinstance(v, list):
             return v
+        if isinstance(v, int):
+            return [v]
         if isinstance(v, str):
             s = v.strip()
             if not s:
