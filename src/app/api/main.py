@@ -203,7 +203,7 @@ async def _process_yookassa_payment(data: dict) -> dict:
 
 
 @app.post("/webhook/yookassa")
-async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None, alias="X-Webhook-Secret")):
+async def yookassa_webhook(request: Request):
     """
     Эндпоинт для обработки webhook'ов от ЮKassa.
 
@@ -213,21 +213,9 @@ async def yookassa_webhook(request: Request, x_webhook_secret: str = Header(None
     - payment.canceled - отмена платежа (логируем)
     - refund.succeeded - возврат (логируем)
 
-    Защита: X-Webhook-Secret header.
-    Идемпотентность: in-memory set.
+    Идемпотентность: local DB (payment.subscription_id + metadata.notified).
     """
     try:
-        # Проверка секрета — обязательна. Без настроенного секрета webhook не обрабатывается.
-        secret = settings.YOOKASSA_WEBHOOK_SECRET
-        if not secret or not str(secret).strip():
-            logger.error("Webhook rejected: YOOKASSA_WEBHOOK_SECRET not configured — refusing request")
-            raise HTTPException(status_code=403, detail="Webhook secret not configured")
-        if not x_webhook_secret or x_webhook_secret != str(secret).strip():
-            logger.warning(
-                f"Webhook rejected: X-Webhook-Secret mismatch "
-                f"(received={'<empty>' if not x_webhook_secret else '<present>'})"
-            )
-            raise HTTPException(status_code=401, detail="Unauthorized")
 
         # Парсим JSON
         try:
