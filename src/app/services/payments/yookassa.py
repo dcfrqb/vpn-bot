@@ -587,9 +587,68 @@ async def handle_successful_payment(
             parse_mode="HTML"
         )
 
-        # notified=True только после успешной отправки — иначе recovery сможет повторить
+        # Уведомление администраторам
+        from html import escape as _he
+        from app.config import settings as _settings
+        if _settings.ADMINS:
+            _first = (telegram_user.first_name or "").strip()
+            _last = (telegram_user.last_name or "").strip()
+            user_full_name = f"{_first} {_last}".strip() or "Без имени"
+
+            username_line = (
+                f"Username: @{_he(telegram_user.username)}\n" if telegram_user.username else ""
+            )
+
+            plan_label = _he(plan_name)
+            if period_months:
+                months_word = (
+                    "месяц" if period_months == 1
+                    else "месяца" if period_months in (2, 3, 4)
+                    else "месяцев"
+                )
+                plan_label = f"{plan_label} {period_months} {months_word}"
+
+            expires_str = valid_until.strftime("%d.%m.%Y")
+
+            currency_symbol = payment.currency.upper() if payment and payment.currency else "RUB"
+            # external_id — это p.id из YooKassa (UUID формата xxxxxxxx-xxxx-...)
+            external_id = payment.external_id if payment else "—"
+            remna_id = subscription.remna_user_id or "—"
+
+            # Сумма: показываем копейки только если они не нулевые
+            amount_str = f"{amount:.2f}".rstrip("0").rstrip(".")
+            if "." not in amount_str:
+                amount_str = f"{int(amount)}"
+
+            admin_text = (
+                "💰 <b>Новая оплата VPN</b>\n\n"
+                f"Пользователь: {_he(user_full_name)}\n"
+                f"{username_line}"
+                f"Telegram ID: <code>{telegram_user_id}</code>\n"
+                f"Тариф: {plan_label}\n"
+                f"Сумма: {amount_str} {_he(currency_symbol)}\n"
+                f"Действует до: {expires_str}\n"
+                f"Payment ID: <code>{_he(str(external_id))}</code>\n"
+                f"Remnawave ID: <code>{_he(str(remna_id))}</code>"
+            )
+
+            admin_notified = False
+            for admin_id in _settings.ADMINS:
+                try:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=admin_text,
+                        parse_mode="HTML"
+                    )
+                    admin_notified = True
+                except Exception as admin_err:
+                    logger.warning(f"[{trace_id}] не удалось отправить уведомление админу {admin_id}: {admin_err}")
+
+        # notified=True — пользователь уведомлён; admin_notified — отдельный флаг для админов
         meta = dict(meta) if isinstance(meta, dict) else {}
         meta["notified"] = True
+        if _settings.ADMINS:
+            meta["admin_notified"] = admin_notified
         payment.payment_metadata = meta
         await session.commit()
         

@@ -21,7 +21,7 @@ from app.keyboards import (
 )
 from app.services.users import get_user_active_subscription
 from app.db.session import SessionLocal
-from app.db.models import Subscription, Payment as PaymentModel
+from app.db.models import Payment as PaymentModel
 from sqlalchemy import select
 
 router = Router(name="legacy_payments")
@@ -373,25 +373,6 @@ async def get_subscription_link(callback: types.CallbackQuery):
                     if found_user:
                         remna_user_id = found_user.get('uuid')
                         logger.info(f"✅ Найден пользователь в Remna API: uuid={remna_user_id}")
-                        
-                        # Сохраняем remna_user_id в БД
-                        if SessionLocal:
-                            async with SessionLocal() as session:
-                                sub_result = await session.execute(
-                                    select(Subscription).where(Subscription.id == subscription.id)
-                                )
-                                sub = sub_result.scalar_one_or_none()
-                                if sub:
-                                    sub.remna_user_id = str(remna_user_id)
-                                    from app.db.models import TelegramUser
-                                    user_result = await session.execute(
-                                        select(TelegramUser).where(TelegramUser.telegram_id == callback.from_user.id)
-                                    )
-                                    user = user_result.scalar_one_or_none()
-                                    if user:
-                                        user.remna_user_id = str(remna_user_id)
-                                    await session.commit()
-                                    logger.info(f"✅ remna_user_id сохранен в БД")
                 except Exception as e:
                     logger.error(f"❌ Ошибка при поиске пользователя в Remna API: {e}")
                     import traceback
@@ -408,20 +389,8 @@ async def get_subscription_link(callback: types.CallbackQuery):
                     logger.info(f"📋 Результат получения ссылки: {subscription_url if subscription_url else 'None'}")
                     
                     if subscription_url and subscription_url.strip():
-                        subscription_url = subscription_url.strip()  # Убираем пробелы
+                        subscription_url = subscription_url.strip()
                         logger.info(f"✅ Subscription URL получен из Remna API: {subscription_url[:50]}...")
-                        if SessionLocal:
-                            async with SessionLocal() as session:
-                                sub_result = await session.execute(
-                                    select(Subscription).where(Subscription.id == subscription.id)
-                                )
-                                sub = sub_result.scalar_one_or_none()
-                                if sub:
-                                    if not sub.config_data:
-                                        sub.config_data = {}
-                                    sub.config_data["subscription_url"] = subscription_url
-                                    await session.commit()
-                                    logger.info(f"✅ Ссылка подписки сохранена в БД для пользователя {callback.from_user.id}: {subscription_url[:50]}...")
                     else:
                         logger.warning(f"⚠️ Не удалось получить ссылку подписки для remna_user_id={remna_user_id} (получено: {repr(subscription_url)})")
                         subscription_url = None  # Явно устанавливаем None
@@ -469,21 +438,6 @@ async def get_subscription_link(callback: types.CallbackQuery):
             logger.error(f"❌ Финальная проверка: subscription_url невалидна для пользователя {callback.from_user.id} (значение: {repr(subscription_url)})")
             logger.error(f"   subscription.remna_user_id: {subscription.remna_user_id}")
             logger.error(f"   subscription.config_data: {subscription.config_data}")
-            # Пробуем еще раз получить из БД
-            if SessionLocal:
-                try:
-                    async with SessionLocal() as session:
-                        sub_result = await session.execute(
-                            select(Subscription).where(Subscription.id == subscription.id)
-                        )
-                        sub = sub_result.scalar_one_or_none()
-                        if sub and sub.config_data and "subscription_url" in sub.config_data:
-                            subscription_url = sub.config_data["subscription_url"]
-                            if subscription_url and subscription_url.strip():
-                                subscription_url = subscription_url.strip()
-                                logger.info(f"✅ Subscription URL восстановлен из БД: {subscription_url[:50]}...")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при восстановлении из БД: {e}")
         
         if subscription_url and subscription_url.strip():
             from app.utils.html import escape_html
