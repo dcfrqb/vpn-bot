@@ -34,7 +34,8 @@ async def ui_callback_handler(callback: types.CallbackQuery):
         logger.warning(f"Ошибка при answerCallbackQuery: {e}")
         # Продолжаем обработку даже если answer не удался
     
-    logger.info(f"UI callback от пользователя {user_id}: {callback.data}")
+    _uname = f"@{callback.from_user.username}" if callback.from_user.username else "no_username"
+    logger.info(f"UI callback от пользователя {user_id} ({_uname}): {callback.data}")
     
     try:
         # Парсим callback_data (легкая операция)

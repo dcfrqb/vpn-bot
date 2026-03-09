@@ -57,8 +57,10 @@ async def cmd_start(m: types.Message):
     screen_before = navigator.get_current_screen(telegram_id)
     backstack_before = navigator.get_backstack(telegram_id)
     
+    _uname = f"@{m.from_user.username}" if m.from_user.username else "no_username"
     logger.info(
-        f"[{request_id}] /start: user_id={telegram_id}, "
+        f"[{request_id}] /start: user_id={telegram_id}, username={_uname}, "
+        f"first_name={m.from_user.first_name!r}, last_name={m.from_user.last_name!r}, "
         f"screen_before={screen_before.value if screen_before else 'None'}, "
         f"backstack_size={len(backstack_before)}"
     )
