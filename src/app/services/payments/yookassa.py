@@ -706,8 +706,8 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
             "description": payment.description,
             "metadata": payment.metadata or {},
             "paid": payment.paid,
-            "created_at": payment.created_at.isoformat() if hasattr(payment, 'created_at') and payment.created_at else None,
-            "captured_at": payment.captured_at.isoformat() if hasattr(payment, 'captured_at') and payment.captured_at else None,
+            "created_at": payment.created_at.isoformat() if hasattr(payment, 'created_at') and payment.created_at and hasattr(payment.created_at, 'isoformat') else (str(payment.created_at) if hasattr(payment, 'created_at') and payment.created_at else None),
+            "captured_at": payment.captured_at.isoformat() if hasattr(payment, 'captured_at') and payment.captured_at and hasattr(payment.captured_at, 'isoformat') else (str(payment.captured_at) if hasattr(payment, 'captured_at') and payment.captured_at else None),
         }
     except Exception as e:
         err_msg = str(e).lower()
