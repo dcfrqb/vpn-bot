@@ -360,11 +360,13 @@ class RemnaClient:
     ) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
         # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
+        # Если expire_at не указан — используем сентинельную дату 2000-01-01 (нет подписки).
+        # Дата до 2020 в subscription-логике трактуется как "нет подписки" (статус "none").
+        NO_SUBSCRIPTION_SENTINEL = "2000-01-01T00:00:00Z"
         payload = {"username": username, "password": password}
-        normalized_expire = normalize_expire_at(expire_at)
-        if normalized_expire:
-            payload["expireAt"] = normalized_expire
-            logger.debug(f"Remna create_user: expireAt={normalized_expire}")
+        normalized_expire = normalize_expire_at(expire_at) or NO_SUBSCRIPTION_SENTINEL
+        payload["expireAt"] = normalized_expire
+        logger.debug(f"Remna create_user: expireAt={normalized_expire}")
         if telegram_id:
             payload["telegramId"] = int(telegram_id)
         if active_internal_squads:
@@ -643,9 +645,9 @@ class RemnaClient:
                 logger.warning(f"Ошибка парсинга expireAt для пользователя {remna_user.uuid}: {e}")
                 expire_dt = None
         
-        # Подписка существует только если есть конкретная дата expireAt.
-        # Пользователь без expireAt = пользователь без подписки (статус "none", не "expired").
-        if expire_dt is not None:
+        # Подписка существует только если есть реальная дата expireAt.
+        # Даты до 2020 — сентинельные (пользователь создан без подписки) → subscription=None → статус "none".
+        if expire_dt is not None and expire_dt.year >= 2020:
             plan = raw_data.get('plan') or raw_data.get('planCode') or raw_data.get('plan_code')
 
             subscription = RemnaSubscription(
