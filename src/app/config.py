@@ -29,8 +29,14 @@ class Settings(BaseSettings):
     REMNA_PASSWORD: Union[str, None] = None
 
     TELEGRAM_WEBHOOK_URL: Union[str, None] = None  # URL для Telegram webhook
+    BOT_SECRET_TOKEN: Union[str, None] = None  # X-Telegram-Bot-Api-Secret-Token для webhook
     YOOKASSA_WEBHOOK_URL: Union[str, None] = None  # URL для YooKassa webhook
     WEBHOOK_API_PORT: Union[int, None] = 8001  # Порт для FastAPI webhook сервера
+
+    # Базовый URL subscription-сервера (например https://sub.example.com).
+    # Если задан — используется для domain override в subscription URL из API
+    # и для построения URL из subscription token.
+    SUBSCRIPTION_BASE_URL: Union[str, None] = None
 
     # Crypto Payment Configuration
     CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
@@ -45,7 +51,7 @@ class Settings(BaseSettings):
     _base_path = Path("/opt/crs-vpn-bot/.env")
     _local_path = Path(__file__).resolve().parents[2] / ".env"
     _env_path = str(_base_path if _base_path.exists() else _local_path)
-    model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="allow")
+    model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="forbid")
 
     @field_validator("ADMINS", mode="after")
     @classmethod

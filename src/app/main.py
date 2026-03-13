@@ -198,15 +198,21 @@ async def run_webhook():
     logger.info(f"Итоговый Telegram webhook URL: {webhook_url}")
     logger.info(f"Webhook path для обработчика: {webhook_path}")
     
-    await bot.set_webhook(webhook_url)
-    logger.info(f"Telegram webhook установлен: {webhook_url}")
-    
+    secret_token = settings.BOT_SECRET_TOKEN or None
+    await bot.set_webhook(webhook_url, secret_token=secret_token)
+    if secret_token:
+        logger.info(f"Telegram webhook установлен с BOT_SECRET_TOKEN: {webhook_url}")
+    else:
+        logger.warning("BOT_SECRET_TOKEN не задан — Telegram webhook без проверки секрета")
+        logger.info(f"Telegram webhook установлен: {webhook_url}")
+
     app = web.Application()
     app["bot"] = bot
-    
+
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
+        secret_token=secret_token,
     )
     webhook_requests_handler.register(app, path=webhook_path)
     setup_application(app, dp, bot=bot)

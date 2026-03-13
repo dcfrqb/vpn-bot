@@ -763,18 +763,37 @@ class RemnaClient:
             
             # Если нашли subscription_url напрямую
             if subscription_url:
-                # Убеждаемся, что используется .com домен (заменяем .ru на .com если встретили)
-                if "sub.crs-projects.ru" in subscription_url:
-                    subscription_url = subscription_url.replace("sub.crs-projects.ru", "sub.crs-projects.com")
-                    logger.info(f"Заменен домен на .com для пользователя {user_id}")
+                # Domain override через SUBSCRIPTION_BASE_URL из config (убирает hardcoded домены)
+                sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
+                if sub_base:
+                    try:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(subscription_url)
+                        sub_parsed = urlparse(sub_base)
+                        if parsed.netloc and parsed.netloc != sub_parsed.netloc:
+                            subscription_url = subscription_url.replace(
+                                f"{parsed.scheme}://{parsed.netloc}",
+                                sub_base,
+                                1,
+                            )
+                            logger.info(f"Применён SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
+                    except Exception as url_err:
+                        logger.warning(f"Не удалось применить SUBSCRIPTION_BASE_URL override: {url_err}")
                 logger.info(f"Найден subscriptionUrl для пользователя {user_id}: {subscription_url[:50]}...")
                 return subscription_url
-            
-            # Если нашли token, формируем URL
+
+            # Если нашли только token — формируем URL из SUBSCRIPTION_BASE_URL
             if subscription_token:
-                subscription_url = f"https://sub.crs-projects.com/{subscription_token}"
-                logger.info(f"Сформирован subscriptionUrl из token для пользователя {user_id}: {subscription_url[:50]}...")
-                return subscription_url
+                sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
+                if sub_base:
+                    subscription_url = f"{sub_base}/{subscription_token}"
+                    logger.info(f"Сформирован subscriptionUrl из token для пользователя {user_id}: {subscription_url[:50]}...")
+                    return subscription_url
+                else:
+                    logger.warning(
+                        f"SUBSCRIPTION_BASE_URL не задан — не удаётся построить URL из token для пользователя {user_id}. "
+                        "Задайте SUBSCRIPTION_BASE_URL в .env"
+                    )
             
             # Если ничего не нашли, логируем структуру для отладки
             logger.warning(f"Subscription URL не найден для пользователя {user_id}")

@@ -69,8 +69,8 @@ def run_preflight(
     if not _get("YOOKASSA_SHOP_ID"):
         warnings.append("YOOKASSA_SHOP_ID не задан — платежи только вручную")
     if not _get("YOOKASSA_WEBHOOK_SECRET"):
-        if strict_env:
-            errors.append("YOOKASSA_WEBHOOK_SECRET — обязателен при STRICT_ENV=1")
+        if in_docker:
+            errors.append("YOOKASSA_WEBHOOK_SECRET — секрет для проверки webhook YooKassa (обязателен в продакшене)")
         else:
             warnings.append("YOOKASSA_WEBHOOK_SECRET не задан (только для dev!)")
 
@@ -79,6 +79,12 @@ def run_preflight(
 
     if not _get("ADMINS") and not _get("admin_ids"):
         warnings.append("ADMINS не задан — административные команды недоступны")
+
+    if _get("TELEGRAM_WEBHOOK_URL") and not _get("BOT_SECRET_TOKEN"):
+        warnings.append("BOT_SECRET_TOKEN не задан — Telegram webhook без проверки X-Telegram-Bot-Api-Secret-Token")
+
+    if not _get("SUBSCRIPTION_BASE_URL"):
+        warnings.append("SUBSCRIPTION_BASE_URL не задан — subscription URL берётся из API без domain override (задайте https://sub.yourdomain.com)")
 
     for w in warnings:
         logger.warning(f"Preflight: {w}")

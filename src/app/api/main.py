@@ -2,6 +2,9 @@
 FastAPI приложение — webhook ЮKassa.
 Полноценная обработка: проверка подписи, идемпотентность, provision.
 """
+import hmac
+import ipaddress
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -10,6 +13,35 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.config import settings
 from app.logger import logger
+
+# IP-диапазоны YooKassa (https://yookassa.ru/developers/using-api/webhooks)
+_YOOKASSA_NETWORKS = [
+    ipaddress.ip_network("185.71.76.0/27"),
+    ipaddress.ip_network("185.71.77.0/27"),
+    ipaddress.ip_network("77.75.153.0/25"),
+    ipaddress.ip_network("77.75.154.128/25"),
+    ipaddress.ip_network("2a02:5180::/32"),
+]
+
+
+def _get_client_ip(request: Request) -> str | None:
+    """Возвращает IP клиента с учётом nginx-прокси."""
+    for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
+        raw = request.headers.get(header)
+        if raw:
+            return raw.split(",")[0].strip()
+    return request.client.host if request.client else None
+
+
+def _is_yookassa_ip(ip_str: str | None) -> bool:
+    """Проверяет, входит ли IP в разрешённые диапазоны YooKassa."""
+    if not ip_str:
+        return False
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return any(ip in net for net in _YOOKASSA_NETWORKS)
+    except ValueError:
+        return False
 
 
 # Глобальная переменная для хранения экземпляра бота
@@ -95,6 +127,25 @@ async def yookassa_webhook(request: Request):
 
     Идемпотентность: local DB (payment.subscription_id + metadata.notified).
     """
+    # --- SECURITY: IP whitelist ---
+    client_ip = _get_client_ip(request)
+    if not _is_yookassa_ip(client_ip):
+        logger.warning(f"Webhook YooKassa отклонён: неизвестный IP {client_ip!r}")
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # --- SECURITY: X-Webhook-Secret header (timing-safe) ---
+    expected_secret = settings.YOOKASSA_WEBHOOK_SECRET
+    if expected_secret:
+        received_secret = request.headers.get("X-Webhook-Secret", "")
+        if not received_secret or not hmac.compare_digest(
+            received_secret.encode("utf-8"),
+            expected_secret.encode("utf-8"),
+        ):
+            logger.warning(f"Webhook YooKassa отклонён: неверный X-Webhook-Secret (IP: {client_ip})")
+            raise HTTPException(status_code=403, detail="Forbidden")
+    else:
+        logger.warning("YOOKASSA_WEBHOOK_SECRET не задан — проверка секрета пропущена!")
+
     try:
 
         # Парсим JSON

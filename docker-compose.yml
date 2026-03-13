@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-crs_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crs_pass}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -40,7 +40,7 @@ services:
     container_name: crs_vpn_redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -67,9 +67,9 @@ services:
     volumes:
       - ./logs:/app/logs
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 8000 || exit 1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:8000/ > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -102,7 +102,7 @@ services:
     volumes:
       - ./logs:/app/logs
     ports:
-      - "${WEBHOOK_API_PORT:-8001}:8001"
+      - "127.0.0.1:${WEBHOOK_API_PORT:-8001}:8001"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
       interval: 15s
