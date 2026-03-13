@@ -170,6 +170,9 @@ async def recheck_single_payment(
             p.amount = amount
 
         if new_status == "succeeded" and not p.subscription_id:
+            # Commit status update before provisioning: ensures status is persisted
+            # even if provisioning fails partway through.
+            await session.commit()
             await handle_successful_payment(
                 session=session,
                 payment_id=p.id,

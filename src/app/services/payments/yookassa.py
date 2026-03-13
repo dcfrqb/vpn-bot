@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
+from dateutil.relativedelta import relativedelta
 import secrets
 import string
 import uuid
@@ -282,7 +283,7 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             stmt = (
                 select(PaymentModel)
                 .where(PaymentModel.external_id == payment_id)
-                .with_for_update(skip_locked=True)
+                .with_for_update()  # Blocking: concurrent duplicate webhooks wait, then see updated state
             )
             result = await session.execute(stmt)
             existing_payment = result.scalar_one_or_none()
@@ -425,6 +426,22 @@ async def handle_successful_payment(
             logger.info(f"[{trace_id}] handle_successful_payment: already notified payment_id={payment_id}")
             return
 
+        # Идемпотентность provisioning: re-check subscription_id под блокировкой.
+        # Защищает от race condition при конкурентных вызовах (webhook + recovery, двойной клик).
+        pay_locked = await session.execute(
+            select(PaymentModel).where(PaymentModel.id == payment_id).with_for_update()
+        )
+        payment_locked = pay_locked.scalar_one_or_none()
+        if not payment_locked:
+            logger.error(f"[{trace_id}] handle_successful_payment: payment lost after lock id={payment_id}")
+            return
+        if payment_locked.subscription_id:
+            logger.info(
+                f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
+                f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
+            )
+            return
+
         # Получаем тариф и период из payment_metadata
         plan_code = None
         period_months = None
@@ -476,14 +493,14 @@ async def handle_successful_payment(
                 plan_code = "basic"
                 period_months = 1
         
-        # Определяем plan_name и period_days
+        # Определяем plan_name
         if plan_code == "premium":
             plan_name = "Премиум"
         else:
             plan_name = "Базовый"
         
-        period_days = period_months * 30  # Примерно 30 дней в месяце
-        valid_until = datetime.utcnow() + timedelta(days=period_days)
+        # Используем calendar months (не 30-дневное приближение) для точного expireAt
+        valid_until = datetime.utcnow() + relativedelta(months=period_months)
         
         user_result = await session.execute(
             select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
