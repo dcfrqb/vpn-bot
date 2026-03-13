@@ -435,7 +435,6 @@ async def handle_payment_confirmation(callback: types.CallbackQuery):
                 telegram_id=user_id,
                 username=callback.from_user.username,
                 first_name=callback.from_user.first_name,
-                create_trial=False
             )
             
             # Проверяем, не создан ли уже платёж (повторное нажатие)

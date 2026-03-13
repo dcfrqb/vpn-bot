@@ -265,7 +265,6 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                 first_name=None,
                 last_name=None,
                 language_code=None,
-                create_trial=False,
             )
         except Exception as e:
             logger.warning(f"[{trace_id}] get_or_create_telegram_user failed: user={telegram_user_id} err={e}")

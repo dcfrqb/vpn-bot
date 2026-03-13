@@ -1,6 +1,6 @@
 """Сервис для работы с подписками и уведомлениями"""
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from sqlalchemy import select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -258,79 +258,4 @@ async def process_subscription_notifications(bot) -> Dict[str, int]:
         "errors": errors
     }
 
-
-async def create_trial_subscription(telegram_user_id: int) -> Optional[Subscription]:
-    """
-    Создает пробную подписку на 2 дня для нового пользователя.
-    Возвращает созданную подписку или None, если подписка не была создана.
-    """
-    if not SessionLocal:
-        logger.warning("БД не настроена, пробная подписка не может быть создана")
-        return None
-    
-    async with SessionLocal() as session:
-        try:
-            # Проверяем, есть ли у пользователя уже какие-либо подписки
-            result = await session.execute(
-                select(Subscription).where(
-                    Subscription.telegram_user_id == telegram_user_id
-                )
-            )
-            existing_subs = result.scalars().all()
-            
-            # Если у пользователя уже были подписки, не создаем пробную
-            if existing_subs:
-                logger.info(f"У пользователя {telegram_user_id} уже были подписки, пробная подписка не создается")
-                return None
-            
-            # Проверяем, что пользователь существует
-            from app.db.models import TelegramUser
-            user_result = await session.execute(
-                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
-            )
-            user = user_result.scalar_one_or_none()
-            
-            if not user:
-                logger.warning(f"Пользователь {telegram_user_id} не найден, пробная подписка не создается")
-                return None
-            
-            # Создаем пробную подписку на 2 дня
-            valid_until = datetime.utcnow() + timedelta(days=2)
-            trial_subscription = Subscription(
-                telegram_user_id=telegram_user_id,
-                plan_code="trial",
-                plan_name="Пробный период",
-                active=True,
-                valid_until=valid_until
-            )
-            session.add(trial_subscription)
-            await session.commit()
-            await session.refresh(trial_subscription)
-            
-            logger.info(f"Создана пробная подписка на 2 дня для пользователя {telegram_user_id}")
-            
-            # Создаем пользователя в Remna API для пробной подписки в фоне (не блокируем ответ)
-            import asyncio
-            async def create_remna_user_background():
-                try:
-                    from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-                    subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                        telegram_user_id=telegram_user_id,
-                        subscription_id=trial_subscription.id
-                    )
-                    if subscription_url:
-                        logger.info(f"Пользователь создан в Remna API для пробной подписки {telegram_user_id}")
-                except Exception as remna_error:
-                    # Не критично, если не удалось создать пользователя в Remna сразу
-                    logger.warning(f"Не удалось создать пользователя в Remna API для пробной подписки: {remna_error}")
-            
-            # Запускаем в фоне, не ждем результата
-            asyncio.create_task(create_remna_user_background())
-            
-            return trial_subscription
-            
-        except Exception as e:
-            logger.error(f"Ошибка при создании пробной подписки для пользователя {telegram_user_id}: {e}")
-            await session.rollback()
-            return None
 

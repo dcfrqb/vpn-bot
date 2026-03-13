@@ -191,52 +191,27 @@ async def cmd_start(m: types.Message):
                     force_sync=True
                 )
         except RemnaUnavailableError:
-            # Remna недоступна, но у нас есть fallback
-            logger.warning(f"Remna недоступна для {m.from_user.id}, используем fallback")
-            # Fallback уже должен был вернуть результат
+            # RemnaWave — единственный источник истины. Не используем local DB fallback.
+            logger.warning(f"Remna недоступна для {m.from_user.id}, статус: none")
             if not sync_result:
-                subscription = await get_user_active_subscription(m.from_user.id, use_cache=True)
-                subscription_status = "none"
-                expires_at = None
-                if subscription:
-                    if subscription.active and subscription.valid_until:
-                        if subscription.valid_until > datetime.utcnow():
-                            subscription_status = "active"
-                            expires_at = subscription.valid_until
-                        else:
-                            subscription_status = "expired"
-                            expires_at = subscription.valid_until
-                
                 sync_result = SyncResult(
                     is_new_user_created=False,
                     user_remna_uuid=None,
-                    subscription_status=subscription_status,
-                    expires_at=expires_at,
-                    source="remna_fallback"
+                    subscription_status="none",
+                    expires_at=None,
+                    source="remna_unavailable",
                 )
         except Exception as e:
             logger.error(
                 f"Ошибка синхронизации для пользователя {m.from_user.id}: {e}\n"
                 f"Traceback: {traceback.format_exc()}"
             )
-            subscription = await get_user_active_subscription(m.from_user.id, use_cache=True)
-            subscription_status = "none"
-            expires_at = None
-            if subscription:
-                if subscription.active and subscription.valid_until:
-                    if subscription.valid_until > datetime.utcnow():
-                        subscription_status = "active"
-                        expires_at = subscription.valid_until
-                    else:
-                        subscription_status = "expired"
-                        expires_at = subscription.valid_until
-            
             sync_result = SyncResult(
                 is_new_user_created=False,
                 user_remna_uuid=None,
-                subscription_status=subscription_status,
-                expires_at=expires_at,
-                source="remna_fallback"
+                subscription_status="none",
+                expires_at=None,
+                source="remna_error",
             )
         
         # Проверяем, что sync_result не None

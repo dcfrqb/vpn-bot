@@ -81,7 +81,6 @@ async def get_or_create_telegram_user(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     language_code: Optional[str] = None,
-    create_trial: bool = True,
 ):
     """
     Заглушка: создаёт/проверяет пользователя в Remnawave.

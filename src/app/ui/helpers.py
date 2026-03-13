@@ -3,7 +3,6 @@
 """
 from typing import Optional
 from datetime import datetime
-from app.services.users import get_user_active_subscription
 from app.services.sync_service import SyncService, RemnaUnavailableError
 from app.services.cache import get_cached_sync_result
 from app.routers.subscription_view import SubscriptionViewModel, create_subscription_view_model
@@ -74,47 +73,26 @@ async def get_main_menu_viewmodel(
                 force_sync=force_sync
             )
         except RemnaUnavailableError:
-            # Remna недоступна, fallback на кэш
-            logger.warning(f"Remna недоступна для {telegram_id}")
-            subscription = await get_user_active_subscription(telegram_id, use_cache=True)
-            subscription_status = "none"
-            expires_at = None
-            if subscription and subscription.valid_until:
-                if subscription.valid_until > datetime.utcnow():
-                    subscription_status = "active"
-                    expires_at = subscription.valid_until
-                else:
-                    subscription_status = "expired"
-                    expires_at = subscription.valid_until
-            
+            # RemnaWave — единственный источник истины по статусу подписки.
+            # Local DB не используется как fallback, чтобы не показывать фантомный статус.
+            logger.warning(f"Remna недоступна для {telegram_id}, статус: none")
             from app.services.sync_service import SyncResult
             sync_result = SyncResult(
                 is_new_user_created=False,
                 user_remna_uuid=None,
-                subscription_status=subscription_status,
-                expires_at=expires_at,
-                source="remna_fallback"
+                subscription_status="none",
+                expires_at=None,
+                source="remna_unavailable",
             )
         except Exception as e:
             logger.error(f"Ошибка синхронизации для {telegram_id}: {e}")
-            subscription = await get_user_active_subscription(telegram_id, use_cache=True)
-            subscription_status = "none"
-            expires_at = None
-            if subscription and subscription.valid_until:
-                if subscription.valid_until > datetime.utcnow():
-                    subscription_status = "active"
-                    expires_at = subscription.valid_until
-                else:
-                    subscription_status = "expired"
-                    expires_at = subscription.valid_until
-            
             from app.services.sync_service import SyncResult
             sync_result = SyncResult(
                 is_new_user_created=False,
                 user_remna_uuid=None,
-                subscription_status=subscription_status,
-                expires_at=expires_at,
-                source="remna_fallback"
+                subscription_status="none",
+                expires_at=None,
+                source="remna_error",
             )
     
     # Создаем SubscriptionViewModel
@@ -127,24 +105,12 @@ async def get_main_menu_viewmodel(
             source=sync_result.source
         )
     else:
-        # Fallback: определяем из subscription
-        subscription = await get_user_active_subscription(telegram_id, use_cache=True)
-        if subscription and subscription.valid_until:
-            if subscription.valid_until > datetime.utcnow():
-                subscription_status = "active"
-                expires_at = subscription.valid_until
-            else:
-                subscription_status = "expired"
-                expires_at = subscription.valid_until
-        else:
-            subscription_status = "none"
-            expires_at = None
-        
+        # sync_result не должен быть None после блоков выше, но на случай непредвиденного.
         subscription_vm = create_subscription_view_model(
-            subscription_status=subscription_status,
-            expires_at=expires_at,
+            subscription_status="none",
+            expires_at=None,
             days_left=None,
-            source="remna_fallback"
+            source="unavailable",
         )
     
     # Создаем MainMenuViewModel
@@ -218,7 +184,6 @@ async def get_profile_viewmodel(telegram_id: int) -> 'ProfileViewModel':
         first_name=None,
         last_name=None,
         language_code=None,
-        create_trial=False
     )
     
     # Получаем подписку
