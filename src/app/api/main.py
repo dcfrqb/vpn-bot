@@ -77,6 +77,13 @@ async def lifespan(app: FastAPI):
         logger.error(f"Ошибка инициализации бота: {e}")
         raise
 
+    if not settings.YOOKASSA_WEBHOOK_SECRET:
+        logger.error(
+            "SECURITY: YOOKASSA_WEBHOOK_SECRET не задан — "
+            "webhook API работает без проверки подписи! "
+            "Установите YOOKASSA_WEBHOOK_SECRET в .env"
+        )
+
     yield
 
     # Закрытие бота при остановке
@@ -144,7 +151,7 @@ async def yookassa_webhook(request: Request):
             logger.warning(f"Webhook YooKassa отклонён: неверный X-Webhook-Secret (IP: {client_ip})")
             raise HTTPException(status_code=403, detail="Forbidden")
     else:
-        logger.warning("YOOKASSA_WEBHOOK_SECRET не задан — проверка секрета пропущена!")
+        logger.error("YOOKASSA_WEBHOOK_SECRET не задан — webhook принимается без проверки подписи! Установите переменную окружения.")
 
     try:
 

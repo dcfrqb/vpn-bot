@@ -436,11 +436,18 @@ async def handle_successful_payment(
             logger.error(f"[{trace_id}] handle_successful_payment: payment lost after lock id={payment_id}")
             return
         if payment_locked.subscription_id:
+            meta_locked = payment_locked.payment_metadata or {}
+            needs_reprovision = isinstance(meta_locked, dict) and meta_locked.get("needs_provisioning")
+            if not needs_reprovision:
+                logger.info(
+                    f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
+                    f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
+                )
+                return
             logger.info(
-                f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
+                f"[{trace_id}] handle_successful_payment: re-provisioning after prior failure "
                 f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
             )
-            return
 
         logger.info(
             f"[{trace_id}] subscription_provisioning_started: payment_id={payment_id} "
@@ -556,17 +563,51 @@ async def handle_successful_payment(
                 payment.paid_at = datetime.utcnow()
             await session.commit()
         
+        actual_expire_at: Optional[datetime] = None
+
         subscription_url = await get_or_create_remna_user_and_get_subscription_url(
             telegram_user_id=telegram_user_id,
             subscription_id=subscription.id,
             period_months=period_months,  # P1: продлеваем expireAt от текущего в Remnawave
         )
-        
+
         if subscription_url:
             if not subscription.config_data:
                 subscription.config_data = {}
             subscription.config_data["subscription_url"] = subscription_url
             await session.commit()
+
+        # M-1: populate subscription.remna_user_id + H-2: fetch actual Remnawave expiry for message
+        try:
+            tg_refreshed_result = await session.execute(
+                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+            )
+            tg_refreshed = tg_refreshed_result.scalar_one_or_none()
+            if tg_refreshed and tg_refreshed.remna_user_id:
+                if not subscription.remna_user_id:
+                    subscription.remna_user_id = tg_refreshed.remna_user_id
+                    await session.commit()
+                    logger.debug(f"[{trace_id}] subscription.remna_user_id set: {tg_refreshed.remna_user_id}")
+                # H-2: fetch actual expiry from Remnawave
+                try:
+                    _rc = RemnaClient()
+                    try:
+                        remna_data = await _rc.get_user_by_id(str(tg_refreshed.remna_user_id))
+                        _raw = remna_data.get("response", remna_data) if isinstance(remna_data, dict) else {}
+                        if not isinstance(_raw, dict):
+                            _raw = remna_data if isinstance(remna_data, dict) else {}
+                        expire_raw = _raw.get("expireAt")
+                        if expire_raw:
+                            from app.tasks.expiry_notifier import _parse_expire_dt as _pdt
+                            actual_expire_at = _pdt(expire_raw)
+                            if actual_expire_at:
+                                actual_expire_at = actual_expire_at.replace(tzinfo=None)
+                    finally:
+                        await _rc.close()
+                except Exception as _remna_e:
+                    logger.debug(f"[{trace_id}] H-2: could not fetch actual expiry from Remnawave: {_remna_e}")
+        except Exception as _m1_e:
+            logger.debug(f"[{trace_id}] M-1/H-2 post-provision update failed: {_m1_e}")
 
         # P2: cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
         try:
@@ -592,10 +633,12 @@ async def handle_successful_payment(
         if custom_message:
             message_text = custom_message
         else:
+            # H-2: use actual Remnawave expiry if available, fallback to locally computed valid_until
+            _display_expire = actual_expire_at if actual_expire_at else valid_until
             message_text = (
                 "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
                 f"💳 <b>Тариф:</b> {plan_name}\n"
-                f"📅 <b>Действует до:</b> {valid_until.strftime('%d.%m.%Y %H:%M')}\n"
+                f"📅 <b>Действует до:</b> {_display_expire.strftime('%d.%m.%Y %H:%M')}\n"
                 f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
                 "🎉 Теперь вы можете получить ссылку для настройки VPN."
             )
@@ -688,7 +731,7 @@ async def handle_successful_payment(
                 select(PaymentModel).where(PaymentModel.id == payment_id)
             )
             payment = payment_result.scalar_one_or_none()
-            if payment and not payment.subscription_id:
+            if payment:
                 meta = payment.payment_metadata or {}
                 if not isinstance(meta, dict):
                     meta = dict(meta) if meta else {}

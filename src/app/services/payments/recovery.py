@@ -31,14 +31,32 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
         return result
 
     fallback_threshold = datetime.utcnow() - timedelta(minutes=PROVISIONING_FALLBACK_MINUTES)
+    recent_threshold = datetime.utcnow() - timedelta(hours=24)
 
     async with SessionLocal() as session:
-        stmt = select(PaymentModel).where(
+        # Case 1: succeeded without subscription_id (classic missing provisioning)
+        stmt_no_sub = select(PaymentModel).where(
             PaymentModel.status == "succeeded",
             PaymentModel.subscription_id.is_(None),
         )
-        rows = await session.execute(stmt)
-        payments = list(rows.scalars().all())
+        rows_no_sub = await session.execute(stmt_no_sub)
+        payments_no_sub = list(rows_no_sub.scalars().all())
+
+        # Case 2: succeeded with subscription_id set, but Remnawave provisioning failed
+        # (subscription was created but get_or_create_remna_user failed; needs_provisioning=True)
+        # Limit to last 24h to avoid scanning the full payments table
+        stmt_with_sub = select(PaymentModel).where(
+            PaymentModel.status == "succeeded",
+            PaymentModel.subscription_id.isnot(None),
+            PaymentModel.created_at > recent_threshold,
+        )
+        rows_with_sub = await session.execute(stmt_with_sub)
+        payments_with_sub = [
+            p for p in rows_with_sub.scalars().all()
+            if isinstance(p.payment_metadata, dict) and p.payment_metadata.get("needs_provisioning")
+        ]
+
+    payments = payments_no_sub + payments_with_sub
 
     candidates = []
     for payment in payments:

@@ -511,6 +511,16 @@ async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
         await callback.answer("✅ Запрос уже обработан", show_alert=True)
         return False
 
+    # M-3: Redis dedup prevents double-grant on concurrent clicks
+    from app.services.cache import get_redis_client as _get_redis
+    _redis = _get_redis()
+    _dedup_key = f"grant_dedup:{callback.data}"
+    if _redis:
+        _acquired = await _redis.set(_dedup_key, "1", ex=300, nx=True)
+        if not _acquired:
+            await callback.answer("✅ Запрос уже обрабатывается", show_alert=True)
+            return False
+
     from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
 
@@ -631,6 +641,16 @@ async def _handle_admin_promo_grant(callback: types.CallbackQuery, key: str) -> 
     if _FRIEND_PROCESSED_MARKER in text:
         await callback.answer("✅ Запрос уже обработан", show_alert=True)
         return False
+
+    # M-3: Redis dedup prevents double-grant on concurrent clicks
+    from app.services.cache import get_redis_client as _get_redis
+    _redis = _get_redis()
+    _dedup_key = f"grant_dedup:{callback.data}"
+    if _redis:
+        _acquired = await _redis.set(_dedup_key, "1", ex=300, nx=True)
+        if not _acquired:
+            await callback.answer("✅ Запрос уже обрабатывается", show_alert=True)
+            return False
 
     from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
@@ -979,9 +999,9 @@ async def cmd_whois(message: types.Message):
         sync_service = SyncService()
         result = await sync_service.sync_user_and_subscription(
             telegram_id=target_id,
-            use_cache=True,
-            force_sync=False,
-            force_remna=False,
+            use_cache=False,
+            force_sync=True,
+            force_remna=True,
         )
         status_map = {"active": "✅ активна", "expired": "⚠️ истекла", "none": "❌ нет подписки"}
         status_str = status_map.get(result.subscription_status, result.subscription_status)
