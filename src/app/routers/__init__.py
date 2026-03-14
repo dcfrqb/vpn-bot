@@ -1,1 +1,1 @@
-from . import start, payments
+from . import start
