@@ -7,8 +7,6 @@ from app.core.errors import (
     RemnaUnavailableError,
     NavigationError,
     ValidationError,
-    RepositoryError,
-    ServiceError
 )
 
 __all__ = [
@@ -17,6 +15,4 @@ __all__ = [
     "RemnaUnavailableError",
     "NavigationError",
     "ValidationError",
-    "RepositoryError",
-    "ServiceError",
 ]

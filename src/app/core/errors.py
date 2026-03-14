@@ -29,16 +29,6 @@ class ValidationError(AppError):
     pass
 
 
-class RepositoryError(AppError):
-    """Ошибка репозитория"""
-    pass
-
-
-class ServiceError(AppError):
-    """Ошибка сервиса"""
-    pass
-
-
 class InfraError(AppError):
     """
     Ошибка инфраструктуры (внешние API, сеть, таймауты)
