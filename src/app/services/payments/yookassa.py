@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from dateutil.relativedelta import relativedelta
 import secrets
@@ -14,7 +14,7 @@ from app.db.session import SessionLocal
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser, RemnaUser
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from app.remnawave.client import RemnaClient
+from app.remnawave.client import RemnaClient, normalize_expire_at
 
 Configuration.account_id = settings.YOOKASSA_SHOP_ID
 Configuration.secret_key = settings.YOOKASSA_API_KEY
@@ -392,7 +392,7 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         logger.error(f"[{trace_id}] webhook error: external_id={ext_id} err={e}")
         import traceback
         logger.debug(traceback.format_exc())
-        return False
+        raise
 
 
 async def handle_successful_payment(
@@ -739,6 +739,32 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+async def _compute_extend_expire_str(client: RemnaClient, remna_user_id: str, period_months: int) -> str:
+    """Compute new expireAt by extending from current Remnawave expireAt (or now if expired/unavailable)."""
+    now_utc = datetime.now(timezone.utc)
+    base = now_utc
+    try:
+        remna_data = await client.get_user_by_id(remna_user_id)
+        raw = remna_data.get("response", remna_data) if isinstance(remna_data, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        expire_raw = raw.get("expireAt") or raw.get("expires_at") or raw.get("valid_until")
+        if expire_raw:
+            expire_str = str(expire_raw).replace("Z", "+00:00")
+            current_exp = datetime.fromisoformat(expire_str)
+            if current_exp.tzinfo is None:
+                current_exp = current_exp.replace(tzinfo=timezone.utc)
+            else:
+                current_exp = current_exp.astimezone(timezone.utc)
+            if current_exp > now_utc:
+                base = current_exp
+                logger.debug(f"remna expire_at extended from current: {current_exp.isoformat()}")
+    except Exception as fetch_e:
+        logger.debug(f"Could not fetch current expireAt for {remna_user_id}: {fetch_e}")
+    new_expire = base + relativedelta(months=period_months)
+    return new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 async def get_or_create_remna_user_and_get_subscription_url(
     telegram_user_id: int,
     subscription_id: int,
@@ -784,37 +810,15 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     # Иначе — fallback на subscription.valid_until (старое поведение).
                     try:
                         if period_months is not None:
-                            from datetime import timezone
-                            from dateutil.relativedelta import relativedelta
-                            now_utc = datetime.now(timezone.utc)
-                            base = now_utc
-                            try:
-                                remna_data = await client.get_user_by_id(remna_user_id)
-                                raw = remna_data.get("response", remna_data) if isinstance(remna_data, dict) else {}
-                                if not isinstance(raw, dict):
-                                    raw = {}
-                                expire_raw = raw.get("expireAt") or raw.get("expires_at") or raw.get("valid_until")
-                                if expire_raw:
-                                    expire_str = str(expire_raw).replace("Z", "+00:00")
-                                    current_exp = datetime.fromisoformat(expire_str)
-                                    if current_exp.tzinfo is None:
-                                        current_exp = current_exp.replace(tzinfo=timezone.utc)
-                                    else:
-                                        current_exp = current_exp.astimezone(timezone.utc)
-                                    if current_exp > now_utc:
-                                        base = current_exp
-                                        logger.debug(f"remna expire_at extended from current: {current_exp.isoformat()}")
-                            except Exception as fetch_e:
-                                logger.debug(f"Не удалось получить текущий expireAt для {remna_user_id}: {fetch_e}")
-                            new_expire = base + relativedelta(months=period_months)
-                            new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
                             logger.info(f"remna expire_at update: remna_user_id={remna_user_id} new_expire={new_expire_str}")
                             await client.update_user(remna_user_id, expire_at=new_expire_str)
                             logger.debug(f"remna expire_at updated for remna_user_id={remna_user_id}")
                         elif subscription.valid_until:
                             # Fallback: старое поведение — используем valid_until из local DB
-                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={subscription.valid_until}")
-                            await client.update_user(remna_user_id, expire_at=subscription.valid_until)
+                            expire_at_str = normalize_expire_at(subscription.valid_until)
+                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={expire_at_str}")
+                            await client.update_user(remna_user_id, expire_at=expire_at_str)
                             logger.debug(f"remna expire_at updated (fallback) for remna_user_id={remna_user_id}")
                     except Exception as expire_update_e:
                         logger.warning(f"⚠️ Не удалось обновить expireAt для пользователя {remna_user_id}: {expire_update_e}")
@@ -852,13 +856,10 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     logger.info(f"remna user found by telegram_id={telegram_user_id}: remna_user_id={remna_user_id}")
                     telegram_user.remna_user_id = remna_user_id
                     await session.commit()
-                    # Обновляем expireAt
+                    # Обновляем expireAt (продлеваем от текущего expireAt в Remnawave)
                     if period_months is not None:
-                        from datetime import timezone as _tz2
-                        from dateutil.relativedelta import relativedelta as _rd2
-                        new_expire = datetime.now(_tz2.utc) + _rd2(months=period_months)
-                        new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
                         try:
+                            new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
                             await client.update_user(remna_user_id, expire_at=new_expire_str)
                             logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str}")
                         except Exception as upd_e:

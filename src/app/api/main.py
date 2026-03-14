@@ -209,9 +209,9 @@ async def yookassa_webhook(request: Request):
         logger.error(f"Ошибка обработки webhook YooKassa: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-        # Важно: возвращаем 200, чтобы YooKassa не ретраила бесконечно
-        # Ошибка залогирована, можно разобраться вручную
+        # Возвращаем 503, чтобы YooKassa повторила webhook при инфраструктурных сбоях.
+        # needs_provisioning=True уже выставлен — SubscriptionChecker подхватит при восстановлении.
         return JSONResponse(
-            status_code=200,
+            status_code=503,
             content={"status": "error", "message": str(e)[:100]}
         )

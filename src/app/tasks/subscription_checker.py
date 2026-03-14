@@ -73,3 +73,10 @@ class SubscriptionChecker:
                 )
         except Exception as e:
             logger.error(f"{prefix}: error during recovery: {e}")
+
+        # Stage C: expiry notifications
+        try:
+            from app.tasks.expiry_notifier import check_expiry_notifications
+            await check_expiry_notifications(self.bot)
+        except Exception as e:
+            logger.error(f"{prefix}: error during expiry notifications: {e}")

@@ -869,3 +869,137 @@ async def promo_reject_handler(callback: types.CallbackQuery):
     except Exception:
         pass
     await callback.answer("✅ Заявка отклонена")
+
+
+# ========== Stage B: operational tools ==========
+
+@router.message(Command("sync"))
+async def cmd_sync(message: types.Message):
+    """/sync <telegram_id> — форс-синк пользователя с Remnawave (только для админов)"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("Использование: /sync <telegram_id>")
+        return
+    target_id = int(parts[1].strip())
+    await _do_sync(message, target_id)
+
+
+@router.message(Command("syncme"))
+async def cmd_syncme(message: types.Message):
+    """/syncme — форс-синк самого администратора"""
+    if not is_admin(message.from_user.id):
+        return
+    await _do_sync(message, message.from_user.id)
+
+
+async def _do_sync(message: types.Message, target_id: int):
+    """Выполняет форс-синк пользователя с Remnawave и отправляет результат."""
+    await message.answer(f"⏳ Синхронизирую {target_id}...")
+    try:
+        from app.services.cache import invalidate_sync_cache
+        await invalidate_sync_cache(target_id)
+    except Exception:
+        pass
+    try:
+        sync_service = SyncService()
+        result = await sync_service.sync_user_and_subscription(
+            telegram_id=target_id,
+            use_cache=False,
+            force_sync=True,
+            force_remna=True,
+        )
+        status_map = {"active": "✅ активна", "expired": "⚠️ истекла", "none": "❌ нет подписки"}
+        status_str = status_map.get(result.subscription_status, result.subscription_status)
+        expires = result.expires_at.strftime("%Y-%m-%d %H:%M UTC") if result.expires_at else "—"
+        remna_uuid = result.user_remna_uuid or "—"
+        await message.answer(
+            f"<b>Sync {target_id}</b>\n"
+            f"Remna UUID: <code>{escape_html(remna_uuid)}</code>\n"
+            f"Статус: {status_str}\n"
+            f"Истекает: {escape_html(expires)}\n"
+            f"Источник: {escape_html(result.source)}",
+            parse_mode="HTML",
+        )
+        logger.info(f"admin sync: target={target_id} by={message.from_user.id} status={result.subscription_status}")
+    except RemnaUnavailableError:
+        await message.answer("❌ Remnawave недоступен. Попробуйте позже.")
+    except Exception as e:
+        logger.error(f"admin sync error: target={target_id} err={e}")
+        await message.answer(f"❌ Ошибка синхронизации: {escape_html(str(e)[:200])}", parse_mode="HTML")
+
+
+@router.message(Command("block"))
+async def cmd_block(message: types.Message):
+    """/block <telegram_id> — заблокировать пользователя (только для админов)"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("Использование: /block <telegram_id>")
+        return
+    target_id = int(parts[1].strip())
+    if is_admin(target_id):
+        await message.answer("❌ Нельзя заблокировать администратора.")
+        return
+    from app.middlewares.blocklist import block_user
+    await block_user(target_id)
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
+
+
+@router.message(Command("unblock"))
+async def cmd_unblock(message: types.Message):
+    """/unblock <telegram_id> — разблокировать пользователя (только для админов)"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("Использование: /unblock <telegram_id>")
+        return
+    target_id = int(parts[1].strip())
+    from app.middlewares.blocklist import unblock_user
+    await unblock_user(target_id)
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> разблокирован.", parse_mode="HTML")
+
+
+@router.message(Command("whois"))
+async def cmd_whois(message: types.Message):
+    """/whois <telegram_id> — краткая диагностика пользователя (только для админов)"""
+    if not is_admin(message.from_user.id):
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().lstrip("-").isdigit():
+        await message.answer("Использование: /whois <telegram_id>")
+        return
+    target_id = int(parts[1].strip())
+    await message.answer(f"⏳ Запрашиваю данные {target_id}...")
+    try:
+        from app.middlewares.blocklist import is_blocked
+        sync_service = SyncService()
+        result = await sync_service.sync_user_and_subscription(
+            telegram_id=target_id,
+            use_cache=True,
+            force_sync=False,
+            force_remna=False,
+        )
+        status_map = {"active": "✅ активна", "expired": "⚠️ истекла", "none": "❌ нет подписки"}
+        status_str = status_map.get(result.subscription_status, result.subscription_status)
+        expires = result.expires_at.strftime("%Y-%m-%d %H:%M UTC") if result.expires_at else "—"
+        blocked_str = "🚫 да" if is_blocked(target_id) else "нет"
+        admin_str = "👑 да" if is_admin(target_id) else "нет"
+        remna_uuid = result.user_remna_uuid or "—"
+        await message.answer(
+            f"<b>Whois {target_id}</b>\n"
+            f"Remna UUID: <code>{escape_html(remna_uuid)}</code>\n"
+            f"Статус подписки: {status_str}\n"
+            f"Истекает: {escape_html(expires)}\n"
+            f"Заблокирован: {blocked_str}\n"
+            f"Администратор: {admin_str}",
+            parse_mode="HTML",
+        )
+    except RemnaUnavailableError:
+        await message.answer("❌ Remnawave недоступен. Попробуйте позже.")
+    except Exception as e:
+        logger.error(f"admin whois error: target={target_id} err={e}")
+        await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")

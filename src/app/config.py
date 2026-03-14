@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     ADMINS: Union[str, list[int], int, None] = None
     admin_ids: Union[str, None] = None
     ADMIN_SUPPORT_USERNAME: Union[str, None] = None  # Username админа для кнопки «Написать»
+    BLOCKED_TELEGRAM_IDS: Union[str, list[int], int, None] = None  # Заблокированные пользователи
 
     DATABASE_URL: Union[str, None] = None
     REDIS_URL: Union[str, None] = None
@@ -53,9 +54,9 @@ class Settings(BaseSettings):
     _env_path = str(_base_path if _base_path.exists() else _local_path)
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="forbid")
 
-    @field_validator("ADMINS", mode="after")
+    @field_validator("ADMINS", "BLOCKED_TELEGRAM_IDS", mode="after")
     @classmethod
-    def _parse_admins(cls, v):
+    def _parse_id_list(cls, v):
         if v is None:
             return []
         if isinstance(v, list):

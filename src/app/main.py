@@ -51,11 +51,16 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
 
     from app.middlewares.auth import AuthMiddleware
     from app.middlewares.timing import TimingMiddleware
-    
+    from app.middlewares.blocklist import BlocklistMiddleware
+
     # Timing middleware должен быть первым для измерения всего времени выполнения
     dp.message.middleware(TimingMiddleware())
     dp.callback_query.middleware(TimingMiddleware())
-    
+
+    # Blocklist middleware — до Auth, чтобы заблокированные не проходили дальше
+    dp.message.middleware(BlocklistMiddleware())
+    dp.callback_query.middleware(BlocklistMiddleware())
+
     # Auth middleware
     dp.message.middleware(AuthMiddleware())
     dp.callback_query.middleware(AuthMiddleware())
@@ -82,6 +87,9 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     dp.include_router(admin_router)
     dp.include_router(legacy_router)  # В конце для обратной совместимости
     logger.info("Роутеры подключены")
+
+    from app.middlewares.blocklist import load_blocklist_from_redis
+    await load_blocklist_from_redis()
 
     return dp
 
