@@ -85,6 +85,10 @@ async def provision_tariff(
     except Exception:
         plan_code, period_months = "basic", 1
 
+    logger.info(
+        f"subscription_provisioning_started: tg_id={telegram_id} tariff={tariff} "
+        f"plan={plan_code} period={period_months}m req_id={req_id}"
+    )
     try:
         remna_user_id = await ensure_user_in_remnawave(telegram_id)
         if not remna_user_id:
@@ -94,6 +98,7 @@ async def provision_tariff(
                 tg_id=telegram_id,
                 payload={"error": "ensure_user_failed"},
             )
+            logger.error(f"subscription_provisioning_failed: tg_id={telegram_id} reason=ensure_user_failed")
             return False
 
         # Определяем valid_until
@@ -144,6 +149,10 @@ async def provision_tariff(
             tg_id=telegram_id,
             payload={"remna_user_id": remna_user_id, "tariff": tariff, "valid_until": valid_until_str},
         )
+        logger.info(
+            f"subscription_provisioning_success: tg_id={telegram_id} remna_user_id={remna_user_id} "
+            f"tariff={tariff} expire_at={valid_until_str}"
+        )
 
         # Инвалидируем кэш, чтобы статус обновился сразу
         try:
@@ -156,7 +165,7 @@ async def provision_tariff(
 
         return True
     except Exception as e:
-        logger.error(f"Ошибка provision_tariff для tg_id={telegram_id} tariff={tariff}: {e}")
+        logger.error(f"subscription_provisioning_failed: tg_id={telegram_id} tariff={tariff} err={e}")
         log_payment_event(
             EVENT_REMNAWAVE_PROVISION_FAILED,
             req_id=req_id,

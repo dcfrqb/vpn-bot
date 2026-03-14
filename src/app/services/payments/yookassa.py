@@ -442,6 +442,11 @@ async def handle_successful_payment(
             )
             return
 
+        logger.info(
+            f"[{trace_id}] subscription_provisioning_started: payment_id={payment_id} "
+            f"tg_id={telegram_user_id} amount={amount}"
+        )
+
         # Получаем тариф и период из payment_metadata
         plan_code = None
         period_months = None
@@ -508,7 +513,7 @@ async def handle_successful_payment(
         telegram_user = user_result.scalar_one_or_none()
         
         if not telegram_user:
-            logger.error(f"Пользователь {telegram_user_id} не найден в БД")
+            logger.error(f"[{trace_id}] subscription_provisioning_failed: tg_id={telegram_user_id} not found in DB")
             return
         
         sub_result = await session.execute(
@@ -525,7 +530,7 @@ async def handle_successful_payment(
             existing_sub.valid_until = valid_until
             existing_sub.active = True
             subscription = existing_sub
-            logger.info(f"Обновлена подписка для пользователя {telegram_user_id}")
+            logger.info(f"[{trace_id}] subscription updated: tg_id={telegram_user_id} plan={plan_code} period={period_months}m")
         else:
             subscription = Subscription(
                 telegram_user_id=telegram_user_id,
@@ -535,7 +540,7 @@ async def handle_successful_payment(
                 valid_until=valid_until
             )
             session.add(subscription)
-            logger.info(f"Создана подписка для пользователя {telegram_user_id}")
+            logger.info(f"[{trace_id}] subscription created: tg_id={telegram_user_id} plan={plan_code} period={period_months}m")
         
         await session.commit()
         await session.refresh(subscription)
@@ -669,9 +674,9 @@ async def handle_successful_payment(
         await session.commit()
         
         logger.info(
-            f"[{trace_id}] payment finalized: payment_id={payment_id} "
+            f"[{trace_id}] subscription_provisioning_success: payment_id={payment_id} "
             f"subscription_id={subscription.id} plan={plan_code} period={period_months}m "
-            f"user={telegram_user_id} remna_user_id={subscription.remna_user_id}"
+            f"tg_id={telegram_user_id} remna_user_id={subscription.remna_user_id}"
         )
         
     except Exception as e:
@@ -798,19 +803,19 @@ async def get_or_create_remna_user_and_get_subscription_url(
                                         current_exp = current_exp.astimezone(timezone.utc)
                                     if current_exp > now_utc:
                                         base = current_exp
-                                        logger.info(f"📝 Продлеваю expireAt от текущего: {current_exp.isoformat()}")
+                                        logger.debug(f"remna expire_at extended from current: {current_exp.isoformat()}")
                             except Exception as fetch_e:
                                 logger.debug(f"Не удалось получить текущий expireAt для {remna_user_id}: {fetch_e}")
                             new_expire = base + relativedelta(months=period_months)
                             new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
-                            logger.info(f"📝 Обновляю expireAt для существующего пользователя {remna_user_id}: {new_expire_str}")
+                            logger.info(f"remna expire_at update: remna_user_id={remna_user_id} new_expire={new_expire_str}")
                             await client.update_user(remna_user_id, expire_at=new_expire_str)
-                            logger.info(f"✅ expireAt обновлен в Remna для пользователя {remna_user_id}")
+                            logger.debug(f"remna expire_at updated for remna_user_id={remna_user_id}")
                         elif subscription.valid_until:
                             # Fallback: старое поведение — используем valid_until из local DB
-                            logger.info(f"📝 Обновляю expireAt для существующего пользователя {remna_user_id}: {subscription.valid_until} (fallback)")
+                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={subscription.valid_until}")
                             await client.update_user(remna_user_id, expire_at=subscription.valid_until)
-                            logger.info(f"✅ expireAt обновлен в Remna для пользователя {remna_user_id}")
+                            logger.debug(f"remna expire_at updated (fallback) for remna_user_id={remna_user_id}")
                     except Exception as expire_update_e:
                         logger.warning(f"⚠️ Не удалось обновить expireAt для пользователя {remna_user_id}: {expire_update_e}")
 
@@ -821,14 +826,13 @@ async def get_or_create_remna_user_and_get_subscription_url(
                             squad = await client.get_squad_by_name(squad_name)
                             if squad:
                                 squad_uuid = squad.get('uuid')
-                                logger.info(f"📝 Обновляю сквад для существующего пользователя {remna_user_id}: {squad_name}")
+                                logger.debug(f"remna squad update: remna_user_id={remna_user_id} squad={squad_name}")
                                 try:
                                     await client.update_user(remna_user_id, activeInternalSquads=[squad_uuid])
-                                    logger.info(f"✅ Сквад обновлен в Remna для пользователя {remna_user_id}")
                                 except Exception as squad_update_e:
-                                    logger.warning(f"⚠️ Не удалось обновить сквад для пользователя {remna_user_id}: {squad_update_e}")
+                                    logger.warning(f"remna squad update failed: remna_user_id={remna_user_id} squad={squad_name} err={squad_update_e}")
                         except Exception as squad_e:
-                            logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
+                            logger.warning(f"remna squad lookup failed: squad={squad_name} err={squad_e}")
 
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
                     if subscription_url:
@@ -845,7 +849,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
 
                 if found_remna:
                     remna_user_id = found_remna.uuid
-                    logger.info(f"📝 Найден существующий Remna-пользователь по telegram_id={telegram_user_id}: uuid={remna_user_id}")
+                    logger.info(f"remna user found by telegram_id={telegram_user_id}: remna_user_id={remna_user_id}")
                     telegram_user.remna_user_id = remna_user_id
                     await session.commit()
                     # Обновляем expireAt
@@ -856,9 +860,9 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         new_expire_str = new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
                         try:
                             await client.update_user(remna_user_id, expire_at=new_expire_str)
-                            logger.info(f"✅ expireAt обновлен для существующего пользователя: {new_expire_str}")
+                            logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str}")
                         except Exception as upd_e:
-                            logger.warning(f"⚠️ Не удалось обновить expireAt: {upd_e}")
+                            logger.warning(f"remna expire_at update failed: remna_user_id={remna_user_id} err={upd_e}")
                     # Обновляем сквад
                     _squad_name = await get_squad_name_for_plan(subscription.plan_code)
                     if _squad_name:
@@ -866,7 +870,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                             _squad = await client.get_squad_by_name(_squad_name)
                             if _squad:
                                 await client.update_user(remna_user_id, activeInternalSquads=[_squad.get("uuid")])
-                                logger.info(f"✅ Сквад обновлен: {_squad_name}")
+                                logger.debug(f"remna squad updated: remna_user_id={remna_user_id} squad={_squad_name}")
                         except Exception:
                             pass
                     # Получаем subscription URL и сохраняем
@@ -907,22 +911,20 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         squad = await client.get_squad_by_name(squad_name)
                         if squad:
                             squad_uuid = squad.get('uuid')
-                            logger.info(f"📝 Найден сквад {squad_name} (UUID: {squad_uuid}) для назначения при создании")
+                            logger.debug(f"remna squad resolved: name={squad_name} uuid={squad_uuid}")
                     except Exception as squad_e:
-                        logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
-                
-                logger.info(f"Создание пользователя в Remna API: username={username}, telegram_id={telegram_user_id}, expire_at={expire_at}")
+                        logger.warning(f"remna squad lookup failed: name={squad_name} err={squad_e}")
+
+                logger.info(f"remna user create: tg_id={telegram_user_id} username={username} expire_at={expire_at}")
                 try:
-                    if squad_uuid:
-                        logger.info(f"📝 Добавляю сквад {squad_name} при создании пользователя")
                     remna_user_data = await client.create_user(
-                        username=username, 
-                        password=password, 
+                        username=username,
+                        password=password,
                         expire_at=expire_at,
                         telegram_id=telegram_user_id,
                         active_internal_squads=[squad_uuid] if squad_uuid else None
                     )
-                    logger.info(f"Ответ Remna API при создании пользователя: {remna_user_data}")
+                    logger.debug(f"remna user created: tg_id={telegram_user_id} response_keys={list(remna_user_data.keys()) if isinstance(remna_user_data, dict) else type(remna_user_data).__name__}")
                 except Exception as e:
                     error_msg = str(e)
                     # Пробуем извлечь текст ошибки из response, если это HTTPStatusError

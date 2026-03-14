@@ -1,4 +1,5 @@
 """Восстановление платежей: needs_provisioning и pending recheck"""
+import traceback as _tb
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
@@ -39,15 +40,26 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
         rows = await session.execute(stmt)
         payments = list(rows.scalars().all())
 
+    candidates = []
     for payment in payments:
         meta = payment.payment_metadata or {}
         has_needs_provisioning = isinstance(meta, dict) and meta.get("needs_provisioning")
-        # Fallback: succeeded без подписки и без флага — если платёж старше N минут
         is_old_enough = payment.created_at < fallback_threshold if payment.created_at else False
-        if not has_needs_provisioning and not is_old_enough:
-            continue
+        if has_needs_provisioning or is_old_enough:
+            candidates.append(payment)
 
+    if candidates:
+        logger.info(
+            f"recovery_provision_scan: found={len(candidates)} succeeded_without_subscription "
+            f"(total_checked={len(payments)})"
+        )
+
+    for payment in candidates:
         result["processed"] += 1
+        logger.info(
+            f"recovery_provision_retry: payment_id={payment.id} "
+            f"tg_id={payment.telegram_user_id} amount={payment.amount}"
+        )
         try:
             async with SessionLocal() as session:
                 await handle_successful_payment(
@@ -73,10 +85,22 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
                         p.payment_metadata = meta
                         await session.commit()
                     result["succeeded"] += 1
-                    logger.info(f"recovery: payment_id={payment.id} provisioning succeeded")
+                    logger.info(
+                        f"recovery_provision_success: payment_id={payment.id} "
+                        f"subscription_id={p.subscription_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"recovery_provision_skipped: payment_id={payment.id} "
+                        f"subscription_id still None after handle_successful_payment"
+                    )
         except Exception as e:
             result["errors"] += 1
-            logger.error(f"recovery: payment_id={payment.id} provisioning failed: {e}")
+            logger.error(
+                f"recovery_provision_failed: payment_id={payment.id} "
+                f"tg_id={payment.telegram_user_id} err={e}"
+            )
+            logger.debug(_tb.format_exc())
 
     return result
 
@@ -129,6 +153,7 @@ async def recheck_single_payment(
         result["status"] = payment.status
         return result
 
+    logger.info(f"[{trace_id}] recheck_single: checking YooKassa external_id={external_id} tg_id={payment.telegram_user_id}")
     status_data = await check_payment_status(external_id)
     if not status_data:
         result["error"] = "api_error"
@@ -149,6 +174,10 @@ async def recheck_single_payment(
         return result
 
     amount = float(status_data.get("amount", payment.amount))
+    logger.info(
+        f"[{trace_id}] recheck_single: status_changed external_id={external_id} "
+        f"pending->{new_status} amount={amount}"
+    )
 
     async with SessionLocal() as session:
         pay_result = await session.execute(
@@ -217,14 +246,27 @@ async def recheck_pending_payments(bot) -> Dict[str, Any]:
         rows = await session.execute(stmt)
         payments = list(rows.scalars().all())
 
+    if payments:
+        logger.info(f"recovery_pending_scan: found={len(payments)} pending payments older than {PENDING_RECHECK_MINUTES}min")
+
     for payment in payments:
         result["checked"] += 1
         try:
             status_data = await check_payment_status(payment.external_id)
             if not status_data or status_data.get("status") == "pending":
                 continue
+            if status_data.get("error") == "not_found":
+                logger.warning(
+                    f"recovery_pending_notfound: payment_id={payment.id} "
+                    f"external_id={payment.external_id} not found in YooKassa"
+                )
+                continue
             new_status = status_data["status"]
             amount = float(status_data.get("amount", payment.amount))
+            logger.info(
+                f"recovery_pending_update: payment_id={payment.id} "
+                f"tg_id={payment.telegram_user_id} pending->{new_status} amount={amount}"
+            )
             if new_status == "succeeded":
                 async with SessionLocal() as session:
                     pay_result = await session.execute(
@@ -245,7 +287,7 @@ async def recheck_pending_payments(bot) -> Dict[str, Any]:
                             bot=bot,
                         )
                         result["updated"] += 1
-                        logger.info(f"recheck: payment_id={payment.id} updated to succeeded")
+                        logger.info(f"recovery_pending_provisioned: payment_id={payment.id}")
             else:
                 async with SessionLocal() as session:
                     pay_result = await session.execute(
@@ -258,6 +300,10 @@ async def recheck_pending_payments(bot) -> Dict[str, Any]:
                         result["updated"] += 1
         except Exception as e:
             result["errors"] += 1
-            logger.warning(f"recheck_pending_payments: payment_id={payment.id} error: {e}")
+            logger.error(
+                f"recovery_pending_error: payment_id={payment.id} "
+                f"external_id={payment.external_id} err={e}"
+            )
+            logger.debug(_tb.format_exc())
 
     return result
