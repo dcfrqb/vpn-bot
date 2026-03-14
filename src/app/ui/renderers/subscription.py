@@ -12,7 +12,9 @@ from app.utils.html import escape_html
 async def render_subscription_plans(viewmodel: SubscriptionViewModel) -> str:
     """Рендерит экран выбора тарифов"""
     return (
-        "💳 <b>Покупка подписки</b>\n\n"
+        "💳 <b>Подписка на VPN</b>\n\n"
+        "<b>Базовый</b> — серверы NL · от 99 ₽/мес\n"
+        "<b>Премиум</b> — серверы NL, USA, FIN · от 199 ₽/мес\n\n"
         "Выберите тариф:"
     )
 

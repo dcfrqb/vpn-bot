@@ -32,17 +32,17 @@ async def build_main_menu_keyboard(viewmodel: MainMenuViewModel) -> types.Inline
         callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "open")
     )])
     
-    # Кнопка "Обновить" - всегда есть
-    keyboard.append([types.InlineKeyboardButton(
-        text="🔄 Обновить",
-        callback_data=build_cb(ScreenID.MAIN_MENU, "refresh")
-    )])
-    
-    # Кнопка "Помощь" - всегда есть
-    keyboard.append([types.InlineKeyboardButton(
-        text="ℹ️ Помощь",
-        callback_data=build_cb(ScreenID.HELP, "open")
-    )])
+    # Кнопки "Обновить" и "Помощь" в одной строке — вспомогательные действия
+    keyboard.append([
+        types.InlineKeyboardButton(
+            text="🔄 Обновить",
+            callback_data=build_cb(ScreenID.MAIN_MENU, "refresh")
+        ),
+        types.InlineKeyboardButton(
+            text="ℹ️ Помощь",
+            callback_data=build_cb(ScreenID.HELP, "open")
+        ),
+    ])
     
     # Для админа - кнопка "Админ-панель" в конце
     if viewmodel.is_admin:
