@@ -245,17 +245,31 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             return False
         
         payment_id = payment.id
-        status = payment.status
-        amount = float(payment.amount.value)
-        currency = payment.amount.currency
+        webhook_metadata = payment.metadata or {}
         description = payment.description
-        metadata = payment.metadata or {}
+
+        # Webhook is a trigger only. Always verify payment status directly with YooKassa API.
+        logger.info(f"[{trace_id}] webhook trigger: external_id={payment_id} — verifying via YooKassa API")
+        api_data = await check_payment_status(payment_id)
+        if not api_data:
+            logger.error(f"[{trace_id}] API verification failed: external_id={payment_id}")
+            return False
+        if api_data.get("error") == "not_found":
+            logger.warning(f"[{trace_id}] payment not found in YooKassa API: external_id={payment_id}")
+            return False
+
+        # Use API-verified values as source of truth
+        status = api_data["status"]
+        amount = float(api_data["amount"])
+        currency = api_data.get("currency", "RUB")
+        description = api_data.get("description") or description
+        metadata = api_data.get("metadata") or webhook_metadata
         telegram_user_id = metadata.get("tg_user_id")
-        
+
         if not telegram_user_id:
             logger.error(f"[{trace_id}] webhook received: external_id={payment_id} missing tg_user_id in metadata")
             return False
-        
+
         telegram_user_id = int(telegram_user_id)
         
         from app.services.users import get_or_create_telegram_user

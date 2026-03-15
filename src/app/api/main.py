@@ -1,8 +1,8 @@
 """
 FastAPI приложение — webhook ЮKassa.
-Полноценная обработка: проверка подписи, идемпотентность, provision.
+Полноценная обработка: IP whitelist, идемпотентность, provision.
+Webhook используется только как триггер — статус платежа всегда верифицируется через YooKassa API.
 """
-import hmac
 import ipaddress
 
 from fastapi import FastAPI, Request, HTTPException
@@ -140,18 +140,9 @@ async def yookassa_webhook(request: Request):
         logger.warning(f"Webhook YooKassa отклонён: неизвестный IP {client_ip!r}")
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # --- SECURITY: X-Webhook-Secret header (timing-safe) ---
-    expected_secret = settings.YOOKASSA_WEBHOOK_SECRET
-    if expected_secret:
-        received_secret = request.headers.get("X-Webhook-Secret", "")
-        if not received_secret or not hmac.compare_digest(
-            received_secret.encode("utf-8"),
-            expected_secret.encode("utf-8"),
-        ):
-            logger.warning(f"Webhook YooKassa отклонён: неверный X-Webhook-Secret (IP: {client_ip})")
-            raise HTTPException(status_code=403, detail="Forbidden")
-    else:
-        logger.error("YOOKASSA_WEBHOOK_SECRET не задан — webhook принимается без проверки подписи! Установите переменную окружения.")
+    # NOTE: YooKassa does not send X-Webhook-Secret headers by default.
+    # Security: IP whitelist (above) + direct API verification of every payment inside process_payment_webhook.
+    # The webhook payload is treated as a trigger only — status is never trusted from it.
 
     try:
 
