@@ -1225,7 +1225,6 @@ async def get_or_create_remna_user_and_get_subscription_url(
                                         logger.info(f"✅ Получен subscription URL для существующего пользователя: {subscription_url[:50]}...")
                                         
                                         # Сохраняем remna_user_id и subscription_url в БД
-                                        from app.db.models import RemnaUser
                                         remna_user_result = await session.execute(
                                             select(RemnaUser).where(RemnaUser.remna_id == str(user_uuid))
                                         )
@@ -1343,7 +1342,6 @@ async def get_or_create_remna_user_and_get_subscription_url(
                             subscription_url = f"https://sub.crs-projects.com/{token}"
                 
                 # Создаем запись в remna_users перед обновлением telegram_users (для Foreign Key)
-                from app.db.models import RemnaUser
                 remna_user_result = await session.execute(
                     select(RemnaUser).where(RemnaUser.remna_id == str(remna_user_id))
                 )
