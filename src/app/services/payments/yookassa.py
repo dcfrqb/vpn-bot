@@ -266,8 +266,29 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         metadata = api_data.get("metadata") or webhook_metadata
         telegram_user_id = metadata.get("tg_user_id")
 
+        # Fallback: tg_user_id missing from metadata — look up local Payment record by external_id.
+        # This covers edge cases: manual payments created in YooKassa dashboard, test payments,
+        # or any flow that didn't set metadata correctly.
+        if not telegram_user_id and SessionLocal:
+            async with SessionLocal() as _fb_session:
+                _fb_result = await _fb_session.execute(
+                    select(PaymentModel).where(PaymentModel.external_id == payment_id)
+                )
+                _fb_payment = _fb_result.scalar_one_or_none()
+                if _fb_payment:
+                    telegram_user_id = str(_fb_payment.telegram_user_id)
+                    logger.warning(
+                        f"[{trace_id}] webhook: tg_user_id missing from metadata, resolved from local DB: "
+                        f"payment_id={payment_id} tg_user_id={telegram_user_id} "
+                        f"amount={amount} status={status}"
+                    )
+
         if not telegram_user_id:
-            logger.error(f"[{trace_id}] webhook received: external_id={payment_id} missing tg_user_id in metadata")
+            logger.error(
+                f"[{trace_id}] webhook: user cannot be resolved — "
+                f"payment_id={payment_id} status={status} amount={amount} "
+                f"metadata={metadata!r} description={description!r}"
+            )
             return False
 
         telegram_user_id = int(telegram_user_id)
@@ -284,9 +305,10 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         except Exception as e:
             logger.warning(f"[{trace_id}] get_or_create_telegram_user failed: user={telegram_user_id} err={e}")
         
+        plan_code = metadata.get("plan_code") or metadata.get("tariff")
         logger.info(
-            f"[{trace_id}] webhook received: external_id={payment_id} status={status} "
-            f"user={telegram_user_id} amount={amount} {currency}"
+            f"[{trace_id}] webhook verified: payment_id={payment_id} status={status} "
+            f"tg_user_id={telegram_user_id} amount={amount} {currency} tariff={plan_code}"
         )
         
         if not SessionLocal:
