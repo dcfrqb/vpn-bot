@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 
 from sqlalchemy import select
 from app.db.session import SessionLocal
-from app.db.models import Payment as PaymentModel
+from app.db.models import Payment as PaymentModel, TelegramUser
 from app.logger import logger
 
 
@@ -56,14 +56,28 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
             if isinstance(p.payment_metadata, dict) and p.payment_metadata.get("needs_provisioning")
         ]
 
-    payments = payments_no_sub + payments_with_sub
+        # Case 3: succeeded + subscription_id set + remna_user_id still NULL
+        # Provisioning silently failed before FK fix (notified=True but Remnawave never updated)
+        stmt_case3 = select(PaymentModel).join(
+            TelegramUser, TelegramUser.telegram_id == PaymentModel.telegram_user_id
+        ).where(
+            PaymentModel.status == "succeeded",
+            PaymentModel.subscription_id.isnot(None),
+            TelegramUser.remna_user_id.is_(None),
+        )
+        rows_case3 = await session.execute(stmt_case3)
+        seen_ids = {p.id for p in payments_no_sub + payments_with_sub}
+        payments_case3 = [p for p in rows_case3.scalars().all() if p.id not in seen_ids]
+
+    payments = payments_no_sub + payments_with_sub + payments_case3
 
     candidates = []
     for payment in payments:
         meta = payment.payment_metadata or {}
         has_needs_provisioning = isinstance(meta, dict) and meta.get("needs_provisioning")
         is_old_enough = payment.created_at < fallback_threshold if payment.created_at else False
-        if has_needs_provisioning or is_old_enough:
+        is_unprovisioned = payment in payments_case3
+        if has_needs_provisioning or is_old_enough or is_unprovisioned:
             candidates.append(payment)
 
     if candidates:

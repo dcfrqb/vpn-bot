@@ -423,8 +423,19 @@ async def handle_successful_payment(
 
         meta = payment.payment_metadata or {}
         if isinstance(meta, dict) and meta.get("notified"):
-            logger.info(f"[{trace_id}] handle_successful_payment: already notified payment_id={payment_id}")
-            return
+            # Verify that Remnawave was actually provisioned; if remna_user_id is still NULL,
+            # provisioning silently failed despite notification — allow re-run
+            _tg_notif_r = await session.execute(
+                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+            )
+            _tg_notif = _tg_notif_r.scalar_one_or_none()
+            if _tg_notif and _tg_notif.remna_user_id:
+                logger.info(f"[{trace_id}] handle_successful_payment: already notified and provisioned payment_id={payment_id}")
+                return
+            logger.warning(
+                f"[{trace_id}] handle_successful_payment: notified but remna_user_id missing — "
+                f"re-running provisioning payment_id={payment_id} tg_id={telegram_user_id}"
+            )
 
         # Идемпотентность provisioning: re-check subscription_id под блокировкой.
         # Защищает от race condition при конкурентных вызовах (webhook + recovery, двойной клик).
@@ -439,11 +450,18 @@ async def handle_successful_payment(
             meta_locked = payment_locked.payment_metadata or {}
             needs_reprovision = isinstance(meta_locked, dict) and meta_locked.get("needs_provisioning")
             if not needs_reprovision:
-                logger.info(
-                    f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
-                    f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
+                # Also check if Remnawave was actually provisioned (remna_user_id may be NULL)
+                _tg_lock_r = await session.execute(
+                    select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
                 )
-                return
+                _tg_lock = _tg_lock_r.scalar_one_or_none()
+                if _tg_lock and _tg_lock.remna_user_id:
+                    logger.info(
+                        f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
+                        f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
+                    )
+                    return
+                needs_reprovision = True  # remna_user_id NULL = provisioning silently failed
             logger.info(
                 f"[{trace_id}] handle_successful_payment: re-provisioning after prior failure "
                 f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
@@ -608,6 +626,30 @@ async def handle_successful_payment(
                     logger.debug(f"[{trace_id}] H-2: could not fetch actual expiry from Remnawave: {_remna_e}")
         except Exception as _m1_e:
             logger.debug(f"[{trace_id}] M-1/H-2 post-provision update failed: {_m1_e}")
+
+        # Safety net: if Remnawave provisioning silently failed (returned None),
+        # mark needs_provisioning=True and abort — do NOT notify with a broken subscription
+        if not subscription_url:
+            _tg_chk_r = await session.execute(
+                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+            )
+            _tg_chk = _tg_chk_r.scalar_one_or_none()
+            if not (_tg_chk and _tg_chk.remna_user_id):
+                _pay_r = await session.execute(
+                    select(PaymentModel).where(PaymentModel.id == payment_id)
+                )
+                _pay = _pay_r.scalar_one_or_none()
+                if _pay:
+                    _pmeta = dict(_pay.payment_metadata or {})
+                    _pmeta["needs_provisioning"] = True
+                    _pmeta["provisioning_error"] = "remna_user_id not set after provisioning (silent failure)"
+                    _pay.payment_metadata = _pmeta
+                    await session.commit()
+                logger.warning(
+                    f"[{trace_id}] provisioning_silent_failure: remna_user_id not set after provisioning, "
+                    f"marking needs_provisioning=True. payment_id={payment_id} tg_id={telegram_user_id}"
+                )
+                return  # Recovery loop will retry; don't notify with broken subscription
 
         # P2: cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
         try:
@@ -897,6 +939,13 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 if found_remna:
                     remna_user_id = found_remna.uuid
                     logger.info(f"remna user found by telegram_id={telegram_user_id}: remna_user_id={remna_user_id}")
+                    # Upsert RemnaUser into local DB — required by FK on telegram_users.remna_user_id
+                    await session.execute(
+                        pg_insert(RemnaUser).values(
+                            remna_id=remna_user_id,
+                            username=getattr(found_remna, 'username', None),
+                        ).on_conflict_do_nothing(index_elements=['remna_id'])
+                    )
                     telegram_user.remna_user_id = remna_user_id
                     await session.commit()
                     # Обновляем expireAt (продлеваем от текущего expireAt в Remnawave)
