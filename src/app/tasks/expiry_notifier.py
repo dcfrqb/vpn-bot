@@ -1,13 +1,20 @@
 """
 Expiry notification system — Stage C.
 
-Runs inside SubscriptionChecker._run_once() every 15 minutes.
-Paginates all Remnawave users, detects subscriptions expiring in 3 days
+Runs inside SubscriptionChecker._run_once() every 1 hour.
+Paginates all Remnawave users, detects subscriptions expiring in exactly 3 days
 or on the expiration day, and sends a Telegram notification.
 
-Dedup: Redis keys with TTL prevent duplicate sends across restarts.
+Notification windows (UTC calendar dates):
+  3d notice: expire_date == today_utc + 3 days  (exactly 3, not 1-3)
+  0d notice: expire_date == today_utc            (today, subscription expires today)
+
+Dedup: Redis keys with TTL prevent duplicate sends across runs and restarts.
   expiry_notice:3d:<telegram_id>:<yyyy-mm-dd>  TTL=4 days
   expiry_notice:0d:<telegram_id>:<yyyy-mm-dd>  TTL=2 days
+
+Both sides of the comparison use UTC calendar dates extracted from timezone-aware
+datetimes — no hour/minute drift, no naive/aware mixing.
 """
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -18,10 +25,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.logger import logger
 
-# Notification windows (inclusive, whole UTC days from now)
-WINDOW_SOON_MIN = 1   # at least 1 day away
-WINDOW_SOON_MAX = 3   # at most 3 days away
-WINDOW_TODAY = 0      # expires today (0 full days remaining)
+# Notification windows: exact UTC calendar day counts
+WINDOW_SOON = 3    # exactly 3 calendar days away (UTC date diff == 3)
+WINDOW_TODAY = 0   # expires today (UTC date diff == 0)
 
 # Redis TTLs for dedup keys
 TTL_3D = 4 * 24 * 3600   # 4 days — covers the 3-day window + buffer
@@ -185,11 +191,11 @@ async def check_expiry_notifications(bot: Bot) -> Dict[str, Any]:
                 "❌ <b>Ваша подписка VPN истекает сегодня.</b>\n\n"
                 "Продлите её, чтобы сохранить доступ к VPN."
             )
-        elif WINDOW_SOON_MIN <= days_until <= WINDOW_SOON_MAX:
+        elif days_until == WINDOW_SOON:
             notice_type = "3d"
             ttl = TTL_3D
             text = (
-                f"⚠️ <b>Ваша подписка VPN истекает через {days_until} дн.</b>\n\n"
+                f"⚠️ <b>Ваша подписка VPN истекает через 3 дня.</b>\n\n"
                 f"Дата окончания: {expire_date.strftime('%d.%m.%Y')}\n\n"
                 "Не забудьте продлить подписку, чтобы не потерять доступ."
             )

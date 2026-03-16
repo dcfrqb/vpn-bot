@@ -111,9 +111,9 @@ async def run_polling():
         logger.error(f"Ошибка получения информации о боте: {e}")
 
     from app.tasks.subscription_checker import SubscriptionChecker
-    subscription_checker = SubscriptionChecker(bot, check_interval=900)
+    subscription_checker = SubscriptionChecker(bot, check_interval=3600)
     subscription_checker.start()
-    logger.info("Периодическая проверка подписок запущена (интервал 15 мин)")
+    logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
 
     logger.info("Запуск polling")
     logger.info("=" * 50)
@@ -188,9 +188,9 @@ async def run_webhook():
         logger.error(f"Ошибка получения информации о боте: {e}")
 
     from app.tasks.subscription_checker import SubscriptionChecker
-    subscription_checker = SubscriptionChecker(bot, check_interval=900)
+    subscription_checker = SubscriptionChecker(bot, check_interval=3600)
     subscription_checker.start()
-    logger.info("Периодическая проверка подписок запущена (интервал 15 мин)")
+    logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
 
     # TELEGRAM_WEBHOOK_URL должен содержать полный URL включая путь /webhook
     webhook_base_url = settings.TELEGRAM_WEBHOOK_URL.rstrip('/')
