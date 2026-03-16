@@ -102,6 +102,9 @@ async def _fetch_all_remna_users(client) -> list:
         else:
             break
 
+        if not users:
+            break  # empty page — stop regardless of total
+
         all_users.extend(users)
 
         # Stop when we've fetched all users or got a short page
