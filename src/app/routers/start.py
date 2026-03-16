@@ -813,17 +813,26 @@ async def admin_panel_callback(callback: types.CallbackQuery):
 
 async def _handle_solokhin_promo(message: types.Message) -> bool:
     """
-    Обрабатывает промокод Solokhin: отправляет заявку админам на Premium 10 дней.
-    Возвращает True если заявка отправлена.
+    Промокод Solokhin: автоматически выдаёт Premium 10 дней без подтверждения админа.
 
     Проверки:
     - Активная подписка → отказ
+    - Уже использовал /solokhin → отказ (по payments.external_id = 'promo_solokhin_{user_id}')
     """
-    from app.services.payment_request import generate_req_id, build_payreq_block
     from app.services.jsonl_logger import log_payment_event
+    from app.services.remna_service import provision_tariff
+    from app.keyboards import get_subscription_link_keyboard
+    from app.db.session import SessionLocal
+    from app.db.models import Payment as PaymentModel
+    from sqlalchemy import select
+    from datetime import datetime
 
     user_id = message.from_user.id
     promo_code = "solokhin"
+    tariff = "solokhin_10d"
+    promo_external_id = f"promo_solokhin_{user_id}"
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
 
     # 1. Проверяем активную подписку
     try:
@@ -838,10 +847,11 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         )
         if sync_result.subscription_status == "active":
             await message.answer(
-                "❌ У вас уже есть активная подписка. Промокод недоступен.",
+                "❌ У вас уже есть активная подписка.\n\n"
+                "Промокод /solokhin доступен только пользователям без активной подписки.",
                 reply_markup=get_main_menu_keyboard(user_id=user_id),
             )
-            return True  # Обработано, но не выдано
+            return True
     except RemnaUnavailableError:
         await message.answer(
             "❌ Не удалось проверить статус подписки. Попробуйте позже.",
@@ -856,83 +866,107 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         )
         return True
 
-    # 2. Создаём заявку и отправляем админам
+    # 2. Проверяем, не использовал ли уже /solokhin
+    if SessionLocal:
+        try:
+            async with SessionLocal() as session:
+                existing = await session.execute(
+                    select(PaymentModel).where(PaymentModel.external_id == promo_external_id)
+                )
+                if existing.scalar_one_or_none():
+                    await message.answer(
+                        "❌ Промокод /solokhin уже был использован вами ранее.\n\n"
+                        "Повторная активация невозможна.",
+                        reply_markup=get_main_menu_keyboard(user_id=user_id),
+                    )
+                    return True
+        except Exception as e:
+            logger.error(f"/solokhin: ошибка проверки использования промокода для {user_id}: {e}")
+            await message.answer(
+                "❌ Произошла ошибка. Попробуйте позже.",
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+            )
+            return True
+
+    # 3. Выдаём подписку сразу
+    from app.services.payment_request import generate_req_id
     req_id = generate_req_id()
-
-    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
-    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
-    tariff = "solokhin_10d"
-
-    try:
-        payreq_block = build_payreq_block(
-            req_id=req_id,
-            tg_id=user_id,
-            username=username,
-            name=name,
-            tariff=tariff,
-            amount=0,  # Промо — бесплатно
-            currency="PROMO",
-        )
-    except Exception as e:
-        logger.error(f"/solokhin: ошибка build_payreq_block: {e}")
+    success = await provision_tariff(user_id, tariff, req_id=req_id)
+    if not success:
+        logger.error(f"/solokhin: provision_tariff failed for {user_id}")
         await message.answer(
-            "❌ Ошибка при создании заявки. Попробуйте позже.",
+            "❌ Не удалось активировать промокод. Попробуйте позже или обратитесь к администратору.",
             reply_markup=get_main_menu_keyboard(user_id=user_id),
         )
         return True
 
-    # Логируем
+    # 4. Записываем использование промокода в БД (для защиты от повторного использования)
+    if SessionLocal:
+        try:
+            async with SessionLocal() as session:
+                usage_record = PaymentModel(
+                    telegram_user_id=user_id,
+                    provider="promo",
+                    external_id=promo_external_id,
+                    amount=0,
+                    currency="RUB",
+                    status="succeeded",
+                    description="Promo solokhin 10 days",
+                    paid_at=datetime.utcnow(),
+                    payment_metadata={"promo_code": promo_code, "tariff": tariff, "auto": True},
+                )
+                session.add(usage_record)
+                await session.commit()
+        except Exception as e:
+            logger.error(f"/solokhin: ошибка записи использования в БД для {user_id}: {e}")
+            # Продолжаем — подписка уже выдана
+
+    # 5. Логируем событие выдачи
     try:
         log_payment_event(
-            event="promo_request_created",
+            event="promo_granted",
             req_id=req_id,
             tg_id=user_id,
-            payload={"promo_code": promo_code, "tariff": tariff, "username": username},
+            payload={"promo_code": promo_code, "tariff": tariff, "auto": True},
         )
     except Exception as e:
         logger.error(f"/solokhin: ошибка логирования: {e}")
 
-    # Сообщение пользователю
+    # 6. Сообщение пользователю об успешной активации
     await message.answer(
-        "✅ <b>Заявка на промокод отправлена администратору.</b>\n\n"
-        "После подтверждения вам будет выдан Premium на 10 дней.",
-        reply_markup=get_main_menu_keyboard(user_id=user_id),
+        "🎉 <b>Промокод активирован!</b>\n\n"
+        "Вам выдан Premium на 10 дней.\n"
+        "Нажмите «Получить ссылку», чтобы настроить VPN.",
+        reply_markup=get_subscription_link_keyboard(),
+        parse_mode="HTML",
     )
 
-    # Сообщение админам
+    # 7. Информационное уведомление админам (без кнопок подтверждения)
     admin_msg = (
-        f"🎁 <b>ПРОМОКОД SOLOKHIN</b>\n\n"
+        f"🎁 <b>ПРОМОКОД SOLOKHIN АКТИВИРОВАН</b>\n\n"
         f"👤 <b>Пользователь:</b> {username}\n"
-        f"🆔 <b>Telegram ID:</b> {user_id}\n"
+        f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
         f"📝 <b>Имя:</b> {name}\n\n"
         f"📦 <b>Тариф:</b> Premium 10 дней\n"
-        f"🎫 <b>Промокод:</b> solokhin\n\n"
-        f"<pre>{payreq_block}</pre>"
+        f"✅ <b>Подписка выдана автоматически</b>"
     )
-    admin_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ Выдать Premium", callback_data=f"promo_grant_{promo_code}_{user_id}_{req_id}")],
-        [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"promo_reject_{promo_code}_{user_id}_{req_id}")],
-        [types.InlineKeyboardButton(text="📩 Написать пользователю", url=f"tg://user?id={user_id}")],
-    ])
-
     for admin_id in (settings.ADMINS or []):
         if isinstance(admin_id, int):
             try:
                 await message.bot.send_message(
                     chat_id=admin_id,
                     text=admin_msg,
-                    reply_markup=admin_keyboard,
                     parse_mode="HTML",
                 )
             except Exception as e:
-                logger.error(f"Ошибка отправки промо-заявки админу {admin_id}: {e}")
+                logger.error(f"Ошибка отправки уведомления о промокоде админу {admin_id}: {e}")
 
     return True
 
 
 @router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод Solokhin — отправляет заявку админам на Premium 10 дней (только slash-команда)."""
+    """Промокод Solokhin — автоматически выдаёт Premium 10 дней (только slash-команда)."""
     if not getattr(settings, "PROMO_SOLOKHIN_ENABLED", True):
         return
     if await _handle_solokhin_promo(message):
