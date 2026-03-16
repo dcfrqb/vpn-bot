@@ -813,7 +813,7 @@ async def admin_panel_callback(callback: types.CallbackQuery):
 
 async def _handle_solokhin_promo(message: types.Message) -> bool:
     """
-    Обрабатывает промокод Solokhin: отправляет заявку админам на Premium 1 месяц.
+    Обрабатывает промокод Solokhin: отправляет заявку админам на Premium 10 дней.
     Возвращает True если заявка отправлена.
 
     Проверки:
@@ -861,7 +861,7 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
 
     username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
-    tariff = "premium_1"
+    tariff = "solokhin_10d"
 
     try:
         payreq_block = build_payreq_block(
@@ -895,7 +895,7 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
     # Сообщение пользователю
     await message.answer(
         "✅ <b>Заявка на промокод отправлена администратору.</b>\n\n"
-        "После подтверждения вам будет выдан Premium на 1 месяц.",
+        "После подтверждения вам будет выдан Premium на 10 дней.",
         reply_markup=get_main_menu_keyboard(user_id=user_id),
     )
 
@@ -905,7 +905,7 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
         f"👤 <b>Пользователь:</b> {username}\n"
         f"🆔 <b>Telegram ID:</b> {user_id}\n"
         f"📝 <b>Имя:</b> {name}\n\n"
-        f"📦 <b>Тариф:</b> Premium 1 месяц\n"
+        f"📦 <b>Тариф:</b> Premium 10 дней\n"
         f"🎫 <b>Промокод:</b> solokhin\n\n"
         f"<pre>{payreq_block}</pre>"
     )
@@ -932,7 +932,7 @@ async def _handle_solokhin_promo(message: types.Message) -> bool:
 
 @router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод Solokhin — отправляет заявку админам на Premium 1 месяц (только slash-команда)."""
+    """Промокод Solokhin — отправляет заявку админам на Premium 10 дней (только slash-команда)."""
     if not getattr(settings, "PROMO_SOLOKHIN_ENABLED", True):
         return
     if await _handle_solokhin_promo(message):

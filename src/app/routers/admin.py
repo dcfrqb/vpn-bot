@@ -781,7 +781,7 @@ async def promo_grant_handler(callback: types.CallbackQuery):
 
     # Provision
     from app.services.remna_service import provision_tariff
-    tariff = "premium_1"  # /solokhin всегда premium_1
+    tariff = "solokhin_10d"  # /solokhin всегда 10 дней
     success = await provision_tariff(user_id, tariff, req_id=req_id)
 
     if not success:
@@ -807,7 +807,7 @@ async def promo_grant_handler(callback: types.CallbackQuery):
             chat_id=user_id,
             text=(
                 "🎉 <b>Промокод активирован!</b>\n\n"
-                "Вам выдан Premium на 1 месяц. Нажмите «Получить ссылку» для настройки VPN."
+                "Вам выдан Premium на 10 дней. Нажмите «Получить ссылку» для настройки VPN."
             ),
             reply_markup=get_subscription_link_keyboard(),
             parse_mode="HTML",

@@ -3,7 +3,7 @@
 Remnawave — единственный источник правды по пользователям и подпискам.
 Календарные месяцы: relativedelta(months=N), base = max(now, current_expires_at).
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
@@ -13,7 +13,7 @@ from app.logger import logger
 from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
 
 
-# Маппинг тарифов на plan_code и период
+# Маппинг тарифов на plan_code и период (в месяцах)
 TARIFF_TO_PLAN = {
     "PRO_1M": ("premium", 1),
     "PRO_3M": ("premium", 3),
@@ -32,6 +32,11 @@ TARIFF_TO_PLAN = {
     "premium_6": ("premium", 6),
     "premium_12": ("premium", 12),
     "premium_forever": ("premium", -1),  # -1 = unlimited
+}
+
+# Тарифы с точным числом дней (не календарные месяцы)
+TARIFF_TO_DAYS = {
+    "solokhin_10d": ("premium", 10),
 }
 
 
@@ -78,17 +83,28 @@ async def provision_tariff(
     Возвращает True при успехе.
     """
     client = RemnaClient()
-    try:
-        plan_code, period_months = TARIFF_TO_PLAN.get(
-            tariff, TARIFF_TO_PLAN.get(tariff.upper(), ("basic", 1))
-        )
-    except Exception:
-        plan_code, period_months = "basic", 1
+    period_days = None
+    if tariff in TARIFF_TO_DAYS:
+        plan_code, period_days = TARIFF_TO_DAYS[tariff]
+        period_months = 0
+    else:
+        try:
+            plan_code, period_months = TARIFF_TO_PLAN.get(
+                tariff, TARIFF_TO_PLAN.get(tariff.upper(), ("basic", 1))
+            )
+        except Exception:
+            plan_code, period_months = "basic", 1
 
-    logger.info(
-        f"subscription_provisioning_started: tg_id={telegram_id} tariff={tariff} "
-        f"plan={plan_code} period={period_months}m req_id={req_id}"
-    )
+    if period_days is not None:
+        logger.info(
+            f"subscription_provisioning_started: tg_id={telegram_id} tariff={tariff} "
+            f"plan={plan_code} period={period_days}d req_id={req_id}"
+        )
+    else:
+        logger.info(
+            f"subscription_provisioning_started: tg_id={telegram_id} tariff={tariff} "
+            f"plan={plan_code} period={period_months}m req_id={req_id}"
+        )
     try:
         remna_user_id = await ensure_user_in_remnawave(telegram_id)
         if not remna_user_id:
@@ -130,7 +146,10 @@ async def provision_tariff(
                         base = current_exp
             except Exception as e:
                 logger.debug(f"Не удалось получить текущий expireAt для {remna_user_id}: {e}")
-            valid_until = base + relativedelta(months=period_months)
+            if period_days is not None:
+                valid_until = base + timedelta(days=period_days)
+            else:
+                valid_until = base + relativedelta(months=period_months)
             valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await client.update_user(remna_user_id, expire_at=valid_until_str)
