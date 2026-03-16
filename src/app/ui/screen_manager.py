@@ -1360,29 +1360,49 @@ class ScreenManager:
         try:
             from app.services.users import get_user_active_subscription
             from app.remnawave.client import RemnaClient
-            from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-            
+
             subscription = await get_user_active_subscription(user_id, use_cache=False)
             subscription_url = None
-            
-            if subscription and subscription.config_data and "subscription_url" in subscription.config_data:
-                subscription_url = subscription.config_data["subscription_url"]
-            
-            if not subscription_url:
-                # Получаем ссылку из Remna API
+
+            logger.info(
+                f"[UI CONNECT FLOW] fetching link: user_id={user_id} "
+                f"has_subscription={subscription is not None} "
+                f"remna_user_id={getattr(subscription, 'remna_user_id', None)}"
+            )
+
+            if not subscription:
+                # Нет подписки — повторная проверка дала тот же результат
+                logger.warning(f"[UI CONNECT FLOW] no subscription found after can_user_connect passed: user_id={user_id}")
+            elif subscription.remna_user_id:
+                # Основной путь: получаем ссылку напрямую из Remnawave по remna_user_id
                 try:
-                    # Функция требует subscription_id
-                    if subscription and subscription.id:
-                        subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                            telegram_user_id=user_id,
-                            subscription_id=subscription.id
+                    client = RemnaClient()
+                    try:
+                        subscription_url = await client.get_user_subscription_url(subscription.remna_user_id)
+                    finally:
+                        await client.close()
+                    if subscription_url:
+                        logger.info(
+                            f"[UI CONNECT FLOW] subscription URL fetched: user_id={user_id} "
+                            f"remna_user_id={subscription.remna_user_id}"
                         )
                     else:
-                        logger.error(f"Не найден subscription_id для пользователя {user_id}")
-                        subscription_url = None
+                        logger.warning(
+                            f"[UI CONNECT FLOW] empty URL from Remnawave: user_id={user_id} "
+                            f"remna_user_id={subscription.remna_user_id}"
+                        )
                 except Exception as e:
-                    logger.error(f"Ошибка получения ссылки из Remna: {e}")
+                    logger.error(
+                        f"[UI CONNECT FLOW] Remnawave API error: user_id={user_id} "
+                        f"remna_user_id={subscription.remna_user_id} err={e}"
+                    )
                     subscription_url = None
+            else:
+                logger.error(
+                    f"[UI CONNECT FLOW] remna_user_id not set: user_id={user_id} — "
+                    f"subscription exists but Remnawave user not provisioned yet"
+                )
+                subscription_url = None
             
             # ШАГ 4: Показываем результат (success или error)
             if subscription_url:
