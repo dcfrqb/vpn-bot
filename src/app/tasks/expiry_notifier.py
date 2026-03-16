@@ -74,6 +74,7 @@ async def _fetch_all_remna_users(client) -> list:
     """Paginate through Remnawave get_users() and return all user dicts."""
     all_users = []
     start = 1
+    total = None  # filled from first page
     while True:
         try:
             data = await client.get_users(size=_PAGE_SIZE, start=start)
@@ -81,10 +82,20 @@ async def _fetch_all_remna_users(client) -> list:
             logger.warning(f"expiry_notifier: get_users(start={start}) failed: {e}")
             break
 
-        # Remnawave may return {"response": [...], "total": N} or the list directly
+        # Remnawave returns {"response": {"total": N, "users": [...]}}
+        # Older versions may return {"response": [...]} or a bare list.
         if isinstance(data, dict):
-            users = data.get("response", [])
-            if not isinstance(users, list):
+            response = data.get("response", [])
+            if isinstance(response, dict):
+                # New Remnawave format: {"response": {"total": N, "users": [...]}}
+                if total is None:
+                    total = response.get("total", 0)
+                users = response.get("users", [])
+                if not isinstance(users, list):
+                    users = []
+            elif isinstance(response, list):
+                users = response
+            else:
                 users = []
         elif isinstance(data, list):
             users = data
@@ -93,8 +104,12 @@ async def _fetch_all_remna_users(client) -> list:
 
         all_users.extend(users)
 
-        if len(users) < _PAGE_SIZE:
-            break  # last page
+        # Stop when we've fetched all users or got a short page
+        if total is not None:
+            if len(all_users) >= total:
+                break
+        elif len(users) < _PAGE_SIZE:
+            break  # last page (legacy format)
         start += _PAGE_SIZE
         await asyncio.sleep(0)  # yield to event loop between pages
 
