@@ -36,7 +36,8 @@ TARIFF_TO_PLAN = {
 
 # Тарифы с точным числом дней (не календарные месяцы)
 TARIFF_TO_DAYS = {
-    "solokhin_10d": ("premium", 10),
+    "solokhin_15d": ("premium", 15),
+    "trial_10d": ("basic", 10),
 }
 
 
