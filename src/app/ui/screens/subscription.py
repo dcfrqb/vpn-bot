@@ -81,7 +81,7 @@ class SubscriptionPlansScreen(BaseScreen):
                     "Неограниченный трафик и скорость",
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
-                    "Сервера NL, USA, FIN"
+                    "Сервера NL, USA, ESP"
                 ]
             else:
                 logger.warning(f"Неизвестный plan_code: {plan_code}")
@@ -147,7 +147,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Неограниченный трафик и скорость",
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
-                    "Сервера NL, USA, FIN"
+                    "Сервера NL, USA, ESP"
                 ]
         
         return SubscriptionPlanDetailViewModel(
@@ -198,7 +198,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Неограниченный трафик и скорость",
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
-                    "Сервера NL, USA, FIN"
+                    "Сервера NL, USA, ESP"
                 ]
             
             # Создаем ViewModel с данными тарифа (по умолчанию период 0 - не выбран)
@@ -249,7 +249,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Неограниченный трафик и скорость",
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
-                    "Сервера NL, USA, FIN"
+                    "Сервера NL, USA, ESP"
                 ]
             
             amount = periods.get(str(period_months), 0)

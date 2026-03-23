@@ -521,7 +521,7 @@ async def plan_premium(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL, USA, FIN"
+            "Сервера NL, USA, ESP"
         ]
     )
     
@@ -610,7 +610,7 @@ async def plan_premium_period(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL, USA, FIN"
+            "Сервера NL, USA, ESP"
         ]
     )
     

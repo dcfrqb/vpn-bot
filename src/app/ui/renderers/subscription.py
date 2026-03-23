@@ -14,7 +14,7 @@ async def render_subscription_plans(viewmodel: SubscriptionViewModel) -> str:
     return (
         "💳 <b>Подписка на VPN</b>\n\n"
         "<b>Базовый</b> — серверы NL · от 99 ₽/мес\n"
-        "<b>Премиум</b> — серверы NL, USA, FIN · от 199 ₽/мес\n\n"
+        "<b>Премиум</b> — серверы NL, USA, ESP · от 199 ₽/мес\n\n"
         "Выберите тариф:"
     )
 
