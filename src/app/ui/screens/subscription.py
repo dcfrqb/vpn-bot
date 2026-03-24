@@ -72,7 +72,7 @@ class SubscriptionPlansScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Сервер NL",
-                    "Подключение 5 устройств",
+                    "Подключение до 5 устройств",
                 ]
             elif plan_code == "premium":
                 plan_name = "Премиум тариф"
@@ -83,7 +83,7 @@ class SubscriptionPlansScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Серверы NL, USA, FR",
-                    "Подключение 15 устройств",
+                    "Подключение до 15 устройств",
                 ]
             else:
                 logger.warning(f"Неизвестный plan_code: {plan_code}")
@@ -143,7 +143,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Сервер NL",
-                    "Подключение 5 устройств",
+                    "Подключение до 5 устройств",
                 ]
             else:  # premium
                 features = [
@@ -151,7 +151,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Серверы NL, USA, FR",
-                    "Подключение 15 устройств",
+                    "Подключение до 15 устройств",
                 ]
         
         return SubscriptionPlanDetailViewModel(
@@ -195,7 +195,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Сервер NL",
-                    "Подключение 5 устройств",
+                    "Подключение до 5 устройств",
                 ]
             else:  # premium
                 plan_name = "Премиум тариф"
@@ -204,7 +204,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Серверы NL, USA, FR",
-                    "Подключение 15 устройств",
+                    "Подключение до 15 устройств",
                 ]
 
             # Создаем ViewModel с данными тарифа (по умолчанию период 0 - не выбран)
@@ -247,7 +247,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Сервер NL",
-                    "Подключение 5 устройств",
+                    "Подключение до 5 устройств",
                 ]
             else:  # premium
                 plan_name = "Премиум тариф"
@@ -257,7 +257,7 @@ class SubscriptionPlanDetailScreen(BaseScreen):
                     "Поддержка разных устройств",
                     "YouTube без рекламы",
                     "Серверы NL, USA, FR",
-                    "Подключение 15 устройств",
+                    "Подключение до 15 устройств",
                 ]
             
             amount = periods.get(str(period_months), 0)

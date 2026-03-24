@@ -487,7 +487,7 @@ async def plan_basic(callback: types.CallbackQuery):
             "Поддержка разных устройств",
             "YouTube без рекламы",
             "Сервер NL",
-            "Подключение 5 устройств",
+            "Подключение до 5 устройств",
         ]
     )
 
@@ -523,7 +523,7 @@ async def plan_premium(callback: types.CallbackQuery):
             "Поддержка разных устройств",
             "YouTube без рекламы",
             "Серверы NL, USA, FR",
-            "Подключение 15 устройств",
+            "Подключение до 15 устройств",
         ]
     )
     
@@ -568,7 +568,7 @@ async def plan_basic_period(callback: types.CallbackQuery):
             "Поддержка разных устройств",
             "YouTube без рекламы",
             "Сервер NL",
-            "Подключение 5 устройств",
+            "Подключение до 5 устройств",
         ]
     )
     
@@ -614,7 +614,7 @@ async def plan_premium_period(callback: types.CallbackQuery):
             "Поддержка разных устройств",
             "YouTube без рекламы",
             "Серверы NL, USA, FR",
-            "Подключение 15 устройств",
+            "Подключение до 15 устройств",
         ]
     )
     
