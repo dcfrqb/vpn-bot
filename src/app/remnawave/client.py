@@ -22,6 +22,8 @@ _USER_UPDATE_WHITELIST = {
     "telegramId": "telegramId",
     "active_internal_squads": "activeInternalSquads",
     "activeInternalSquads": "activeInternalSquads",
+    "hwid_device_limit": "hwidDeviceLimit",
+    "hwidDeviceLimit": "hwidDeviceLimit",
 }
 
 

@@ -486,10 +486,11 @@ async def plan_basic(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL"
+            "Сервер NL",
+            "Подключение 5 устройств",
         ]
     )
-    
+
     from app.ui.screen_manager import get_screen_manager
     screen_manager = get_screen_manager()
     await screen_manager.navigate(
@@ -521,7 +522,8 @@ async def plan_premium(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL, USA, ESP"
+            "Серверы NL, USA, FR",
+            "Подключение 15 устройств",
         ]
     )
     
@@ -565,7 +567,8 @@ async def plan_basic_period(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL"
+            "Сервер NL",
+            "Подключение 5 устройств",
         ]
     )
     
@@ -610,7 +613,8 @@ async def plan_premium_period(callback: types.CallbackQuery):
             "Неограниченный трафик и скорость",
             "Поддержка разных устройств",
             "YouTube без рекламы",
-            "Сервера NL, USA, ESP"
+            "Серверы NL, USA, FR",
+            "Подключение 15 устройств",
         ]
     )
     

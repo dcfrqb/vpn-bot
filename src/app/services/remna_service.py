@@ -153,7 +153,8 @@ async def provision_tariff(
                 valid_until = base + relativedelta(months=period_months)
             valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        await client.update_user(remna_user_id, expire_at=valid_until_str)
+        device_limit = 15 if plan_code == "premium" else 5
+        await client.update_user(remna_user_id, expire_at=valid_until_str, hwid_device_limit=device_limit)
 
         squad_name = "premium" if plan_code == "premium" else "basic"
         try:
