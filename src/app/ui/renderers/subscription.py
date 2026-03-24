@@ -20,8 +20,7 @@ async def render_subscription_plans(viewmodel: SubscriptionViewModel) -> str:
         "• YouTube без рекламы\n"
         "• Сервер NL\n"
         "• Подключение до 5 устройств"
-        "</blockquote>\n"
-        "от 99 ₽/мес\n\n"
+        "</blockquote>\n\n"
         "💎 <b>Премиум тариф</b>\n"
         "<blockquote>"
         "• Неограниченный трафик и скорость\n"
@@ -29,8 +28,7 @@ async def render_subscription_plans(viewmodel: SubscriptionViewModel) -> str:
         "• YouTube без рекламы\n"
         "• Серверы NL, USA, FR\n"
         "• Подключение до 15 устройств"
-        "</blockquote>\n"
-        "от 199 ₽/мес\n\n"
+        "</blockquote>\n\n"
         "Выберите тариф:"
     )
 
