@@ -20,6 +20,11 @@ Configuration.account_id = settings.YOOKASSA_SHOP_ID
 Configuration.secret_key = settings.YOOKASSA_API_KEY
 
 
+def _device_limit_for_plan(plan_code: Optional[str]) -> int:
+    """Возвращает лимит устройств (hwidDeviceLimit) по тарифу."""
+    return 15 if plan_code == "premium" else 5
+
+
 async def get_squad_name_for_plan(plan_code: Optional[str]) -> Optional[str]:
     """Возвращает имя сквада для плана подписки"""
     if not plan_code:
@@ -940,17 +945,18 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     # КРИТИЧНО: Обновляем expireAt в Remnawave (source of truth)
                     # Если period_months передан — продлеваем от текущего expireAt (как provision_tariff).
                     # Иначе — fallback на subscription.valid_until (старое поведение).
+                    device_limit = _device_limit_for_plan(subscription.plan_code)
                     try:
                         if period_months is not None:
                             new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
-                            logger.info(f"remna expire_at update: remna_user_id={remna_user_id} new_expire={new_expire_str}")
-                            await client.update_user(remna_user_id, expire_at=new_expire_str)
+                            logger.info(f"remna expire_at update: remna_user_id={remna_user_id} new_expire={new_expire_str} device_limit={device_limit}")
+                            await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=device_limit)
                             logger.debug(f"remna expire_at updated for remna_user_id={remna_user_id}")
                         elif subscription.valid_until:
                             # Fallback: старое поведение — используем valid_until из local DB
                             expire_at_str = normalize_expire_at(subscription.valid_until)
-                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={expire_at_str}")
-                            await client.update_user(remna_user_id, expire_at=expire_at_str)
+                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={expire_at_str} device_limit={device_limit}")
+                            await client.update_user(remna_user_id, expire_at=expire_at_str, hwid_device_limit=device_limit)
                             logger.debug(f"remna expire_at updated (fallback) for remna_user_id={remna_user_id}")
                     except Exception as expire_update_e:
                         logger.warning(f"⚠️ Не удалось обновить expireAt для пользователя {remna_user_id}: {expire_update_e}")
@@ -995,12 +1001,13 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     )
                     telegram_user.remna_user_id = remna_user_id
                     await session.commit()
-                    # Обновляем expireAt (продлеваем от текущего expireAt в Remnawave)
+                    # Обновляем expireAt и лимит устройств (продлеваем от текущего expireAt в Remnawave)
+                    _device_limit = _device_limit_for_plan(subscription.plan_code)
                     if period_months is not None:
                         try:
                             new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
-                            await client.update_user(remna_user_id, expire_at=new_expire_str)
-                            logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str}")
+                            await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=_device_limit)
+                            logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str} device_limit={_device_limit}")
                         except Exception as upd_e:
                             logger.warning(f"remna expire_at update failed: remna_user_id={remna_user_id} err={upd_e}")
                     # Обновляем сквад
@@ -1055,14 +1062,16 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     except Exception as squad_e:
                         logger.warning(f"remna squad lookup failed: name={squad_name} err={squad_e}")
 
-                logger.info(f"remna user create: tg_id={telegram_user_id} username={username} expire_at={expire_at}")
+                new_device_limit = _device_limit_for_plan(subscription.plan_code)
+                logger.info(f"remna user create: tg_id={telegram_user_id} username={username} expire_at={expire_at} device_limit={new_device_limit}")
                 try:
                     remna_user_data = await client.create_user(
                         username=username,
                         password=password,
                         expire_at=expire_at,
                         telegram_id=telegram_user_id,
-                        active_internal_squads=[squad_uuid] if squad_uuid else None
+                        active_internal_squads=[squad_uuid] if squad_uuid else None,
+                        hwid_device_limit=new_device_limit,
                     )
                     logger.debug(f"remna user created: tg_id={telegram_user_id} response_keys={list(remna_user_data.keys()) if isinstance(remna_user_data, dict) else type(remna_user_data).__name__}")
                 except Exception as e:

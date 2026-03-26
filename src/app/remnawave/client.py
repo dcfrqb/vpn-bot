@@ -359,6 +359,7 @@ class RemnaClient:
         telegram_id: Optional[int] = None,
         active_internal_squads: Optional[list] = None,
         display_name: Optional[str] = None,
+        hwid_device_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
         # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
@@ -375,6 +376,8 @@ class RemnaClient:
             payload["activeInternalSquads"] = active_internal_squads
         if display_name:
             payload["name"] = display_name  # Человекочитаемое имя для админки
+        if hwid_device_limit is not None:
+            payload["hwidDeviceLimit"] = hwid_device_limit
         return await self.request("POST", "/api/users", json=payload)
 
     async def get_or_create_user(
