@@ -86,12 +86,23 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
             f"(total_checked={len(payments)})"
         )
 
+    from app.services.cache import acquire_provision_lock, release_provision_lock
+
     for payment in candidates:
         result["processed"] += 1
         logger.info(
             f"recovery_provision_retry: payment_id={payment.id} "
             f"tg_id={payment.telegram_user_id} amount={payment.amount}"
         )
+        external_id = payment.external_id or str(payment.id)
+        lock_acquired = await acquire_provision_lock(external_id)
+        if not lock_acquired:
+            logger.info(
+                f"recovery_provision_retry: provision_lock busy external_id={external_id} "
+                f"— skipping this cycle, will retry next run"
+            )
+            result["processed"] -= 1
+            continue
         try:
             async with SessionLocal() as session:
                 await handle_successful_payment(
@@ -133,6 +144,8 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
                 f"tg_id={payment.telegram_user_id} err={e}"
             )
             logger.debug(_tb.format_exc())
+        finally:
+            await release_provision_lock(external_id)
 
     return result
 
@@ -234,17 +247,29 @@ async def recheck_single_payment(
             # Commit status update before provisioning: ensures status is persisted
             # even if provisioning fails partway through.
             await session.commit()
-            await handle_successful_payment(
-                session=session,
-                payment_id=p.id,
-                telegram_user_id=p.telegram_user_id,
-                amount=amount,
-                description=p.description or "CRS VPN",
-                bot=bot,
-                trace_id=trace_id,
-            )
-            result["provisioned"] = True
-            logger.info(f"[{trace_id}] recheck_single: provisioned external_id={external_id} tg_user={p.telegram_user_id}")
+            from app.services.cache import acquire_provision_lock, release_provision_lock
+            lock_acquired = await acquire_provision_lock(external_id)
+            if not lock_acquired:
+                logger.info(
+                    f"[{trace_id}] recheck_single: provision_lock busy external_id={external_id} "
+                    f"— another process is provisioning"
+                )
+                result["provisioned"] = False
+            else:
+                try:
+                    await handle_successful_payment(
+                        session=session,
+                        payment_id=p.id,
+                        telegram_user_id=p.telegram_user_id,
+                        amount=amount,
+                        description=p.description or "CRS VPN",
+                        bot=bot,
+                        trace_id=trace_id,
+                    )
+                    result["provisioned"] = True
+                    logger.info(f"[{trace_id}] recheck_single: provisioned external_id={external_id} tg_user={p.telegram_user_id}")
+                finally:
+                    await release_provision_lock(external_id)
         else:
             await session.commit()
 

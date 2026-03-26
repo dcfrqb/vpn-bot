@@ -401,21 +401,32 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             
             if payment_db and payment_db.status == "succeeded":
                 if not payment_db.subscription_id:
-                    await handle_successful_payment(
-                        session=session,
-                        payment_id=payment_db.id,
-                        telegram_user_id=telegram_user_id,
-                        amount=amount,
-                        description=description or "CRS VPN 30 дней",
-                        bot=bot,
-                        trace_id=trace_id,
-                    )
+                    from app.services.cache import acquire_provision_lock, release_provision_lock
+                    lock_acquired = await acquire_provision_lock(payment_id)
+                    if not lock_acquired:
+                        logger.info(
+                            f"[{trace_id}] provision_lock busy: another process is provisioning "
+                            f"external_id={payment_id} — skipping, recovery will handle if needed"
+                        )
+                    else:
+                        try:
+                            await handle_successful_payment(
+                                session=session,
+                                payment_id=payment_db.id,
+                                telegram_user_id=telegram_user_id,
+                                amount=amount,
+                                description=description or "CRS VPN 30 дней",
+                                bot=bot,
+                                trace_id=trace_id,
+                            )
+                        finally:
+                            await release_provision_lock(payment_id)
                 else:
                     logger.info(
                         f"[{trace_id}] idempotent skip: payment already provisioned "
                         f"external_id={payment_id} subscription_id={payment_db.subscription_id}"
                     )
-        
+
         return True
         
     except Exception as e:

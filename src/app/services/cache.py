@@ -310,6 +310,46 @@ async def check_payment_rate_limit(telegram_user_id: int, external_id: str) -> t
         return (True, 0)
 
 
+PROVISION_LOCK_PREFIX = "provision_lock:"
+PROVISION_LOCK_TTL = 120  # секунд — дольше любой цепочки вызовов Remna API (3 попытки × 10с + запас)
+
+
+async def acquire_provision_lock(external_id: str) -> bool:
+    """
+    Пытается захватить распределённую блокировку для provisioning платежа.
+    Ключ: provision_lock:{external_id}, TTL=120s.
+
+    Нужна потому что webhook-api и bot — разные процессы и могут одновременно
+    запустить handle_successful_payment для одного платежа.
+
+    Returns True если блокировка захвачена (можно обрабатывать).
+    Returns False если уже кто-то обрабатывает (нужно пропустить).
+    При недоступности Redis — возвращает True (fail-open, DB idempotency подхватит).
+    """
+    client = get_redis_client()
+    if not client:
+        return True
+    try:
+        key = f"{PROVISION_LOCK_PREFIX}{external_id}"
+        ok = await client.set(key, "1", ex=PROVISION_LOCK_TTL, nx=True)
+        return bool(ok)
+    except Exception as e:
+        logger.debug(f"acquire_provision_lock: {e}")
+        return True
+
+
+async def release_provision_lock(external_id: str) -> None:
+    """Освобождает блокировку provisioning для платежа."""
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        key = f"{PROVISION_LOCK_PREFIX}{external_id}"
+        await client.delete(key)
+    except Exception as e:
+        logger.debug(f"release_provision_lock: {e}")
+
+
 async def invalidate_sync_cache(telegram_id: int):
     """Инвалидирует кэш синхронизации для пользователя"""
     client = get_redis_client()
