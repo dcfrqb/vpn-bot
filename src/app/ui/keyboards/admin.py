@@ -28,7 +28,7 @@ async def build_admin_panel_keyboard(viewmodel: AdminPanelViewModel) -> types.In
             text="🔄 Обновить",
             callback_data=build_cb(ScreenID.ADMIN_PANEL, "refresh")
         )],
-        [types.InlineKeyboardButton(text="🔗 Панель", url="https://panel.crs-projects.com")],
+        [types.InlineKeyboardButton(text="🔗 Панель", url="https://panel1.crs-projects.com")],
         [types.InlineKeyboardButton(
             text="⬅️ Назад в меню",
             callback_data=build_cb(viewmodel.screen_id, "back")

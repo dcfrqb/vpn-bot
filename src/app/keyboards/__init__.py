@@ -152,7 +152,7 @@ def get_admin_panel_keyboard() -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [types.InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")],
         [types.InlineKeyboardButton(text="💳 Платежи", callback_data="admin_payments")],
-        [types.InlineKeyboardButton(text="🔗 Панель", url="https://panel.crs-projects.com")],
+        [types.InlineKeyboardButton(text="🔗 Панель", url="https://panel1.crs-projects.com")],
         [types.InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_to_main")]
     ])
 

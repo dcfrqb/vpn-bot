@@ -1269,7 +1269,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                                                 (remna_user_data.get('response', {}) or {}).get('subscription_token')
                                             )
                                             if subscription_token:
-                                                subscription_url = f"https://sub.crs-projects.com/{subscription_token}"
+                                                _sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else "https://sub.crs-projects.com"
+                                                subscription_url = f"{_sub_base}/{subscription_token}"
                                                 logger.info(f"✅ Сформирован subscription URL из token: {subscription_url[:50]}...")
                                     
                                     # Если не нашли в данных, используем метод клиента
@@ -1395,7 +1396,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     if not subscription_url and "subscriptionToken" in user_response_data:
                         token = user_response_data.get("subscriptionToken") or user_response_data.get("subscription_token")
                         if token:
-                            subscription_url = f"https://sub.crs-projects.com/{token}"
+                            _sub_base2 = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else "https://sub.crs-projects.com"
+                            subscription_url = f"{_sub_base2}/{token}"
                 
                 # Создаем запись в remna_users перед обновлением telegram_users (для Foreign Key)
                 remna_user_result = await session.execute(
