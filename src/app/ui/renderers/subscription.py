@@ -55,9 +55,15 @@ async def render_subscription_plan_detail(viewmodel: SubscriptionPlanDetailViewM
     
     if viewmodel.period_months > 0:
         text += "\n💡 Выберите способ оплаты:"
+        text += (
+            "\n\n<i>Нажимая кнопку оплаты, вы принимаете условия "
+            "<a href=\"https://crs-projects.com/terms\">Публичной оферты</a> "
+            "и <a href=\"https://crs-projects.com/privacy\">Политики "
+            "конфиденциальности</a>.</i>"
+        )
     else:
         text += "\n👇 Выберите период подписки ниже:"
-    
+
     return text
 
 

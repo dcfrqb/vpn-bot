@@ -15,6 +15,14 @@ async def build_help_keyboard(viewmodel: BaseViewModel) -> types.InlineKeyboardM
             url="https://t.me/dcfrq"
         )],
         [types.InlineKeyboardButton(
+            text="📄 Оферта",
+            url="https://crs-projects.com/terms"
+        )],
+        [types.InlineKeyboardButton(
+            text="🔒 Политика конфиденциальности",
+            url="https://crs-projects.com/privacy"
+        )],
+        [types.InlineKeyboardButton(
             text="⬅️ Назад",
             callback_data=build_cb(viewmodel.screen_id, "back")
         )]

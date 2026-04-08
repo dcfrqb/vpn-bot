@@ -263,7 +263,8 @@ class ScreenManager:
                         await message_or_callback.message.edit_text(
                             text,
                             reply_markup=keyboard,
-                            parse_mode="HTML"
+                            parse_mode="HTML",
+                            disable_web_page_preview=True
                         )
                         tg_api_duration = (time.monotonic() - tg_start) * 1000
                         # Сохраняем хэши в кэш после успешного обновления
@@ -293,7 +294,8 @@ class ScreenManager:
                             await message_or_callback.message.answer(
                                 text,
                                 reply_markup=keyboard,
-                                parse_mode="HTML"
+                                parse_mode="HTML",
+                            disable_web_page_preview=True
                             )
                             # Обновляем кэш для нового сообщения
                             if message_key:
@@ -312,7 +314,8 @@ class ScreenManager:
                             await message_or_callback.message.answer(
                                 text,
                                 reply_markup=keyboard,
-                                parse_mode="HTML"
+                                parse_mode="HTML",
+                            disable_web_page_preview=True
                             )
                             # Обновляем кэш для нового сообщения
                             if message_key:
@@ -325,7 +328,8 @@ class ScreenManager:
                     await message_or_callback.message.answer(
                         text,
                         reply_markup=keyboard,
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
                     )
                     # Обновляем кэш для нового сообщения
                     if message_key:
@@ -341,7 +345,8 @@ class ScreenManager:
                         message_id=message_id,
                         text=text,
                         reply_markup=keyboard,
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
                     )
                 else:
                     logger.error(f"Недостаточно данных для обновления сообщения: {message_or_callback}")
@@ -352,7 +357,8 @@ class ScreenManager:
                 await message_or_callback.answer(
                     text,
                     reply_markup=keyboard,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
                 )
                 tg_api_duration = (time.monotonic() - tg_start) * 1000
                 # Обновляем кэш для нового сообщения
