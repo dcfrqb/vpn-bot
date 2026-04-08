@@ -57,9 +57,10 @@ async def render_subscription_plan_detail(viewmodel: SubscriptionPlanDetailViewM
         text += "\n💡 Выберите способ оплаты:"
         text += (
             "\n\n<i>Нажимая кнопку оплаты, вы принимаете условия "
-            "<a href=\"https://bot.crs-projects.com/terms\">Публичной оферты</a> "
-            "и <a href=\"https://bot.crs-projects.com/privacy\">Политики "
-            "конфиденциальности</a>.</i>"
+            "<a href=\"https://telegra.ph/Publichnaya-oferta--CRS-VPN-04-08\">"
+            "Публичной оферты</a> и <a href=\""
+            "https://telegra.ph/Politika-konfidencialnosti--CRS-VPN-04-08\">"
+            "Политики конфиденциальности</a>.</i>"
         )
     else:
         text += "\n👇 Выберите период подписки ниже:"
