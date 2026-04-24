@@ -460,6 +460,73 @@ async def cmd_bc_send(message: types.Message) -> None:
 
 
 # =============================================================================
+# /bc_send_to — прицельная отправка конкретному пользователю
+# =============================================================================
+
+
+@router.message(Command("bc_send_to"))
+async def cmd_bc_send_to(message: types.Message) -> None:
+    """Отправка черновика конкретному telegram_id минуя сегмент.
+
+    Usage: /bc_send_to <broadcast_id> <telegram_id>
+
+    Использует ту же логику, что и worker: добавляет кнопку «Отписаться»,
+    respect photo/buttons/disable_notification. НЕ пишет recipient-запись
+    (это разовый тестовый send, не часть массовой рассылки).
+    Игнорирует is_active/opt_out — админ решает куда тестить.
+    """
+    if not _admin_only(message):
+        return
+    parts = (message.text or "").split()
+    if len(parts) < 3:
+        await message.answer(
+            "Использование: <code>/bc_send_to &lt;broadcast_id&gt; &lt;telegram_id&gt;</code>",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        bc_id = int(parts[1])
+        target_id = int(parts[2])
+    except ValueError:
+        await message.answer("broadcast_id и telegram_id должны быть числами")
+        return
+
+    if not SessionLocal:
+        await message.answer("❌ БД не настроена")
+        return
+    async with SessionLocal() as session:
+        bc = await session.get(Broadcast, bc_id)
+    if not bc:
+        await message.answer(f"Рассылка {bc_id} не найдена")
+        return
+
+    from app.services.broadcast import _attach_unsub_button
+
+    reply_markup = _attach_unsub_button(bc.buttons_json)
+    try:
+        if bc.photo_file_id:
+            await message.bot.send_photo(
+                chat_id=target_id,
+                photo=bc.photo_file_id,
+                caption=bc.text_html,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_notification=bc.disable_notification,
+            )
+        else:
+            await message.bot.send_message(
+                chat_id=target_id,
+                text=bc.text_html,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_notification=bc.disable_notification,
+            )
+        await message.answer(f"✅ Отправлено в чат <code>{target_id}</code>", parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки в {target_id}: {e}")
+
+
+# =============================================================================
 # /bc_stats
 # =============================================================================
 
