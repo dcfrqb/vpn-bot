@@ -31,8 +31,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./src/app/db/migrations:/app/src/app/db/migrations
+    # Миграции берутся из baked-in образа (COPY . .). Host-mount намеренно убран:
+    # на colima/macOS bind `./src/app/db/migrations` приходил пустым и маскировал
+    # baked-in `env.py`, из-за чего alembic падал с ImportError.
     command: ["sh", "-c", "PYTHONPATH=/app/src python3 -m alembic upgrade head"]
 
   redis:
