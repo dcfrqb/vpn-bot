@@ -8,7 +8,7 @@ class ActionType(Enum):
     """Тип действия на экране"""
     NAVIGATION = "navigation"  # Переход между экранами (open, back)
     STATE = "state"  # Изменение состояния экрана (refresh, page, filter, select)
-    FLOW = "flow"  # Временный переход (crypto_pay, help)
+    FLOW = "flow"  # Временный переход (help)
 
 
 def get_action_type(action: str, screen_id: str = None) -> ActionType:
@@ -25,7 +25,7 @@ def get_action_type(action: str, screen_id: str = None) -> ActionType:
     # FLOW actions - проверяем сначала, так как они могут иметь action="open"
     if screen_id == "help" and action == "open":
         return ActionType.FLOW
-    if action in ("crypto_pay", "help"):
+    if action == "help":
         return ActionType.FLOW
     
     # NAVIGATION actions

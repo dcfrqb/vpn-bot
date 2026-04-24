@@ -89,9 +89,9 @@ async def test_help_screen_from_payment_screen(mock_callback, screen_manager):
 
 
 @pytest.mark.asyncio
-async def test_help_screen_from_crypto_payment(mock_callback, screen_manager):
+async def test_help_screen_from_deleted_payment_message(mock_callback, screen_manager):
     """
-    Тест: открытие экрана помощи из криптоплатежа (после удаления сообщений)
+    Тест: открытие экрана помощи когда исходное сообщение уже удалено
     Ожидается: отправляется новое сообщение с экраном помощи
     """
     # Симулируем ситуацию, когда сообщение было удалено

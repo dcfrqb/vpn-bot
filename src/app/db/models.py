@@ -1,7 +1,10 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import String, BigInteger, DateTime, Boolean, Numeric, ForeignKey, func, Text, JSON, Integer
+from sqlalchemy import (
+    String, BigInteger, DateTime, Boolean, Numeric, ForeignKey, func, Text, JSON, Integer,
+    UniqueConstraint, Index,
+)
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class Base(DeclarativeBase):
@@ -47,6 +50,22 @@ class TelegramUser(Base):
         comment="Связь с пользователем Remna"
     )
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=func.true(),
+        nullable=False,
+        index=True,
+        comment="False если бот получил TelegramForbiddenError (юзер заблокировал бота)",
+    )
+    broadcast_opt_out: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=func.false(),
+        nullable=False,
+        index=True,
+        comment="True если юзер отписался от рассылок (/stop или bc:unsub)",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -225,3 +244,71 @@ class AccessRequest(Base):
     )
 
     telegram_user: Mapped["TelegramUser"] = relationship("TelegramUser", foreign_keys=[telegram_id])
+
+
+class Broadcast(Base):
+    """Рассылки администратора по пользователям."""
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text_html: Mapped[str] = mapped_column(Text, nullable=False, comment="Текст сообщения в HTML")
+    photo_file_id: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, comment="Telegram file_id фото (опционально)"
+    )
+    buttons_json: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(
+        JSON, nullable=True, comment="Массив {text, url | callback_data}"
+    )
+    segment: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="all",
+        comment="Сегмент: all | active | expired | never",
+    )
+    disable_notification: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=func.false(), nullable=False,
+    )
+    created_by: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, index=True, comment="Telegram ID админа-автора",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), server_default=func.now(), nullable=False, index=True,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    total: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    delivered: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    blocked: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
+    recipients: Mapped[list["BroadcastRecipient"]] = relationship(
+        "BroadcastRecipient", back_populates="broadcast", cascade="all, delete-orphan",
+    )
+
+
+class BroadcastRecipient(Base):
+    """Получатель конкретной рассылки."""
+    __tablename__ = "broadcast_recipients"
+    __table_args__ = (
+        UniqueConstraint("broadcast_id", "user_telegram_id", name="uq_broadcast_recipient"),
+        Index("ix_broadcast_recipients_bc_status", "broadcast_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    broadcast_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("broadcasts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending", nullable=False,
+        comment="pending | sent | failed | blocked",
+    )
+    error_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    broadcast: Mapped["Broadcast"] = relationship("Broadcast", back_populates="recipients")

@@ -75,27 +75,16 @@ def get_period_keyboard(plan_code: str) -> types.InlineKeyboardMarkup:
 
 def get_payment_method_keyboard(plan_code: str, period_months: int = 1, amount: int = 0) -> types.InlineKeyboardMarkup:
     """Клавиатура выбора способа оплаты"""
-    keyboard = []
-    
-    # Кнопка оплаты через Yookassa (карта)
-    keyboard.append([types.InlineKeyboardButton(
-        text="💳 Оплатить картой (Yookassa)",
-        callback_data=f"pay_yookassa_{plan_code}_{period_months}_{amount}"
-    )])
-    
-    # Кнопка оплаты криптовалютой (если настроен адрес)
-    from app.config import settings
-    if settings.CRYPTO_USDT_TRC20_ADDRESS:
-        keyboard.append([types.InlineKeyboardButton(
-            text="₿ Оплатить USDT (TRC20)",
-            callback_data=f"pay_crypto_{plan_code}_{period_months}_{amount}"
-        )])
-    
-    keyboard.append([types.InlineKeyboardButton(
-        text="⬅️ Назад",
-        callback_data=f"plan_{plan_code}"
-    )])
-    
+    keyboard = [
+        [types.InlineKeyboardButton(
+            text="💳 Оплатить картой (Yookassa)",
+            callback_data=f"pay_yookassa_{plan_code}_{period_months}_{amount}"
+        )],
+        [types.InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=f"plan_{plan_code}"
+        )],
+    ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 

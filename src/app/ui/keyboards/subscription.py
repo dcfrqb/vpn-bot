@@ -9,7 +9,6 @@ from app.ui.viewmodels.subscription import (
 )
 from app.ui.screens import ScreenID
 from app.ui.callbacks import build_cb
-from app.config import settings
 
 
 async def build_subscription_plans_keyboard(viewmodel: SubscriptionViewModel) -> types.InlineKeyboardMarkup:
@@ -62,18 +61,10 @@ async def build_subscription_plan_detail_keyboard(viewmodel: SubscriptionPlanDet
     
     # Кнопки оплаты (показываем только если период выбран)
     if viewmodel.period_months > 0:
-        # Кнопка оплаты через Yookassa (карта)
         keyboard.append([types.InlineKeyboardButton(
             text="💳 Оплатить картой (Yookassa)",
             callback_data=f"pay_yookassa_{viewmodel.plan_code}_{viewmodel.period_months}_{viewmodel.amount}"
         )])
-        
-        # Кнопка оплаты криптовалютой (если настроен адрес)
-        if settings.CRYPTO_USDT_TRC20_ADDRESS:
-            keyboard.append([types.InlineKeyboardButton(
-                text="💎 Оплатить USDT (TRC20)",
-                callback_data=f"pay_crypto_{viewmodel.plan_code}_{viewmodel.period_months}_{viewmodel.amount}"
-            )])
     
     keyboard.append([types.InlineKeyboardButton(
         text="⬅️ Назад",

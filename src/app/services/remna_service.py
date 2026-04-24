@@ -3,6 +3,7 @@
 Remnawave — единственный источник правды по пользователям и подпискам.
 Календарные месяцы: relativedelta(months=N), base = max(now, current_expires_at).
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -11,6 +12,13 @@ from dateutil.relativedelta import relativedelta
 from app.remnawave.client import RemnaClient, LIFETIME_EXPIRE_AT
 from app.logger import logger
 from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
+
+
+# Жёсткий timeout на отдельный Remnawave-вызов в provision-пути.
+# Внутренние retry клиента могут съесть до 90с; webhook-хендлер не должен так висеть.
+# При превышении — asyncio.TimeoutError, caller помечает payment.needs_provisioning=True,
+# recovery task дожмёт асинхронно.
+REMNAWAVE_CALL_TIMEOUT = 20.0
 
 
 # Маппинг тарифов на plan_code и период (в месяцах)
@@ -50,7 +58,7 @@ async def ensure_user_in_remnawave(
 ) -> Optional[str]:
     """
     Получает или создаёт пользователя в Remnawave.
-    Возвращает remna_user_id (uuid) или None при ошибке.
+    Возвращает remna_user_id (uuid) или None при ошибке/таймауте.
 
     Логика:
     1. Найти по telegram_id → использовать
@@ -58,13 +66,22 @@ async def ensure_user_in_remnawave(
     """
     client = RemnaClient()
     try:
-        user = await client.get_or_create_user(
-            telegram_id=telegram_id,
-            tg_username=username,
-            tg_first_name=tg_first_name,
-            tg_last_name=tg_last_name,
+        user = await asyncio.wait_for(
+            client.get_or_create_user(
+                telegram_id=telegram_id,
+                tg_username=username,
+                tg_first_name=tg_first_name,
+                tg_last_name=tg_last_name,
+            ),
+            timeout=REMNAWAVE_CALL_TIMEOUT,
         )
         return user.uuid
+    except asyncio.TimeoutError:
+        logger.error(
+            f"Remnawave timeout ({REMNAWAVE_CALL_TIMEOUT}s) в ensure_user_in_remnawave "
+            f"tg_id={telegram_id}"
+        )
+        return None
     except Exception as e:
         logger.error(f"Ошибка ensure_user_in_remnawave для tg_id={telegram_id}: {e}")
         return None
@@ -126,7 +143,10 @@ async def provision_tariff(
             base = now
             # Продление от текущего expireAt если ещё активна
             try:
-                user_data = await client.get_user_by_id(remna_user_id)
+                user_data = await asyncio.wait_for(
+                    client.get_user_by_id(remna_user_id),
+                    timeout=REMNAWAVE_CALL_TIMEOUT,
+                )
                 raw = user_data.get("response", user_data) if isinstance(user_data, dict) else {}
                 if not isinstance(raw, dict):
                     raw = {}
@@ -154,15 +174,32 @@ async def provision_tariff(
             valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         device_limit = 15 if plan_code == "premium" else 5
-        await client.update_user(remna_user_id, expire_at=valid_until_str, hwid_device_limit=device_limit)
+        await asyncio.wait_for(
+            client.update_user(
+                remna_user_id,
+                expire_at=valid_until_str,
+                hwid_device_limit=device_limit,
+            ),
+            timeout=REMNAWAVE_CALL_TIMEOUT,
+        )
 
         squad_name = "premium" if plan_code == "premium" else "basic"
-        try:
-            squad = await client.get_squad_by_name(squad_name)
-            if squad and squad.get("uuid"):
-                await client.update_user(remna_user_id, activeInternalSquads=[squad["uuid"]])
-        except Exception as squad_e:
-            logger.warning(f"Не удалось обновить сквад {squad_name}: {squad_e}")
+        squad = await asyncio.wait_for(
+            client.get_squad_by_name(squad_name),
+            timeout=REMNAWAVE_CALL_TIMEOUT,
+        )
+        if not squad or not squad.get("uuid"):
+            # Squad должен существовать — если его нет, подписка активна но без доступа к нодам.
+            # Явный raise → caller помечает needs_provisioning, админ получит алерт через логи.
+            raise RuntimeError(
+                f"squad_not_found: тариф={plan_code} squad_name={squad_name!r} — "
+                f"проверьте конфигурацию squad'ов в Remnawave. "
+                f"tg_id={telegram_id} remna_user_id={remna_user_id}"
+            )
+        await asyncio.wait_for(
+            client.update_user(remna_user_id, activeInternalSquads=[squad["uuid"]]),
+            timeout=REMNAWAVE_CALL_TIMEOUT,
+        )
 
         log_payment_event(
             EVENT_REMNAWAVE_PROVISION_SUCCESS,
@@ -185,6 +222,18 @@ async def provision_tariff(
             logger.warning(f"Не удалось инвалидировать кэш для {telegram_id}: {cache_e}")
 
         return True
+    except asyncio.TimeoutError:
+        logger.error(
+            f"subscription_provisioning_failed: tg_id={telegram_id} tariff={tariff} "
+            f"err=timeout ({REMNAWAVE_CALL_TIMEOUT}s на отдельный вызов Remnawave)"
+        )
+        log_payment_event(
+            EVENT_REMNAWAVE_PROVISION_FAILED,
+            req_id=req_id,
+            tg_id=telegram_id,
+            payload={"error": "remnawave_timeout", "tariff": tariff},
+        )
+        return False
     except Exception as e:
         logger.error(f"subscription_provisioning_failed: tg_id={telegram_id} tariff={tariff} err={e}")
         log_payment_event(

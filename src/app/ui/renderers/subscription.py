@@ -79,8 +79,6 @@ async def render_subscription_payment(viewmodel: SubscriptionPaymentViewModel) -
     
     if viewmodel.payment_url:
         text += "Нажмите кнопку ниже для оплаты:"
-    elif viewmodel.crypto_address:
-        text += f"Отправьте {viewmodel.amount}₽ на адрес:\n<code>{viewmodel.crypto_address}</code>"
     else:
         text += "Выберите способ оплаты:"
     

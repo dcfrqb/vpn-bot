@@ -39,10 +39,6 @@ class Settings(BaseSettings):
     # и для построения URL из subscription token.
     SUBSCRIPTION_BASE_URL: Union[str, None] = None
 
-    # Crypto Payment Configuration
-    CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
-    CRYPTO_NETWORK: Union[str, None] = "TRC20"  # TRC20, ERC20, etc.
-
     # HMAC секрет для подписи платежных запросов
     PAYREQ_HMAC_SECRET: Union[str, None] = None
     payreq_hmac_secret: Union[str, None] = None

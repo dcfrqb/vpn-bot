@@ -64,26 +64,3 @@ def render_payment_notification(
     )
 
 
-def render_crypto_payment_info(
-    plan_name: str,
-    amount: int,
-    crypto_address: str,
-    crypto_amount: Optional[float] = None
-) -> str:
-    """Рендерит информацию о крипто-платеже"""
-    text = (
-        f"₿ <b>Оплата USDT (TRC20)</b>\n\n"
-        f"Тариф: {escape_html(plan_name)}\n"
-        f"Сумма: {escape_html(str(amount))} ₽"
-    )
-    
-    if crypto_amount:
-        text += f"\nUSDT: {escape_html(str(crypto_amount))}"
-    
-    text += (
-        f"\n\n<b>Адрес для оплаты:</b>\n"
-        f"<code>{escape_html(crypto_address)}</code>\n\n"
-        f"После оплаты отправьте скриншот или хеш транзакции администратору."
-    )
-    
-    return text

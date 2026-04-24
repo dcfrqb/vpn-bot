@@ -18,7 +18,7 @@ This module will be removed in a future version.
 # Re-export legacy functions with deprecation warnings
 import warnings
 
-# Legacy keyboard builders (used in payments, crypto_payments, admin actions)
+# Legacy keyboard builders (used in payments, admin actions)
 from app.keyboards import (
     get_period_keyboard,
     get_payment_method_keyboard,

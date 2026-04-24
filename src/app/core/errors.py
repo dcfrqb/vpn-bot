@@ -35,11 +35,11 @@ class InfraError(AppError):
     
     Используется для ошибок внешних интеграций:
     - Remna API
-    - Платежные системы (YooKassa, криптоплатежи)
+    - Платежные системы (YooKassa)
     - Сетевые ошибки
     - Таймауты
     """
     def __init__(self, message: str, service: Optional[str] = None, details: Optional[str] = None):
         super().__init__(message)
-        self.service = service  # Название сервиса (remna, yookassa, crypto и т.д.)
+        self.service = service  # Название сервиса (remna, yookassa и т.д.)
         self.details = details

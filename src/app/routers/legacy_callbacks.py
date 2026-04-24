@@ -99,11 +99,7 @@ async def legacy_callback_handler(callback: types.CallbackQuery):
     # Пропускаем payment callbacks (обрабатываются в payments.py)
     if callback.data.startswith("pay_"):
         return
-    
-    # Пропускаем crypto payment callbacks
-    if callback.data.startswith("crypto_") or callback.data.startswith("change_payment_"):
-        return
-    
+
     # Пропускаем friend request callbacks
     if callback.data.startswith("friend_request_"):
         return

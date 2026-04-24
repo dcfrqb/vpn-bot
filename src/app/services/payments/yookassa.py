@@ -228,18 +228,41 @@ async def create_payment(
 
 
 async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
-    """Обрабатывает webhook от YooKassa"""
+    """Обрабатывает webhook от YooKassa.
+
+    Идемпотентность:
+      - верхний слой — Redis dedup по event.id (24h TTL), защищает от повторной
+        доставки того же webhook до попадания в БД
+      - нижний слой — `with_for_update()` на payment record + FSM VALID_STATUS_TRANSITIONS
+    """
     trace_id = str(uuid.uuid4())
     try:
         if not webhook_data:
             logger.error(f"[{trace_id}] webhook received: empty body")
             return False
-        
+
         event = webhook_data.get("event")
         if not event:
             logger.error(f"[{trace_id}] webhook received: missing event")
             return False
-        
+
+        event_id = webhook_data.get("id") or (webhook_data.get("object") or {}).get("id")
+        if event_id:
+            try:
+                from app.services.cache import get_redis_client
+                redis_client = get_redis_client()
+                if redis_client:
+                    dedup_key = f"yk_event:{event_id}"
+                    acquired = await redis_client.set(dedup_key, trace_id, ex=86400, nx=True)
+                    if not acquired:
+                        logger.info(
+                            f"[{trace_id}] webhook duplicate suppressed: event_id={event_id} "
+                            f"(already processed within 24h)"
+                        )
+                        return True
+            except Exception as dedup_err:
+                logger.warning(f"[{trace_id}] webhook dedup check failed (continuing): {dedup_err}")
+
         logger.info(f"[{trace_id}] webhook received: event={event}")
         
         notification = WebhookNotification(webhook_data)
@@ -338,7 +361,11 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                 else:
                     allowed = VALID_STATUS_TRANSITIONS.get(old_status)
                     if allowed is None:
-                        allowed = VALID_STATUS_TRANSITIONS.get("pending", set())
+                        logger.error(
+                            f"[{trace_id}] payment has unknown status in DB, refusing to transition: "
+                            f"external_id={payment_id} old_status={old_status!r} -> {status!r}"
+                        )
+                        return False
                     if status in allowed:
                         existing_payment.status = status
                         existing_payment.updated_at = datetime.utcnow()
@@ -455,12 +482,8 @@ async def handle_successful_payment(
     description: str,
     bot,
     trace_id: Optional[str] = None,
-    provision_for_verification: bool = False,
-    custom_message: Optional[str] = None,
 ) -> None:
-    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку.
-    provision_for_verification=True: оставляет status=pending, отправляет custom_message (для crypto).
-    """
+    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку."""
     trace_id = trace_id or str(uuid.uuid4())
     # NOTE: cache invalidation перенесён ПОСЛЕ commit (см. ниже)
 
@@ -628,9 +651,8 @@ async def handle_successful_payment(
         payment = payment_result.scalar_one_or_none()
         if payment:
             payment.subscription_id = subscription.id
-            if not provision_for_verification:
-                payment.status = "succeeded"
-                payment.paid_at = datetime.utcnow()
+            payment.status = "succeeded"
+            payment.paid_at = datetime.utcnow()
             await session.commit()
         
         actual_expire_at: Optional[datetime] = None
@@ -724,18 +746,15 @@ async def handle_successful_payment(
             logger.info(f"[{trace_id}] subscription notified already: payment_id={payment_id}, skip send")
             return
 
-        if custom_message:
-            message_text = custom_message
-        else:
-            # H-2: use actual Remnawave expiry if available, fallback to locally computed valid_until
-            _display_expire = actual_expire_at if actual_expire_at else valid_until
-            message_text = (
-                "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
-                f"💳 <b>Тариф:</b> {plan_name}\n"
-                f"📅 <b>Действует до:</b> {_display_expire.strftime('%d.%m.%Y %H:%M')}\n"
-                f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
-                "🎉 Теперь вы можете получить ссылку для настройки VPN."
-            )
+        # H-2: use actual Remnawave expiry if available, fallback to locally computed valid_until
+        _display_expire = actual_expire_at if actual_expire_at else valid_until
+        message_text = (
+            "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
+            f"💳 <b>Тариф:</b> {plan_name}\n"
+            f"📅 <b>Действует до:</b> {_display_expire.strftime('%d.%m.%Y %H:%M')}\n"
+            f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
+            "🎉 Теперь вы можете получить ссылку для настройки VPN."
+        )
         
         from app.keyboards import get_subscription_link_keyboard
         await bot.send_message(

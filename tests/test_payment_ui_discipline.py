@@ -17,7 +17,7 @@ def get_payment_router_files():
     
     payment_files = []
     for file_path in routers_dir.glob("*.py"):
-        if file_path.name in ("payments.py", "crypto_payments.py"):
+        if file_path.name == "payments.py":
             payment_files.append(file_path)
     
     return payment_files

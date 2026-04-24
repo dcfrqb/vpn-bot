@@ -46,7 +46,6 @@ class SubscriptionPaymentViewModel(BaseViewModel):
         period_months: int,
         amount: int,
         payment_url: Optional[str] = None,
-        crypto_address: Optional[str] = None,
         external_id: Optional[str] = None,
     ):
         self.plan_code = plan_code
@@ -54,7 +53,6 @@ class SubscriptionPaymentViewModel(BaseViewModel):
         self.period_months = period_months
         self.amount = amount
         self.payment_url = payment_url
-        self.crypto_address = crypto_address
         self.external_id = external_id
     
     @property

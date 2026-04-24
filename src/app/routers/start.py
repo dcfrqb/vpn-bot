@@ -69,6 +69,13 @@ async def cmd_start(m: types.Message):
     navigator.clear_backstack(telegram_id)
     navigator.clear_flow_anchor(telegram_id)
     navigator._set_current_screen(telegram_id, ScreenID.MAIN_MENU)
+
+    # Явный re-engage — снимаем broadcast_opt_out (если был выставлен через /stop).
+    try:
+        from app.routers.admin_broadcast import reset_broadcast_opt_out
+        await reset_broadcast_opt_out(telegram_id)
+    except Exception as _e:
+        logger.debug(f"reset_broadcast_opt_out hook failed: {_e}")
     
     # Получаем параметры из команды /start (для обработки deep links)
     command_args = m.text.split()[1:] if len(m.text.split()) > 1 else []

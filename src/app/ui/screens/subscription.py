@@ -309,7 +309,6 @@ class SubscriptionPaymentScreen(BaseScreen):
         period_months: int = 0,
         amount: int = 0,
         payment_url: str = None,
-        crypto_address: str = None,
         external_id: str = None,
     ) -> SubscriptionPaymentViewModel:
         return SubscriptionPaymentViewModel(
@@ -318,6 +317,5 @@ class SubscriptionPaymentScreen(BaseScreen):
             period_months=period_months,
             amount=amount,
             payment_url=payment_url,
-            crypto_address=crypto_address,
             external_id=external_id,
         )

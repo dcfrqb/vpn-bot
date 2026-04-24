@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 
 from app.utils.preflight import run_preflight_bot
 
@@ -13,6 +15,25 @@ from aiohttp import web
 
 from app.config import settings
 from app.logger import logger
+
+
+_shutdown_event: asyncio.Event | None = None
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+    """Регистрирует SIGTERM/SIGINT для graceful shutdown.
+    Вызов event.set() пробуждает run_webhook()/run_polling(), они корректно закрывают ресурсы.
+    """
+    def _handler(sig: signal.Signals) -> None:
+        logger.info(f"Получен сигнал {sig.name}, начинаем graceful shutdown")
+        event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _handler, sig)
+        except NotImplementedError:
+            # Windows не поддерживает add_signal_handler — запасной путь через signal.signal
+            signal.signal(sig, lambda *_: event.set())
 
 # Используем uvloop для лучшей производительности event loop
 try:
@@ -76,16 +97,21 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     dp.include_router(start_router)
 
     from app.legacy.routers.payments import router as legacy_payments_router
-    from app.routers.crypto_payments import router as crypto_payments_router
+    from app.routers.admin_broadcast import router as admin_broadcast_router
     dp.include_router(legacy_payments_router)
-    dp.include_router(crypto_payments_router)
+    dp.include_router(admin_broadcast_router)
     # ВАЖНО: app.routers.payments (payments.py) НЕ регистрируется намеренно —
-    # он содержит дублирующий обработчик pay_yookassa_ и pay_crypto_,
-    # что конфликтует с legacy_payments_router и crypto_payments_router.
-    logger.info("Режим legacy: YooKassa + crypto + БД")
+    # он содержит дублирующий обработчик pay_yookassa_,
+    # что конфликтует с legacy_payments_router.
+    logger.info("Режим legacy: YooKassa + БД")
 
     dp.include_router(admin_router)
     dp.include_router(legacy_router)  # В конце для обратной совместимости
+
+    # Глобальный errors-handler (RetryAfter/Forbidden/BadRequest) — включаем последним,
+    # чтобы он ловил ошибки всех роутеров выше.
+    from app.middlewares.tg_errors import router as errors_router
+    dp.include_router(errors_router)
     logger.info("Роутеры подключены")
 
     from app.middlewares.blocklist import load_blocklist_from_redis
@@ -114,6 +140,15 @@ async def run_polling():
     subscription_checker = SubscriptionChecker(bot, check_interval=3600)
     subscription_checker.start()
     logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
+
+    # Broadcast: подхватываем рассылки, которые не закончились до рестарта
+    try:
+        from app.services.broadcast import resume_unfinished_broadcasts
+        resumed = await resume_unfinished_broadcasts(bot)
+        if resumed:
+            logger.info(f"Resumed {resumed} unfinished broadcast(s) после рестарта")
+    except Exception as _e:
+        logger.warning(f"broadcast resume failed: {_e}")
 
     logger.info("Запуск polling")
     logger.info("=" * 50)
@@ -192,6 +227,15 @@ async def run_webhook():
     subscription_checker.start()
     logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
 
+    # Broadcast: подхватываем рассылки, которые не закончились до рестарта
+    try:
+        from app.services.broadcast import resume_unfinished_broadcasts
+        resumed = await resume_unfinished_broadcasts(bot)
+        if resumed:
+            logger.info(f"Resumed {resumed} unfinished broadcast(s) после рестарта")
+    except Exception as _e:
+        logger.warning(f"broadcast resume failed: {_e}")
+
     # TELEGRAM_WEBHOOK_URL должен содержать полный URL включая путь /webhook
     webhook_base_url = settings.TELEGRAM_WEBHOOK_URL.rstrip('/')
     # Если путь /webhook уже есть в URL, используем как есть, иначе добавляем
@@ -232,16 +276,39 @@ async def run_webhook():
     logger.info(f"Webhook URL: {webhook_url}")
     logger.info("=" * 50)
     
+    shutdown_event = asyncio.Event()
+    _install_signal_handlers(asyncio.get_running_loop(), shutdown_event)
+
+    bind_host = os.getenv("BOT_WEBHOOK_BIND_HOST", "0.0.0.0")
+    bind_port = int(os.getenv("BOT_WEBHOOK_BIND_PORT", "8000"))
+
     try:
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, host="0.0.0.0", port=8000)
+        site = web.TCPSite(runner, host=bind_host, port=bind_port)
         await site.start()
-        logger.info("HTTP сервер запущен на порту 8000")
-        
-        await asyncio.Event().wait()
+        logger.info(f"HTTP сервер запущен на {bind_host}:{bind_port}")
+
+        await shutdown_event.wait()
+        logger.info("shutdown_event получен, останавливаем...")
     finally:
-        subscription_checker.stop()
+        # Graceful: сначала отключаем источники новых задач, потом закрываем ресурсы.
+        try:
+            subscription_checker.stop()
+        except Exception as _e:
+            logger.warning(f"subscription_checker.stop() failed: {_e}")
+        try:
+            # Drain: даём in-flight broadcast-ам/хендлерам шанс завершиться (до 10с).
+            from app.services.broadcast import shutdown_broadcast_worker
+            await asyncio.wait_for(shutdown_broadcast_worker(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("broadcast worker не завершился за 10с, прерываем")
+        except Exception as _e:
+            logger.debug(f"broadcast worker shutdown: {_e}")
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
         await bot.delete_webhook()
         await bot.session.close()
         logger.info("Webhook удален, бот остановлен")
