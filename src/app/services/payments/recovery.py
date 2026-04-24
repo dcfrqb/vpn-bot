@@ -38,6 +38,7 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
         stmt_no_sub = select(PaymentModel).where(
             PaymentModel.status == "succeeded",
             PaymentModel.subscription_id.is_(None),
+            PaymentModel.provider != "promo",
         )
         rows_no_sub = await session.execute(stmt_no_sub)
         payments_no_sub = list(rows_no_sub.scalars().all())
