@@ -65,18 +65,17 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
             )
             return
         
-        # Определяем название тарифа
-        if plan_code == "basic":
-            plan_name = "Базовый тариф"
-        elif plan_code == "premium":
-            plan_name = "Премиум тариф"
-        else:
+        # Определяем название тарифа через единый каталог.
+        # Поддерживает legacy (basic/premium) и новые (lite/standard/pro).
+        from app.core.plans import get_plan_name, is_valid_plan_code
+        if not is_valid_plan_code(plan_code):
             # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ Неизвестный тариф",
                 reply_markup=get_back_to_plans_keyboard()
             )
             return
+        plan_name = get_plan_name(plan_code)
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         

@@ -21,8 +21,15 @@ from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISI
 REMNAWAVE_CALL_TIMEOUT = 20.0
 
 
-# Маппинг тарифов на plan_code и период (в месяцах)
+# Маппинг тарифов на plan_code и период (в месяцах).
+#
+# LEGACY (basic/premium) сохраняем как было — продление старых юзеров идёт
+# через эти же ключи с теми же squad-именами в Remnawave.
+#
+# NEW (lite/standard/pro) — новая когорта; squads тех же имён должны
+# существовать в Remnawave (см. PLAN_CATALOG).
 TARIFF_TO_PLAN = {
+    # Legacy uppercase aliases (исторические)
     "PRO_1M": ("premium", 1),
     "PRO_3M": ("premium", 3),
     "PRO_6M": ("premium", 6),
@@ -31,6 +38,7 @@ TARIFF_TO_PLAN = {
     "BASIC_3M": ("basic", 3),
     "BASIC_6M": ("basic", 6),
     "BASIC_12M": ("basic", 12),
+    # Legacy lowercase
     "basic_1": ("basic", 1),
     "basic_3": ("basic", 3),
     "basic_6": ("basic", 6),
@@ -40,12 +48,30 @@ TARIFF_TO_PLAN = {
     "premium_6": ("premium", 6),
     "premium_12": ("premium", 12),
     "premium_forever": ("premium", -1),  # -1 = unlimited
+    # NEW cohort
+    "lite_1": ("lite", 1),
+    "lite_3": ("lite", 3),
+    "lite_6": ("lite", 6),
+    "lite_12": ("lite", 12),
+    "standard_1": ("standard", 1),
+    "standard_3": ("standard", 3),
+    "standard_6": ("standard", 6),
+    "standard_12": ("standard", 12),
+    "pro_1": ("pro", 1),
+    "pro_3": ("pro", 3),
+    "pro_6": ("pro", 6),
+    "pro_12": ("pro", 12),
+    "pro_forever": ("pro", -1),
 }
 
-# Тарифы с точным числом дней (не календарные месяцы)
+# Тарифы с точным числом дней (не календарные месяцы).
+# trial_10d (legacy) → squad=basic, для legacy-юзеров.
+# trial_standard_10d (new) → squad=standard, для новых юзеров.
+# solokhin_15d остаётся на premium (редкий админский промо).
 TARIFF_TO_DAYS = {
     "solokhin_15d": ("premium", 15),
     "trial_10d": ("basic", 10),
+    "trial_standard_10d": ("standard", 10),
 }
 
 
@@ -173,7 +199,9 @@ async def provision_tariff(
                 valid_until = base + relativedelta(months=period_months)
             valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        device_limit = 15 if plan_code == "premium" else 5
+        from app.core.plans import get_plan_device_limit, get_plan_squad
+
+        device_limit = get_plan_device_limit(plan_code)
         await asyncio.wait_for(
             client.update_user(
                 remna_user_id,
@@ -183,7 +211,8 @@ async def provision_tariff(
             timeout=REMNAWAVE_CALL_TIMEOUT,
         )
 
-        squad_name = "premium" if plan_code == "premium" else "basic"
+        # Fallback "basic" сохраняем — это бывший дефолт, не ломает legacy.
+        squad_name = get_plan_squad(plan_code) or "basic"
         squad = await asyncio.wait_for(
             client.get_squad_by_name(squad_name),
             timeout=REMNAWAVE_CALL_TIMEOUT,

@@ -23,6 +23,7 @@ ACTION_MAP: Dict[ScreenID, Dict[str, Tuple[ActionEffect, Optional[ScreenID]]]] =
     ScreenID.SUBSCRIPTION_PLANS: {
         "open": ("NAVIGATION", None),
         "select": ("NAVIGATION", ScreenID.SUBSCRIPTION_PLAN_DETAIL),  # Выбор тарифа -> переход на детальный экран
+        "extend": ("NAVIGATION", ScreenID.SUBSCRIPTION_PLAN_DETAIL),  # Продлить последний тариф юзера
         "back": ("NAVIGATION", ScreenID.MAIN_MENU),
     },
     ScreenID.SUBSCRIPTION_PLAN_DETAIL: {

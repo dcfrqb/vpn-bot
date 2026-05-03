@@ -22,24 +22,17 @@ Configuration.secret_key = settings.YOOKASSA_API_KEY
 
 def _device_limit_for_plan(plan_code: Optional[str]) -> int:
     """Возвращает лимит устройств (hwidDeviceLimit) по тарифу."""
-    return 15 if plan_code == "premium" else 5
+    from app.core.plans import get_plan_device_limit
+    return get_plan_device_limit(plan_code)
 
 
 async def get_squad_name_for_plan(plan_code: Optional[str]) -> Optional[str]:
-    """Возвращает имя сквада для плана подписки"""
-    if not plan_code:
-        return None
-    
-    plan_code_lower = plan_code.lower()
-    if plan_code_lower == 'basic':
-        return 'basic'  # Исправлено: было 'base', должно быть 'basic'
-    elif plan_code_lower == 'premium':
-        return 'premium'
-    elif plan_code_lower == 'trial':
-        # Пробный период использует базовый сквад
-        return 'basic'  # Исправлено: было 'base', должно быть 'basic'
-    
-    return None
+    """Возвращает имя сквада для плана подписки.
+
+    Для unknown plan_code возвращает None — caller должен пометить provisioning failed.
+    """
+    from app.core.plans import get_plan_squad
+    return get_plan_squad(plan_code)
 
 
 def generate_remna_password(length: int = 24) -> str:
@@ -561,14 +554,22 @@ async def handle_successful_payment(
                     except (ValueError, TypeError):
                         period_months = None
 
-        # Если не нашли в metadata, определяем тариф и период по сумме платежа
+        # Если не нашли в metadata, определяем тариф и период по сумме платежа.
+        # ВНИМАНИЕ: после ввода тарифов lite/standard/pro суммы пересекаются
+        # (249, 1199, 2199 — двусмысленны). Этот fallback ОСОЗНАННО мапит
+        # амбивалентные суммы в legacy basic/premium, чтобы новые юзеры
+        # с разбитой metadata получили рабочую подписку (с меньшим набором
+        # серверов, поправляется руками админа). Сам факт срабатывания —
+        # ERROR, требует разбора почему metadata пустая.
         if not plan_code or not period_months:
             # Базовый: 99 (1 мес), 249 (3 мес), 499 (6 мес), 899 (12 мес)
             # Премиум: 199 (1 мес), 549 (3 мес), 999 (6 мес), 1799 (12 мес)
             # Порядок: от большего к меньшему, без перекрытий диапазонов
-            logger.warning(
-                f"[{trace_id}] plan determined by amount fallback "
-                f"(metadata missing plan_code/period_months): amount={amount} payment_id={payment_id}"
+            logger.error(
+                f"[{trace_id}] plan determined by AMOUNT FALLBACK — metadata broken. "
+                f"amount={amount} payment_id={payment_id} tg_id={telegram_user_id}. "
+                f"Юзер получит legacy basic/premium; для new-cohort юзера "
+                f"подписку нужно вручную перепровизионить в нужный squad."
             )
             if amount >= 1799:
                 plan_code = "premium"
@@ -598,11 +599,9 @@ async def handle_successful_payment(
                 plan_code = "basic"
                 period_months = 1
         
-        # Определяем plan_name
-        if plan_code == "premium":
-            plan_name = "Премиум"
-        else:
-            plan_name = "Базовый"
+        # Определяем plan_name через единый каталог
+        from app.core.plans import get_plan_name
+        plan_name = get_plan_name(plan_code)
         
         # Используем calendar months (не 30-дневное приближение) для точного expireAt
         valid_until = datetime.utcnow() + relativedelta(months=period_months)
@@ -644,7 +643,14 @@ async def handle_successful_payment(
         
         await session.commit()
         await session.refresh(subscription)
-        
+
+        # Сброс кэша last_plan, чтобы кнопка "🔄 Продлить" показала свежий план.
+        try:
+            from app.services.users import invalidate_last_plan_cache
+            await invalidate_last_plan_cache(telegram_user_id)
+        except Exception as _e:
+            logger.debug(f"[{trace_id}] invalidate_last_plan_cache soft-fail: {_e}")
+
         payment_result = await session.execute(
             select(PaymentModel).where(PaymentModel.id == payment_id)
         )

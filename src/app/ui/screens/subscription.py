@@ -1,44 +1,74 @@
 """
-Экраны подписки
+Экраны подписки.
+
+Меню тарифов одно для всех (MENU_PLAN_CODES = lite/standard/pro). Если у юзера
+есть последняя покупаемая подписка (`get_user_last_plan`), на экране плюсом
+рендерится кнопка "🔄 Продлить", ведущая на детальный экран этого plan_code
+с актуальными для него ценами (legacy basic/premium → старые, new → новые).
+
+Cross-cohort guard'а больше нет — `is_valid_plan_code` достаточно.
 """
 from typing import Optional, Union
+
 from aiogram import types
-from app.ui.screens.base import BaseScreen
-from app.ui.screens import ScreenID
-from app.ui.viewmodels.subscription import (
-    SubscriptionViewModel,
-    SubscriptionPlanDetailViewModel,
-    SubscriptionPaymentViewModel
-)
-from app.ui.renderers.subscription import (
-    render_subscription_plans,
-    render_subscription_plan_detail,
-    render_subscription_payment
-)
-from app.ui.keyboards.subscription import (
-    build_subscription_plans_keyboard,
-    build_subscription_plan_detail_keyboard,
-    build_subscription_payment_keyboard
+
+from app.core.plans import (
+    get_plan_features,
+    get_plan_name,
+    get_plan_price,
+    is_valid_plan_code,
 )
 from app.logger import logger
+from app.ui.keyboards.subscription import (
+    build_subscription_payment_keyboard,
+    build_subscription_plan_detail_keyboard,
+    build_subscription_plans_keyboard,
+)
+from app.ui.renderers.subscription import (
+    render_subscription_payment,
+    render_subscription_plan_detail,
+    render_subscription_plans,
+)
+from app.ui.screens import ScreenID
+from app.ui.screens.base import BaseScreen
+from app.ui.viewmodels.subscription import (
+    SubscriptionPaymentViewModel,
+    SubscriptionPlanDetailViewModel,
+    SubscriptionViewModel,
+)
 
 
 class SubscriptionPlansScreen(BaseScreen):
     """Экран выбора тарифов"""
-    
+
     @property
     def screen_id(self) -> ScreenID:
         return ScreenID.SUBSCRIPTION_PLANS
-    
+
     async def render(self, viewmodel: SubscriptionViewModel) -> str:
         return await render_subscription_plans(viewmodel)
-    
+
     async def build_keyboard(self, viewmodel: SubscriptionViewModel) -> types.InlineKeyboardMarkup:
         return await build_subscription_plans_keyboard(viewmodel)
-    
+
     async def create_viewmodel(self, **kwargs) -> SubscriptionViewModel:
-        return SubscriptionViewModel()
-    
+        """Подтягивает last_plan_code для рендера кнопки 'Продлить'.
+
+        user_id может не быть передан (legacy callers) — тогда last_plan_code=None
+        и кнопка просто не показывается.
+        """
+        user_id = kwargs.get("user_id")
+        last_plan_code: Optional[str] = None
+        if user_id is not None:
+            try:
+                from app.services.users import get_user_last_plan
+                last_plan_code = await get_user_last_plan(int(user_id))
+            except Exception as e:
+                logger.debug(
+                    f"create_viewmodel: get_user_last_plan failed user_id={user_id} err={e}"
+                )
+        return SubscriptionViewModel(last_plan_code=last_plan_code)
+
     async def handle_action(
         self,
         action: str,
@@ -46,122 +76,119 @@ class SubscriptionPlansScreen(BaseScreen):
         message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
-        """
-        Обрабатывает действия экрана (select - выбор тарифа)
-        
-        Args:
-            action: Действие (select)
-            payload: Данные (plan_code: "basic" или "premium")
-            message_or_callback: Message или CallbackQuery
-            user_id: ID пользователя
-            
-        Returns:
-            True, если действие обработано
-        """
-        if action == "select":
-            # Выбор тарифа - создаем ViewModel для детального экрана тарифа с предустановленным периодом 1 месяц
-            plan_code = payload
-            
-            # Определяем данные тарифа и цену для 1 месяца
-            if plan_code == "basic":
-                plan_name = "Базовый тариф"
-                period_months = 1
-                amount = 99
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Сервер NL",
-                    "Подключение до 5 устройств",
-                ]
-            elif plan_code == "premium":
-                plan_name = "Премиум тариф"
-                period_months = 1
-                amount = 199
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Серверы NL, USA, FR",
-                    "Подключение до 15 устройств",
-                ]
-            else:
-                logger.warning(f"Неизвестный plan_code: {plan_code}")
+        """select - выбор нового тарифа из меню; extend - продление текущего."""
+        from app.ui.screen_manager import get_screen_manager
+
+        if action == "extend":
+            # Дёргаем live last_plan, чтобы на race-условия (юзер мог купить
+            # что-то в другом окне) была свежая инфа.
+            last_plan_code: Optional[str] = None
+            if user_id is not None:
+                try:
+                    from app.services.users import get_user_last_plan
+                    last_plan_code = await get_user_last_plan(int(user_id))
+                except Exception as e:
+                    logger.warning(f"extend: get_user_last_plan failed user_id={user_id} err={e}")
+
+            if not last_plan_code or not is_valid_plan_code(last_plan_code):
+                # Race / fail-safe: VM показала кнопку, а сейчас плана нет.
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    await message_or_callback.answer(
+                        "У вас нет подписки для продления", show_alert=True
+                    )
                 return False
-            
-            logger.info(f"Пользователь {user_id} выбрал тариф: {plan_code} ({plan_name}), период: {period_months} месяц, сумма: {amount}₽")
-            
-            # Создаем ViewModel для детального экрана тарифа с предустановленным периодом 1 месяц
-            detail_screen = SubscriptionPlanDetailScreen()
-            viewmodel = await detail_screen.create_viewmodel(
-                plan_code=plan_code,
-                plan_name=plan_name,
-                period_months=period_months,  # Предустановленный период 1 месяц
-                amount=amount,
-                features=features
+
+            viewmodel = await SubscriptionPlanDetailScreen().create_viewmodel(
+                plan_code=last_plan_code,
+                period_months=0,  # юзер выберет период
+                amount=0,
             )
-            
-            # Показываем детальный экран через ScreenManager
-            from app.ui.screen_manager import get_screen_manager
             screen_manager = get_screen_manager()
             return await screen_manager.navigate(
                 from_screen_id=ScreenID.SUBSCRIPTION_PLANS,
                 to_screen_id=ScreenID.SUBSCRIPTION_PLAN_DETAIL,
                 message_or_callback=message_or_callback,
                 viewmodel=viewmodel,
-                edit=True
+                edit=True,
             )
-        
-        return False
+
+        if action != "select":
+            return False
+
+        plan_code = payload
+        if not is_valid_plan_code(plan_code):
+            logger.warning(f"select: невалидный plan_code {plan_code!r}")
+            return False
+
+        plan_name = get_plan_name(plan_code)
+        period_months = 1
+        amount = get_plan_price(plan_code, period_months)
+        features = get_plan_features(plan_code)
+
+        if amount <= 0:
+            logger.warning(f"select: нет цены для {plan_code}/{period_months}m")
+            return False
+
+        logger.info(
+            f"Пользователь {user_id} выбрал тариф: {plan_code} ({plan_name}), "
+            f"период: {period_months} месяц, сумма: {amount}₽"
+        )
+
+        viewmodel = await SubscriptionPlanDetailScreen().create_viewmodel(
+            plan_code=plan_code,
+            plan_name=plan_name,
+            period_months=period_months,
+            amount=amount,
+            features=features,
+        )
+
+        screen_manager = get_screen_manager()
+        return await screen_manager.navigate(
+            from_screen_id=ScreenID.SUBSCRIPTION_PLANS,
+            to_screen_id=ScreenID.SUBSCRIPTION_PLAN_DETAIL,
+            message_or_callback=message_or_callback,
+            viewmodel=viewmodel,
+            edit=True
+        )
 
 
 class SubscriptionPlanDetailScreen(BaseScreen):
     """Экран детальной информации о тарифе"""
-    
+
     @property
     def screen_id(self) -> ScreenID:
         return ScreenID.SUBSCRIPTION_PLAN_DETAIL
-    
+
     async def render(self, viewmodel: SubscriptionPlanDetailViewModel) -> str:
         return await render_subscription_plan_detail(viewmodel)
-    
+
     async def build_keyboard(self, viewmodel: SubscriptionPlanDetailViewModel) -> types.InlineKeyboardMarkup:
         return await build_subscription_plan_detail_keyboard(viewmodel)
-    
+
     async def create_viewmodel(
         self,
         plan_code: str = "basic",
-        plan_name: str = "Базовый тариф",
+        plan_name: Optional[str] = None,
         period_months: int = 1,
-        amount: int = 99,
-        features: list[str] = None
+        amount: Optional[int] = None,
+        features: Optional[list[str]] = None,
     ) -> SubscriptionPlanDetailViewModel:
+        # Дефолты тянем из каталога — никаких хардкодов под basic/premium.
+        if plan_name is None:
+            plan_name = get_plan_name(plan_code)
         if features is None:
-            if plan_code == "basic":
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Сервер NL",
-                    "Подключение до 5 устройств",
-                ]
-            else:  # premium
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Серверы NL, USA, FR",
-                    "Подключение до 15 устройств",
-                ]
-        
+            features = get_plan_features(plan_code)
+        if amount is None:
+            amount = get_plan_price(plan_code, period_months)
+
         return SubscriptionPlanDetailViewModel(
             plan_code=plan_code,
             plan_name=plan_name,
             period_months=period_months,
             amount=amount,
-            features=features
+            features=features,
         )
-    
+
     async def handle_action(
         self,
         action: str,
@@ -169,147 +196,96 @@ class SubscriptionPlanDetailScreen(BaseScreen):
         message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
-        """
-        Обрабатывает действия экрана (select - выбор тарифа, select_period - выбор периода)
-        
-        Args:
-            action: Действие (select, select_period)
-            payload: Данные (plan_code для select, plan_code_period для select_period)
-            message_or_callback: Message или CallbackQuery
-            user_id: ID пользователя
-            
-        Returns:
-            True, если действие обработано
-        """
+        """select - смена тарифа на детальном экране, select_period - выбор периода."""
         from app.ui.screen_manager import get_screen_manager
-        
-        if action == "select":
-            # Выбор тарифа - создаем ViewModel с данными тарифа и показываем через ScreenManager
-            plan_code = payload
-            
-            # Определяем данные тарифа
-            if plan_code == "basic":
-                plan_name = "Базовый тариф"
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Сервер NL",
-                    "Подключение до 5 устройств",
-                ]
-            else:  # premium
-                plan_name = "Премиум тариф"
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Серверы NL, USA, FR",
-                    "Подключение до 15 устройств",
-                ]
 
-            # Создаем ViewModel с данными тарифа (по умолчанию период 0 - не выбран)
-            # Пользователь выберет период на следующем шаге
+        if action == "select":
+            plan_code = payload
+            if not is_valid_plan_code(plan_code):
+                logger.warning(f"detail/select: невалидный plan_code {plan_code!r}")
+                return False
+
             viewmodel = await self.create_viewmodel(
                 plan_code=plan_code,
-                plan_name=plan_name,
-                period_months=0,  # 0 означает, что период еще не выбран
-                amount=0,  # Сумма будет установлена при выборе периода
-                features=features
+                period_months=0,
+                amount=0,
             )
-            
-            # Показываем экран через ScreenManager
+
             screen_manager = get_screen_manager()
             return await screen_manager.navigate(
                 from_screen_id=ScreenID.SUBSCRIPTION_PLANS,
                 to_screen_id=ScreenID.SUBSCRIPTION_PLAN_DETAIL,
                 message_or_callback=message_or_callback,
                 viewmodel=viewmodel,
-                edit=True
+                edit=True,
             )
-        
-        elif action == "select_period":
-            # Выбор периода подписки - обновляем ViewModel с выбранным периодом
-            # payload формат: "plan_code_period" (например "basic_1" или "premium_3")
-            parts = payload.split("_")
-            if len(parts) != 2:
-                logger.warning(f"Неверный формат payload для select_period: {payload}")
+
+        if action == "select_period":
+            try:
+                plan_code, period_raw = payload.rsplit("_", 1)
+                period_months = int(period_raw)
+            except (ValueError, AttributeError):
+                logger.warning(f"Неверный формат payload select_period: {payload!r}")
                 return False
-            
-            plan_code = parts[0]
-            period_months = int(parts[1])
-            
-            # Определяем цену в зависимости от тарифа и периода
-            if plan_code == "basic":
-                plan_name = "Базовый тариф"
-                periods = {"1": 99, "3": 249, "6": 499, "12": 899}
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Сервер NL",
-                    "Подключение до 5 устройств",
-                ]
-            else:  # premium
-                plan_name = "Премиум тариф"
-                periods = {"1": 199, "3": 549, "6": 999, "12": 1799}
-                features = [
-                    "Неограниченный трафик и скорость",
-                    "Поддержка разных устройств",
-                    "YouTube без рекламы",
-                    "Серверы NL, USA, FR",
-                    "Подключение до 15 устройств",
-                ]
-            
-            amount = periods.get(str(period_months), 0)
-            if amount == 0:
-                logger.warning(f"Неверный период для тарифа {plan_code}: {period_months}")
+
+            if not is_valid_plan_code(plan_code):
+                logger.warning(f"detail/select_period: невалидный plan_code {plan_code!r}")
                 return False
-            
-            logger.info(f"Пользователь {user_id} выбрал тариф {plan_code} на {period_months} месяц(а/ев), сумма: {amount}₽")
-            
-            # Создаем обновленный ViewModel с выбранным периодом
+
+            amount = get_plan_price(plan_code, period_months)
+            if amount <= 0:
+                logger.warning(f"Неверный период/тариф: plan={plan_code} months={period_months}")
+                return False
+
+            plan_name = get_plan_name(plan_code)
+            features = get_plan_features(plan_code)
+
+            logger.info(
+                f"Пользователь {user_id} выбрал тариф {plan_code} на {period_months} "
+                f"месяц(а/ев), сумма: {amount}₽"
+            )
+
             viewmodel = await self.create_viewmodel(
                 plan_code=plan_code,
                 plan_name=plan_name,
                 period_months=period_months,
                 amount=amount,
-                features=features
+                features=features,
             )
-            
-            # Обновляем экран через ScreenManager (STATE - обновление без изменения backstack)
+
             screen_manager = get_screen_manager()
             return await screen_manager.show_screen(
                 screen_id=ScreenID.SUBSCRIPTION_PLAN_DETAIL,
                 message_or_callback=message_or_callback,
                 viewmodel=viewmodel,
                 edit=True,
-                user_id=user_id
+                user_id=user_id,
             )
-        
+
         return False
 
 
 class SubscriptionPaymentScreen(BaseScreen):
     """Экран оплаты подписки"""
-    
+
     @property
     def screen_id(self) -> ScreenID:
         return ScreenID.SUBSCRIPTION_PAYMENT
-    
+
     async def render(self, viewmodel: SubscriptionPaymentViewModel) -> str:
         return await render_subscription_payment(viewmodel)
-    
+
     async def build_keyboard(self, viewmodel: SubscriptionPaymentViewModel) -> types.InlineKeyboardMarkup:
         return await build_subscription_payment_keyboard(viewmodel)
-    
+
     async def create_viewmodel(
         self,
         plan_code: str = "",
         plan_name: str = "",
         period_months: int = 0,
         amount: int = 0,
-        payment_url: str = None,
-        external_id: str = None,
+        payment_url: Optional[str] = None,
+        external_id: Optional[str] = None,
     ) -> SubscriptionPaymentViewModel:
         return SubscriptionPaymentViewModel(
             plan_code=plan_code,

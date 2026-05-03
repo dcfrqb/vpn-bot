@@ -354,8 +354,9 @@ async def buy_subscription(callback: types.CallbackQuery):
     # UI EXCEPTION: импорт для передачи в ScreenManager
     from app.ui.screens.subscription import SubscriptionPlansScreen
     screen = SubscriptionPlansScreen()
-    viewmodel = await screen.create_viewmodel()
-    
+    # user_id критичен для cohort lookup (legacy → basic/premium, new → lite/standard/pro).
+    viewmodel = await screen.create_viewmodel(user_id=callback.from_user.id)
+
     from app.ui.screen_manager import get_screen_manager
     screen_manager = get_screen_manager()
     await screen_manager.navigate(
@@ -1003,15 +1004,20 @@ async def cmd_solokhin(message: types.Message):
 
 @router.message(Command("trial"))
 async def cmd_trial(message: types.Message):
-    """Промокод Trial — автоматически выдаёт Basic 10 дней (только slash-команда)."""
+    """Промокод Trial — Standard на 10 дней для всех.
+
+    Юзеры с активной подпиской получают отказ внутри `_handle_promo_command`
+    (active sub → отказ), так что старые юзеры с действующим тарифом не пострадают.
+    """
     if not getattr(settings, "PROMO_TRIAL_ENABLED", True):
         return
+
     if await _handle_promo_command(
         message,
         promo_code="trial",
-        tariff="trial_10d",
+        tariff="trial_standard_10d",
         days=10,
-        plan_label="Basic",
+        plan_label="Standard",
     ):
         return
     await message.answer(

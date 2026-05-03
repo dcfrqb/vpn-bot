@@ -486,15 +486,17 @@ def _parse_friend_user_id(callback_data: str, prefix: str) -> int | None:
         return None
 
 
+# Админ-grant выдаёт топ-тариф (pro) — после ввода новой сетки lite/standard/pro
+# подарок «другу» = premium-уровень новой инфраструктуры. Squad="pro" в Remnawave.
 _FRIEND_GRANT_MAP = {
-    "1m": ("premium_1", "1 месяц"),
-    "3m": ("premium_3", "3 месяца"),
-    "forever": ("premium_forever", "всегда"),
+    "1m": ("pro_1", "1 месяц"),
+    "3m": ("pro_3", "3 месяца"),
+    "forever": ("pro_forever", "всегда"),
 }
 
 
 async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
-    """Выдаёт Premium подписку через NoDB. key: 1m, 3m, forever."""
+    """Выдаёт топ-тариф (Pro) через NoDB. key: 1m, 3m, forever."""
     if not callback.data or key not in _FRIEND_GRANT_MAP:
         return False
     tariff_code, period_label = _FRIEND_GRANT_MAP[key]

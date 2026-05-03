@@ -1,110 +1,156 @@
 """
-Keyboard builders для экранов подписки
+Keyboard builders для экранов подписки.
+
+Меню тарифов одинаковое для всех — `MENU_PLAN_CODES` (lite/standard/pro).
+Если у юзера есть последняя покупаемая подписка — над тарифами добавляется
+кнопка "🔄 Продлить {имя тарифа}", ведущая на детальный экран этого тарифа
+с актуальными для него ценами (legacy → старые, new → новые).
 """
 from aiogram import types
-from app.ui.viewmodels.subscription import (
-    SubscriptionViewModel,
-    SubscriptionPlanDetailViewModel,
-    SubscriptionPaymentViewModel
+
+from app.core.plans import (
+    MENU_PLAN_CODES,
+    get_plan_name,
+    get_plan_price,
 )
-from app.ui.screens import ScreenID
 from app.ui.callbacks import build_cb
+from app.ui.screens import ScreenID
+from app.ui.viewmodels.subscription import (
+    SubscriptionPaymentViewModel,
+    SubscriptionPlanDetailViewModel,
+    SubscriptionViewModel,
+)
 
 
-async def build_subscription_plans_keyboard(viewmodel: SubscriptionViewModel) -> types.InlineKeyboardMarkup:
-    """Строит клавиатуру выбора тарифов"""
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(
-            text="Базовый - от 99₽/мес",
-            callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "select", "basic")
-        )],
-        [types.InlineKeyboardButton(
-            text="Премиум - от 199₽/мес",
-            callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "select", "premium")
-        )],
-        [types.InlineKeyboardButton(
+# Канонический порядок периодов в детальном экране.
+PERIOD_MONTHS: tuple[int, ...] = (1, 3, 6, 12)
+
+
+def _plan_button_text(plan_code: str) -> str:
+    name = get_plan_name(plan_code)
+    price = get_plan_price(plan_code, 1)
+    return f"{name} - от {price}₽/мес"
+
+
+async def build_subscription_plans_keyboard(
+    viewmodel: SubscriptionViewModel,
+) -> types.InlineKeyboardMarkup:
+    """Строит клавиатуру выбора тарифов.
+
+    Если у юзера есть последний план (`viewmodel.last_plan_code`) — первой
+    строкой кнопка "🔄 Продлить {tariff}". Дальше — фиксированные 3 новых тарифа.
+    """
+    keyboard: list[list[types.InlineKeyboardButton]] = []
+
+    if viewmodel.last_plan_code:
+        last_name = get_plan_name(viewmodel.last_plan_code)
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text=f"🔄 Продлить «{last_name}»",
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "extend"),
+            )
+        ])
+
+    for code in MENU_PLAN_CODES:
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text=_plan_button_text(code),
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "select", code),
+            )
+        ])
+
+    keyboard.append([
+        types.InlineKeyboardButton(
             text="⬅️ Назад",
-            callback_data=build_cb(viewmodel.screen_id, "back")
-        )]
+            callback_data=build_cb(viewmodel.screen_id, "back"),
+        )
     ])
-
-
-async def build_subscription_plan_detail_keyboard(viewmodel: SubscriptionPlanDetailViewModel) -> types.InlineKeyboardMarkup:
-    """Строит клавиатуру детального экрана тарифа"""
-    keyboard = []
-    
-    # Кнопки выбора периода подписки
-    if viewmodel.plan_code == "basic":
-        periods = [
-            ("1 месяц - 99₽", "1"),
-            ("3 месяца - 249₽", "3"),
-            ("6 месяцев - 499₽", "6"),
-            ("12 месяцев - 899₽", "12")
-        ]
-    else:  # premium
-        periods = [
-            ("1 месяц - 199₽", "1"),
-            ("3 месяца - 549₽", "3"),
-            ("6 месяцев - 999₽", "6"),
-            ("12 месяцев - 1799₽", "12")
-        ]
-    
-    # Добавляем кнопки периодов
-    for period_text, period_months in periods:
-        keyboard.append([types.InlineKeyboardButton(
-            text=period_text,
-            callback_data=build_cb(viewmodel.screen_id, "select_period", f"{viewmodel.plan_code}_{period_months}")
-        )])
-    
-    # Разделитель
-    keyboard.append([])
-    
-    # Кнопки оплаты (показываем только если период выбран)
-    if viewmodel.period_months > 0:
-        keyboard.append([types.InlineKeyboardButton(
-            text="💳 Оплатить картой (Yookassa)",
-            callback_data=f"pay_yookassa_{viewmodel.plan_code}_{viewmodel.period_months}_{viewmodel.amount}"
-        )])
-    
-    keyboard.append([types.InlineKeyboardButton(
-        text="⬅️ Назад",
-        callback_data=build_cb(viewmodel.screen_id, "back")
-    )])
-    
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-async def build_subscription_payment_keyboard(viewmodel: SubscriptionPaymentViewModel) -> types.InlineKeyboardMarkup:
-    """Строит клавиатуру экрана оплаты (кнопка «Проверить» привязана к external_id)"""
-    keyboard = []
-    
+async def build_subscription_plan_detail_keyboard(
+    viewmodel: SubscriptionPlanDetailViewModel,
+) -> types.InlineKeyboardMarkup:
+    """Строит клавиатуру детального экрана тарифа.
+
+    Кнопки периодов рендерятся из PLAN_CATALOG по plan_code из viewmodel —
+    одинаково для legacy и new (цены берутся правильные).
+    """
+    keyboard: list[list[types.InlineKeyboardButton]] = []
+
+    for months in PERIOD_MONTHS:
+        price = get_plan_price(viewmodel.plan_code, months)
+        if price <= 0:
+            # Невалидный тариф/период — пропускаем кнопку.
+            continue
+        period_label = f"{months} месяц" if months == 1 else f"{months} месяцев"
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text=f"{period_label} - {price}₽",
+                callback_data=build_cb(
+                    viewmodel.screen_id,
+                    "select_period",
+                    f"{viewmodel.plan_code}_{months}",
+                ),
+            )
+        ])
+
+    keyboard.append([])  # визуальный разделитель
+
+    if viewmodel.period_months > 0:
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text="💳 Оплатить картой (Yookassa)",
+                callback_data=(
+                    f"pay_yookassa_{viewmodel.plan_code}_"
+                    f"{viewmodel.period_months}_{viewmodel.amount}"
+                ),
+            )
+        ])
+
+    keyboard.append([
+        types.InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=build_cb(viewmodel.screen_id, "back"),
+        )
+    ])
+
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+async def build_subscription_payment_keyboard(
+    viewmodel: SubscriptionPaymentViewModel,
+) -> types.InlineKeyboardMarkup:
+    """Строит клавиатуру экрана оплаты (кнопка «Проверить» привязана к external_id)."""
+    keyboard: list[list[types.InlineKeyboardButton]] = []
+
     if viewmodel.payment_url:
         keyboard.append([types.InlineKeyboardButton(text="💳 Оплатить", url=viewmodel.payment_url)])
         if viewmodel.external_id:
             keyboard.append([types.InlineKeyboardButton(
                 text="🔄 Проверить оплату",
-                callback_data=f"check_payment:{viewmodel.external_id}"
+                callback_data=f"check_payment:{viewmodel.external_id}",
             )])
-    
-    # Кнопка помощи
+
     keyboard.append([types.InlineKeyboardButton(
         text="ℹ️ Помощь",
-        callback_data=build_cb(ScreenID.HELP, "open")
+        callback_data=build_cb(ScreenID.HELP, "open"),
     )])
-    
+
     keyboard.append([types.InlineKeyboardButton(
         text="⬅️ Назад к тарифам",
-        callback_data=build_cb(viewmodel.screen_id, "back")
+        callback_data=build_cb(viewmodel.screen_id, "back"),
     )])
-    
+
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def build_period_keyboard(plan_code: str) -> types.InlineKeyboardMarkup:
-    """Строит клавиатуру выбора периода подписки"""
-    # ВАЖНО: Это legacy функция, используется в старых обработчиках
-    # TODO: Мигрировать на новый формат после обновления обработчиков
-    # Используем SUBSCRIPTION_PLAN_DETAIL как текущий экран для кнопки "назад"
+    """LEGACY: клавиатура выбора периода со старыми callback'ами plan_basic_*.
+
+    Используется в legacy-обработчиках (routers/start.py и legacy_callbacks.py).
+    Не трогаем — старые stale callback'и у legacy-юзеров продолжают работать.
+    """
     if plan_code == "basic":
         keyboard = [
             [types.InlineKeyboardButton(text="1 месяц - 99₽", callback_data="plan_basic_1")],
@@ -113,7 +159,7 @@ def build_period_keyboard(plan_code: str) -> types.InlineKeyboardMarkup:
             [types.InlineKeyboardButton(text="12 месяцев - 899₽", callback_data="plan_basic_12")],
             [types.InlineKeyboardButton(
                 text="⬅️ Назад к тарифам",
-                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLAN_DETAIL, "back")
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLAN_DETAIL, "back"),
             )]
         ]
     else:  # premium
@@ -124,7 +170,7 @@ def build_period_keyboard(plan_code: str) -> types.InlineKeyboardMarkup:
             [types.InlineKeyboardButton(text="12 месяцев - 1799₽", callback_data="plan_premium_12")],
             [types.InlineKeyboardButton(
                 text="⬅️ Назад к тарифам",
-                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLAN_DETAIL, "back")
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLAN_DETAIL, "back"),
             )]
         ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)

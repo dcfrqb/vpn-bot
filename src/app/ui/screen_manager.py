@@ -1613,7 +1613,8 @@ class ScreenManager:
                 return await screen.create_viewmodel()
             
             elif screen_id == ScreenID.SUBSCRIPTION_PLANS:
-                return await screen.create_viewmodel()
+                # user_id критичен для cohort lookup в SubscriptionPlansScreen.
+                return await screen.create_viewmodel(user_id=user_id)
             
             elif screen_id == ScreenID.SUBSCRIPTION_PLAN_DETAIL:
                 return await screen.create_viewmodel()
