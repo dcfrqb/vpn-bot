@@ -43,10 +43,9 @@ async def build_subscription_plans_keyboard(
     keyboard: list[list[types.InlineKeyboardButton]] = []
 
     if viewmodel.last_plan_code:
-        last_name = get_plan_name(viewmodel.last_plan_code)
         keyboard.append([
             types.InlineKeyboardButton(
-                text=f"🔄 Продлить «{last_name}»",
+                text="🔄 Продлить",
                 callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "extend"),
             )
         ])

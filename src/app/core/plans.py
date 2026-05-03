@@ -77,7 +77,7 @@ PLAN_CATALOG: dict[str, dict] = {
         "features": [
             "Неограниченный трафик и скорость",
             "YouTube без рекламы",
-            "Серверы: NL (TIMEWEB) + NL (HostVDS)",
+            "Серверы: NL",
             "Подключение до 2 устройств",
         ],
     },
@@ -96,13 +96,13 @@ PLAN_CATALOG: dict[str, dict] = {
     "pro": {
         "squad": "pro",
         "device_limit": 10,
-        "display": "Premium",
+        "display": "Pro",
         "prices": {1: 449, 3: 1199, 6: 2199, 12: 3999},
         "features": [
             "Неограниченный трафик и скорость",
             "YouTube без рекламы",
-            "Все серверы: NL + FR + USA + ESP",
-            "Обход ограничений",
+            "Все серверы: NL, FR, USA, ESP",
+            "Обход блокировок",
             "Подключение до 10 устройств",
         ],
     },

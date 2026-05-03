@@ -43,11 +43,7 @@ async def render_subscription_plans(viewmodel: SubscriptionViewModel) -> str:
     text = "💳 <b>Подписка на VPN</b>\n\n"
 
     if viewmodel.last_plan_code:
-        last_name = get_plan_name(viewmodel.last_plan_code)
-        text += (
-            f"🔄 У вас есть тариф <b>{escape_html(last_name)}</b> — "
-            f"можно продлить кнопкой ниже.\n\n"
-        )
+        text += "🔄 Вы можете продлить текущую подписку кнопкой ниже.\n\n"
 
     for code in MENU_PLAN_CODES:
         text += _render_plan_block(code)

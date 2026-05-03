@@ -33,7 +33,7 @@ class TestGetPlanName:
     def test_new_plans(self):
         assert get_plan_name("lite") == "Lite"
         assert get_plan_name("standard") == "Standard"
-        assert get_plan_name("pro") == "Premium"
+        assert get_plan_name("pro") == "Pro"
 
     def test_unknown_plan_returns_fallback(self):
         result = get_plan_name("unknown")

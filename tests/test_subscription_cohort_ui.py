@@ -61,9 +61,8 @@ class TestPlansKeyboardUnified:
 
         extend_buttons = [b for b in buttons if b.callback_data and ":extend:" in b.callback_data]
         assert len(extend_buttons) == 1
-        # Текст содержит имя "Базовый тариф"
-        assert "Базовый" in extend_buttons[0].text
-        assert "🔄" in extend_buttons[0].text
+        # Текст кнопки — обобщённый, без имени тарифа.
+        assert extend_buttons[0].text == "🔄 Продлить"
 
         plan_buttons = [b for b in buttons if b.callback_data and ":select:" in b.callback_data]
         suffixes = [b.callback_data.rsplit(":", 1)[-1] for b in plan_buttons]
@@ -77,7 +76,7 @@ class TestPlansKeyboardUnified:
 
         extend_buttons = [b for b in buttons if b.callback_data and ":extend:" in b.callback_data]
         assert len(extend_buttons) == 1
-        assert "Premium" in extend_buttons[0].text  # display name pro = "Premium"
+        assert extend_buttons[0].text == "🔄 Продлить"
 
     @pytest.mark.asyncio
     async def test_button_prices_use_new_catalog(self):
@@ -130,20 +129,20 @@ class TestPlansRenderer:
         text = await render_subscription_plans(vm)
         assert "Lite" in text
         assert "Standard" in text
-        assert "Premium" in text
+        assert "Pro" in text
         # Hint про продление не показывается
-        assert "Продлить" not in text
+        assert "продлить" not in text.lower()
 
     @pytest.mark.asyncio
-    async def test_with_last_plan_shows_extend_hint(self):
+    async def test_with_last_plan_shows_generic_extend_hint(self):
         vm = SubscriptionViewModel(last_plan_code="basic")
         text = await render_subscription_plans(vm)
-        # Hint про продление + название старого тарифа
-        assert "Продлить" in text or "продлить" in text
-        assert "Базовый тариф" in text
-        # Меню всё равно содержит 3 новых
+        # Generic hint без имени тарифа.
+        assert "продлить" in text.lower()
+        # Меню всё равно содержит 3 новых.
         assert "Lite" in text
         assert "Standard" in text
+        assert "Pro" in text
 
 
 class TestExtendAction:
