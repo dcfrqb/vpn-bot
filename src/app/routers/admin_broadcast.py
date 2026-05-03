@@ -30,6 +30,7 @@ from app.db.models import Broadcast, TelegramUser
 from app.db.session import SessionLocal
 from app.logger import logger
 from app.services.broadcast import (
+    CLOSE_CALLBACK_DATA,
     SEGMENT_ACTIVE,
     SEGMENT_ALL,
     SEGMENT_EXPIRED,
@@ -91,6 +92,25 @@ async def cb_unsub(callback: types.CallbackQuery) -> None:
     # В самой рассылке пытаемся убрать клавиатуру, чтобы кнопка не торчала.
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == CLOSE_CALLBACK_DATA)
+async def cb_close(callback: types.CallbackQuery) -> None:
+    """Удаляет сообщение рассылки, чтобы юзер мог почистить чат."""
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        # Telegram не даёт удалять сообщения старше 48ч от бота —
+        # тогда хотя бы убираем клавиатуру.
+        logger.debug(f"bc:close delete failed: {e}")
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    try:
+        await callback.answer()
     except Exception:
         pass
 

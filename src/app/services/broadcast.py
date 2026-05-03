@@ -61,6 +61,10 @@ VALID_SEGMENTS = {SEGMENT_ALL, SEGMENT_ACTIVE, SEGMENT_EXPIRED, SEGMENT_NEVER}
 UNSUB_CALLBACK_DATA = "bc:unsub"
 UNSUB_BUTTON_TEXT = "🔕 Отписаться от рассылок"
 
+# Close-кнопка — удаляет сообщение, чтобы юзер мог почистить чат.
+CLOSE_CALLBACK_DATA = "bc:close"
+CLOSE_BUTTON_TEXT = "❌ Закрыть"
+
 
 # =============================================================================
 # Worker registry (module-level) — чтобы graceful-shutdown мог дождаться всех задач.
@@ -278,7 +282,7 @@ async def materialize_recipients(broadcast_id: int) -> int:
 
 
 def _attach_unsub_button(buttons_json: Optional[list[dict]]) -> InlineKeyboardMarkup:
-    """Собирает клавиатуру из buttons_json + отдельная кнопка «Отписаться»."""
+    """Собирает клавиатуру из buttons_json + строка «Отписаться» / «Закрыть»."""
     rows: list[list[InlineKeyboardButton]] = []
     for btn in (buttons_json or []):
         text = btn.get("text") or "→"
@@ -286,7 +290,11 @@ def _attach_unsub_button(buttons_json: Optional[list[dict]]) -> InlineKeyboardMa
             rows.append([InlineKeyboardButton(text=text, url=btn["url"])])
         elif btn.get("callback_data"):
             rows.append([InlineKeyboardButton(text=text, callback_data=btn["callback_data"])])
-    rows.append([InlineKeyboardButton(text=UNSUB_BUTTON_TEXT, callback_data=UNSUB_CALLBACK_DATA)])
+    # Системная строка: «Отписаться» и «Закрыть» рядом.
+    rows.append([
+        InlineKeyboardButton(text=UNSUB_BUTTON_TEXT, callback_data=UNSUB_CALLBACK_DATA),
+        InlineKeyboardButton(text=CLOSE_BUTTON_TEXT, callback_data=CLOSE_CALLBACK_DATA),
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

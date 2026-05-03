@@ -68,29 +68,40 @@ class TestUnsubButton:
     def test_attach_with_no_custom_buttons(self):
         kb = _attach_unsub_button(None)
         rows = kb.inline_keyboard
+        # Системная строка: [Отписаться | Закрыть]
         assert len(rows) == 1
-        assert rows[0][0].callback_data == UNSUB_CALLBACK_DATA
+        cbs = {btn.callback_data for btn in rows[0]}
+        assert UNSUB_CALLBACK_DATA in cbs
+        from app.services.broadcast import CLOSE_CALLBACK_DATA
+        assert CLOSE_CALLBACK_DATA in cbs
 
     def test_attach_with_url_button(self):
         kb = _attach_unsub_button([{"text": "Go", "url": "https://example.com"}])
         rows = kb.inline_keyboard
         assert len(rows) == 2
         assert rows[0][0].url == "https://example.com"
-        assert rows[1][0].callback_data == UNSUB_CALLBACK_DATA
+        # Системная строка содержит и unsub и close.
+        cbs = {btn.callback_data for btn in rows[1]}
+        assert UNSUB_CALLBACK_DATA in cbs
+        from app.services.broadcast import CLOSE_CALLBACK_DATA
+        assert CLOSE_CALLBACK_DATA in cbs
 
     def test_attach_with_callback_button(self):
         kb = _attach_unsub_button([{"text": "Next", "callback_data": "foo:bar"}])
         rows = kb.inline_keyboard
         assert len(rows) == 2
         assert rows[0][0].callback_data == "foo:bar"
-        assert rows[1][0].callback_data == UNSUB_CALLBACK_DATA
+        cbs = {btn.callback_data for btn in rows[1]}
+        assert UNSUB_CALLBACK_DATA in cbs
 
     def test_attach_with_invalid_button_drops_it(self):
-        # Кнопка без url/callback_data — пропускается (worker не упадёт на невалидном JSON).
+        # Кнопка без url/callback_data — пропускается.
         kb = _attach_unsub_button([{"text": "broken"}, {"text": "Go", "url": "https://x.io"}])
-        # Expected: только валидная + unsub; невалидная тихо проигнорирована.
         rows = kb.inline_keyboard
-        assert UNSUB_CALLBACK_DATA in {btn.callback_data for row in rows for btn in row}
+        all_cbs = {btn.callback_data for row in rows for btn in row}
+        assert UNSUB_CALLBACK_DATA in all_cbs
+        from app.services.broadcast import CLOSE_CALLBACK_DATA
+        assert CLOSE_CALLBACK_DATA in all_cbs
 
 
 class TestRouterRegistration:
