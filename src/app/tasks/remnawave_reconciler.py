@@ -234,11 +234,17 @@ class RemnawaveReconciler:
                 elif actual is None:
                     desync_reason = "remnawave expireAt missing"
                 else:
-                    delta = abs((actual - expected).total_seconds())
-                    if delta > DEEP_SCAN_TOLERANCE_SECONDS:
+                    # ВАЖНО: drift в сторону БОЛЬШЕ (actual > expected) — НЕ desync.
+                    # Это означает, что юзер получил больше срока (ручное продление в
+                    # панели, lifetime grant, или разные значения округления). Resync
+                    # бы УКОРОТИЛ срок — деструктивно. Помечаем failed только если
+                    # actual < expected (юзер недополучил).
+                    delta = (actual - expected).total_seconds()
+                    if delta < -DEEP_SCAN_TOLERANCE_SECONDS:
                         desync_reason = (
-                            f"expireAt drift: actual={actual.isoformat()} "
-                            f"expected={expected.isoformat()} delta={delta:.0f}s"
+                            f"expireAt shortfall: actual={actual.isoformat()} "
+                            f"expected={expected.isoformat()} delta={delta:.0f}s "
+                            f"(remnawave behind local — needs resync)"
                         )
 
                 if desync_reason:
