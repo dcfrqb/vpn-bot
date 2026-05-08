@@ -108,6 +108,25 @@ class Subscription(Base):
     )
     config_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True, comment="Данные конфигурации VPN")
     remna_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True, comment="ID подписки в Remna API")
+    provisioning_state: Mapped[str] = mapped_column(
+        String(24),
+        default="pending",
+        server_default="pending",
+        nullable=False,
+        comment="pending | synced | failed — состояние синка с Remnawave",
+    )
+    remnawave_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="Время последнего успешного sync Remnawave",
+    )
+    remnawave_expected_expire_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="Какой expireAt мы передавали в Remnawave (intent)",
+    )
+    last_provisioning_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="Время последней попытки sync (для backoff)",
+    )
+    last_provisioning_error: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="Текст последней ошибки sync",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
