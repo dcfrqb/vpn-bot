@@ -826,16 +826,27 @@ async def handle_successful_payment(
         existing_sub = sub_result.scalar_one_or_none()
         is_new_subscription = existing_sub is None
 
-        # Вычисляем целевой valid_until. На retry — берём ранее зафиксированный target,
-        # чтобы Phase B при повторе шла на ту же дату (без дрейфа +period каждый retry).
-        if existing_sub and existing_sub.remnawave_expected_expire_at:
+        # Вычисляем целевой valid_until.
+        # Idempotency: переиспользуем зафиксированный target ТОЛЬКО если это retry того же
+        # незавершённого платежа (state in pending/failed). Если state=synced — это новый
+        # платёж после успешной предыдущей оплаты, и старый remnawave_expected_expire_at
+        # относится к ПРОШЛОЙ подписке, его использовать НЕЛЬЗЯ (мы бы записали старую дату
+        # как valid_until новой оплаты).
+        is_unfinished_retry = (
+            existing_sub is not None
+            and existing_sub.remnawave_expected_expire_at is not None
+            and existing_sub.provisioning_state in ("pending", "failed")
+        )
+        if is_unfinished_retry:
             valid_until = existing_sub.remnawave_expected_expire_at
             logger.info(
                 f"[{trace_id}] reusing fixed target from prior attempt: "
-                f"tg_id={telegram_user_id} expected_expire={valid_until}"
+                f"tg_id={telegram_user_id} expected_expire={valid_until} "
+                f"state={existing_sub.provisioning_state}"
             )
         else:
-            # Первая попытка по этому платежу. Целевая дата = max(now, текущий expireAt в Remnawave) + period.
+            # Первая попытка по этому платежу (либо новый платёж после synced подписки).
+            # Целевая дата = max(now, текущий expireAt в Remnawave) + period.
             # Учитываем текущее состояние Remnawave чтобы не сократить уже накопленный срок.
             base = datetime.utcnow()
             if telegram_user.remna_user_id:
