@@ -561,13 +561,19 @@ async def _verify_remnawave_synced(
                 if expected_expire_at.tzinfo
                 else expected_expire_at
             )
-            delta = abs((actual - expected_naive).total_seconds())
-            if delta > REMNA_EXPIRE_TOLERANCE_SECONDS:
+            # Асимметричная проверка: actual >= expected - tolerance.
+            # actual > expected — НЕ ошибка: подписка может уже быть продлена дальше
+            # (легитимное накопление от старых платежей / админских грантов / friend-grant).
+            # Сравнивать симметрично (abs) опасно: при retry storm каждый _compute_extend_expire_str
+            # добавлял +period к Remnawave, а verify ловил расхождение и снова крутил retry —
+            # подписка уехала бы в годы вперёд (был такой баг, починен).
+            shortfall = (expected_naive - actual).total_seconds()
+            if shortfall > REMNA_EXPIRE_TOLERANCE_SECONDS:
                 return (
                     False,
                     actual,
-                    f"expireAt mismatch: actual={actual.isoformat()} "
-                    f"expected={expected_naive.isoformat()} delta={delta:.0f}s "
+                    f"expireAt shortfall: actual={actual.isoformat()} "
+                    f"expected={expected_naive.isoformat()} shortfall={shortfall:.0f}s "
                     f"tolerance={REMNA_EXPIRE_TOLERANCE_SECONDS}s",
                 )
 
@@ -797,19 +803,16 @@ async def handle_successful_payment(
         # Определяем plan_name через единый каталог
         from app.core.plans import get_plan_name
         plan_name = get_plan_name(plan_code)
-        
-        # Используем calendar months (не 30-дневное приближение) для точного expireAt
-        valid_until = datetime.utcnow() + relativedelta(months=period_months)
-        
+
         user_result = await session.execute(
             select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
         )
         telegram_user = user_result.scalar_one_or_none()
-        
+
         if not telegram_user:
             logger.error(f"[{trace_id}] subscription_provisioning_failed: tg_id={telegram_user_id} not found in DB")
             return
-        
+
         # Ищем ЛЮБУЮ подписку юзера, не только active=True. Причина:
         # `uq_subscriptions_telegram_user_id` — UNIQUE на telegram_user_id (без partial),
         # т.е. одна подписка на юзера ВСЕГДА. Если предыдущая попытка остановилась в
@@ -821,13 +824,54 @@ async def handle_successful_payment(
             )
         )
         existing_sub = sub_result.scalar_one_or_none()
+        is_new_subscription = existing_sub is None
+
+        # Вычисляем целевой valid_until. На retry — берём ранее зафиксированный target,
+        # чтобы Phase B при повторе шла на ту же дату (без дрейфа +period каждый retry).
+        if existing_sub and existing_sub.remnawave_expected_expire_at:
+            valid_until = existing_sub.remnawave_expected_expire_at
+            logger.info(
+                f"[{trace_id}] reusing fixed target from prior attempt: "
+                f"tg_id={telegram_user_id} expected_expire={valid_until}"
+            )
+        else:
+            # Первая попытка по этому платежу. Целевая дата = max(now, текущий expireAt в Remnawave) + period.
+            # Учитываем текущее состояние Remnawave чтобы не сократить уже накопленный срок.
+            base = datetime.utcnow()
+            if telegram_user.remna_user_id:
+                try:
+                    _client_peek = RemnaClient()
+                    try:
+                        _peek = await _client_peek.get_user_by_id(str(telegram_user.remna_user_id))
+                    finally:
+                        try:
+                            await _client_peek.close()
+                        except Exception:
+                            pass
+                    _raw = _peek.get("response", _peek) if isinstance(_peek, dict) else {}
+                    if not isinstance(_raw, dict):
+                        _raw = {}
+                    _expire_raw = _raw.get("expireAt")
+                    if _expire_raw:
+                        _es = str(_expire_raw).replace("Z", "+00:00")
+                        _curr = datetime.fromisoformat(_es)
+                        if _curr.tzinfo is not None:
+                            _curr = _curr.astimezone(timezone.utc).replace(tzinfo=None)
+                        if _curr > base:
+                            base = _curr
+                            logger.info(
+                                f"[{trace_id}] extending from current remna expireAt: "
+                                f"tg_id={telegram_user_id} current={_curr.isoformat()}"
+                            )
+                except Exception as _peek_e:
+                    logger.debug(f"[{trace_id}] could not peek remna expireAt: {_peek_e}")
+            valid_until = base + relativedelta(months=period_months)
 
         # ===================== PHASE A: persist intent =====================
         # Записываем намерение: подписку с provisioning_state='pending'.
         # Для extension-кейса (existing_sub.active=True) НЕ обнуляем active/valid_until
         # на время Phase B — старая подписка остаётся валидной до подтверждения. Поле
         # remnawave_expected_expire_at несёт новое целевое значение для верификации.
-        is_new_subscription = existing_sub is None
         if existing_sub:
             existing_sub.plan_code = plan_code
             existing_sub.plan_name = plan_name
@@ -1228,8 +1272,24 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     device_limit = _device_limit_for_plan(subscription.plan_code)
                     try:
                         if period_months is not None:
-                            new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
-                            logger.info(f"remna expire_at update: remna_user_id={remna_user_id} new_expire={new_expire_str} device_limit={device_limit}")
+                            # ИДЕМПОТЕНТНОСТЬ: если уже есть зафиксированный target из
+                            # Phase A — используем его, не пересчитываем от текущего expireAt.
+                            # Иначе при retry _compute_extend_expire_str будет каждый раз
+                            # добавлять +period к уже сохранённому в Remnawave значению —
+                            # подписка уезжает в годы вперёд (был такой баг).
+                            if subscription.remnawave_expected_expire_at:
+                                new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
+                                logger.info(
+                                    f"remna expire_at update (idempotent target): "
+                                    f"remna_user_id={remna_user_id} new_expire={new_expire_str} "
+                                    f"device_limit={device_limit}"
+                                )
+                            else:
+                                new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
+                                logger.info(
+                                    f"remna expire_at update: remna_user_id={remna_user_id} "
+                                    f"new_expire={new_expire_str} device_limit={device_limit}"
+                                )
                             await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=device_limit)
                             logger.debug(f"remna expire_at updated for remna_user_id={remna_user_id}")
                         elif subscription.valid_until:
@@ -1285,7 +1345,12 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     _device_limit = _device_limit_for_plan(subscription.plan_code)
                     if period_months is not None:
                         try:
-                            new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
+                            # Та же идемпотентность что и в основной ветке: предпочитаем
+                            # зафиксированный target из Phase A, чтобы retry не дрейфил.
+                            if subscription.remnawave_expected_expire_at:
+                                new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
+                            else:
+                                new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
                             await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=_device_limit)
                             logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str} device_limit={_device_limit}")
                         except Exception as upd_e:
