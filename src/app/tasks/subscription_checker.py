@@ -80,3 +80,15 @@ class SubscriptionChecker:
             await check_expiry_notifications(self.bot)
         except Exception as e:
             logger.error(f"{prefix}: error during expiry notifications: {e}")
+
+        # Stage D: Remnawave reconciler shallow scan
+        # Дополняет recovery.retry_needs_provisioning: тот ходит по платежам,
+        # этот — по подпискам, через provisioning_state. Покрывает кейсы, когда
+        # платёж был провижионен идемпотентно, а Remnawave ушёл в desync.
+        try:
+            from app.tasks.remnawave_reconciler import RemnawaveReconciler
+            if not hasattr(self, "_reconciler_singleton"):
+                self._reconciler_singleton = RemnawaveReconciler(self.bot)
+            await self._reconciler_singleton.run_once()
+        except Exception as e:
+            logger.error(f"{prefix}: error during reconciler: {e}")

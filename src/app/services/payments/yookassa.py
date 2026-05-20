@@ -15,6 +15,11 @@ from app.db.models import Payment as PaymentModel, Subscription, TelegramUser, R
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.remnawave.client import RemnaClient, normalize_expire_at
+from app.services.payments.errors import ProvisioningPendingError
+
+# Допуск при сравнении ожидаемого vs фактического expireAt в Remnawave.
+# 60s покрывает дрифт между моментом APIcall и моментом, когда Remnawave записал значение.
+REMNA_EXPIRE_TOLERANCE_SECONDS = 60
 
 Configuration.account_id = settings.YOOKASSA_SHOP_ID
 Configuration.secret_key = settings.YOOKASSA_API_KEY
@@ -425,7 +430,25 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                         raise
             
             if payment_db and payment_db.status == "succeeded":
-                if not payment_db.subscription_id:
+                # Идемпотентность по реальному состоянию sync, а не по наличию
+                # subscription_id. subscription_id может быть выставлен, но Remnawave
+                # не подтвердил sync (split-state) — тогда повторный webhook должен
+                # дотолкать sync, а не делать skip.
+                already_synced = False
+                if payment_db.subscription_id:
+                    sub_r = await session.execute(
+                        select(Subscription).where(Subscription.id == payment_db.subscription_id)
+                    )
+                    sub_for_check = sub_r.scalar_one_or_none()
+                    if sub_for_check and sub_for_check.provisioning_state == "synced":
+                        already_synced = True
+
+                if already_synced:
+                    logger.info(
+                        f"[{trace_id}] idempotent skip: payment fully provisioned "
+                        f"external_id={payment_id} subscription_id={payment_db.subscription_id}"
+                    )
+                else:
                     from app.services.cache import acquire_provision_lock, release_provision_lock
                     lock_acquired = await acquire_provision_lock(payment_id)
                     if not lock_acquired:
@@ -446,14 +469,13 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                             )
                         finally:
                             await release_provision_lock(payment_id)
-                else:
-                    logger.info(
-                        f"[{trace_id}] idempotent skip: payment already provisioned "
-                        f"external_id={payment_id} subscription_id={payment_db.subscription_id}"
-                    )
 
         return True
-        
+
+    except ProvisioningPendingError:
+        # Pre-marked as failed in handle_successful_payment. Propagate so the webhook
+        # endpoint can answer 5xx and YooKassa will retry; reconciler is the safety net.
+        raise
     except Exception as e:
         ext_id = "?"
         try:
@@ -467,6 +489,185 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         raise
 
 
+async def _mark_provisioning_failed(
+    session,
+    subscription_id: int,
+    error: str,
+    trace_id: str,
+) -> None:
+    """Помечает подписку failed и логирует. Не raise."""
+    try:
+        sub_r = await session.execute(
+            select(Subscription).where(Subscription.id == subscription_id)
+        )
+        sub = sub_r.scalar_one_or_none()
+        if sub:
+            sub.provisioning_state = "failed"
+            sub.last_provisioning_error = error[:500]
+            sub.last_provisioning_attempt_at = datetime.utcnow()
+            await session.commit()
+            logger.error(
+                f"[{trace_id}] provisioning_remnawave_sync_failed: "
+                f"subscription_id={subscription_id} state=failed error={error[:200]!r}"
+            )
+    except Exception as e:
+        logger.error(f"[{trace_id}] _mark_provisioning_failed: {e}")
+
+
+async def _verify_remnawave_synced(
+    remna_user_id: str,
+    expected_expire_at: Optional[datetime],
+    trace_id: str,
+) -> tuple[bool, Optional[datetime], Optional[str]]:
+    """Перечитывает юзера из Remnawave и проверяет, что expireAt близок к expected.
+
+    Returns (ok, actual_expire_at, error_message).
+    - ok=True если status в (ACTIVE, LIMITED) и |actual - expected| <= tolerance.
+    - ok=False с error_message при любом расхождении / недоступности.
+
+    Tolerance — REMNA_EXPIRE_TOLERANCE_SECONDS. expected_expire_at=None → проверяем
+    только что юзер существует и НЕ EXPIRED.
+    """
+    client = RemnaClient()
+    try:
+        try:
+            data = await client.get_user_by_id(str(remna_user_id))
+        except Exception as e:
+            return False, None, f"get_user_by_id failed: {e}"
+        raw = data.get("response", data) if isinstance(data, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        status = raw.get("status")
+        expire_raw = raw.get("expireAt")
+        actual: Optional[datetime] = None
+        if expire_raw:
+            try:
+                expire_str = str(expire_raw).replace("Z", "+00:00")
+                actual = datetime.fromisoformat(expire_str)
+                if actual.tzinfo is not None:
+                    actual = actual.astimezone(timezone.utc).replace(tzinfo=None)
+            except Exception as e:
+                return False, None, f"could not parse expireAt={expire_raw!r}: {e}"
+
+        if status == "EXPIRED":
+            return False, actual, f"remnawave status={status} (expected ACTIVE/LIMITED)"
+
+        if expected_expire_at is not None:
+            if actual is None:
+                return False, None, "remnawave expireAt is missing but expected was set"
+            # expected_expire_at — UTC naive (см. handle_successful_payment), actual тоже сделали naive
+            expected_naive = (
+                expected_expire_at.astimezone(timezone.utc).replace(tzinfo=None)
+                if expected_expire_at.tzinfo
+                else expected_expire_at
+            )
+            delta = abs((actual - expected_naive).total_seconds())
+            if delta > REMNA_EXPIRE_TOLERANCE_SECONDS:
+                return (
+                    False,
+                    actual,
+                    f"expireAt mismatch: actual={actual.isoformat()} "
+                    f"expected={expected_naive.isoformat()} delta={delta:.0f}s "
+                    f"tolerance={REMNA_EXPIRE_TOLERANCE_SECONDS}s",
+                )
+
+        return True, actual, None
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+async def resync_subscription_to_remnawave(
+    subscription_id: int,
+    trace_id: Optional[str] = None,
+) -> bool:
+    """Повторный sync подписки с Remnawave (для reconciler'а).
+
+    Не отправляет уведомления юзеру/админу — только синкает Remnawave и проставляет
+    provisioning_state. Возвращает True при успехе, False при провале.
+    """
+    trace_id = trace_id or str(uuid.uuid4())
+    if not SessionLocal:
+        return False
+
+    async with SessionLocal() as session:
+        sub_r = await session.execute(
+            select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+        )
+        subscription = sub_r.scalar_one_or_none()
+        if not subscription:
+            logger.warning(f"[{trace_id}] resync: subscription not found id={subscription_id}")
+            return False
+
+        if not subscription.active and not subscription.is_lifetime:
+            logger.info(f"[{trace_id}] resync: subscription not active, skipping id={subscription_id}")
+            return False
+
+        subscription.last_provisioning_attempt_at = datetime.utcnow()
+        await session.commit()
+
+        # Вычисляем expected expire: для не-lifetime — valid_until.
+        expected_expire = subscription.valid_until if not subscription.is_lifetime else None
+
+        # period_months=None: get_or_create_remna_user_and_get_subscription_url пойдёт по
+        # fallback-ветке "обновить expireAt = subscription.valid_until".
+        try:
+            subscription_url = await get_or_create_remna_user_and_get_subscription_url(
+                telegram_user_id=subscription.telegram_user_id,
+                subscription_id=subscription.id,
+                period_months=None,
+            )
+        except Exception as e:
+            await _mark_provisioning_failed(session, subscription.id, f"resync sync error: {e}", trace_id)
+            return False
+
+        # Перечитываем подписку (могла обновиться внутри get_or_create_...)
+        sub_r = await session.execute(
+            select(Subscription).where(Subscription.id == subscription_id)
+        )
+        subscription = sub_r.scalar_one_or_none()
+        if not subscription:
+            return False
+
+        remna_user_id = subscription.remna_user_id
+        if not remna_user_id:
+            tg_r = await session.execute(
+                select(TelegramUser).where(
+                    TelegramUser.telegram_id == subscription.telegram_user_id
+                )
+            )
+            tg = tg_r.scalar_one_or_none()
+            remna_user_id = tg.remna_user_id if tg else None
+
+        if not remna_user_id:
+            await _mark_provisioning_failed(
+                session, subscription.id, "resync: remna_user_id still missing", trace_id
+            )
+            return False
+
+        ok, actual, err = await _verify_remnawave_synced(remna_user_id, expected_expire, trace_id)
+        if not ok:
+            await _mark_provisioning_failed(session, subscription.id, f"resync verify: {err}", trace_id)
+            return False
+
+        subscription.provisioning_state = "synced"
+        subscription.remnawave_synced_at = datetime.utcnow()
+        subscription.remnawave_expected_expire_at = expected_expire
+        subscription.last_provisioning_error = None
+        if subscription_url:
+            cfg = dict(subscription.config_data or {})
+            cfg["subscription_url"] = subscription_url
+            subscription.config_data = cfg
+        await session.commit()
+        logger.info(
+            f"[{trace_id}] reconciler_resync_succeeded: subscription_id={subscription.id} "
+            f"tg_id={subscription.telegram_user_id} expire={expected_expire}"
+        )
+        return True
+
+
 async def handle_successful_payment(
     session,
     payment_id: int,
@@ -476,9 +677,19 @@ async def handle_successful_payment(
     bot,
     trace_id: Optional[str] = None,
 ) -> None:
-    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку."""
+    """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку.
+
+    Фазы:
+      A — записать intent: subscription с provisioning_state='pending', НЕ ставить
+          payment.subscription_id. Если subscription уже active с прошлого раза, не
+          сбрасываем active/valid_until до подтверждения Remnawave.
+      B — sync Remnawave (get_or_create_remna_user_and_get_subscription_url) и
+          верификация через get_user_by_id. При провале — provisioning_state='failed',
+          raise ProvisioningPendingError (webhook вернёт 503, юзер не будет уведомлён).
+      C — финализация: provisioning_state='synced', payment.subscription_id, valid_until,
+          уведомления юзеру/админу.
+    """
     trace_id = trace_id or str(uuid.uuid4())
-    # NOTE: cache invalidation перенесён ПОСЛЕ commit (см. ниже)
 
     try:
         payment_result = await session.execute(
@@ -490,23 +701,11 @@ async def handle_successful_payment(
             return
 
         meta = payment.payment_metadata or {}
-        if isinstance(meta, dict) and meta.get("notified"):
-            # Verify that Remnawave was actually provisioned; if remna_user_id is still NULL,
-            # provisioning silently failed despite notification — allow re-run
-            _tg_notif_r = await session.execute(
-                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
-            )
-            _tg_notif = _tg_notif_r.scalar_one_or_none()
-            if _tg_notif and _tg_notif.remna_user_id:
-                logger.info(f"[{trace_id}] handle_successful_payment: already notified and provisioned payment_id={payment_id}")
-                return
-            logger.warning(
-                f"[{trace_id}] handle_successful_payment: notified but remna_user_id missing — "
-                f"re-running provisioning payment_id={payment_id} tg_id={telegram_user_id}"
-            )
 
-        # Идемпотентность provisioning: re-check subscription_id под блокировкой.
-        # Защищает от race condition при конкурентных вызовах (webhook + recovery, двойной клик).
+        # Идемпотентность: блокируем платёж и проверяем, не была ли подписка уже
+        # успешно засинкана. Гейт — provisioning_state='synced' (а не subscription_id),
+        # это закрывает баг split-state когда subscription_id выставлен, но Remnawave
+        # не обновлён.
         pay_locked = await session.execute(
             select(PaymentModel).where(PaymentModel.id == payment_id).with_for_update()
         )
@@ -515,23 +714,19 @@ async def handle_successful_payment(
             logger.error(f"[{trace_id}] handle_successful_payment: payment lost after lock id={payment_id}")
             return
         if payment_locked.subscription_id:
-            meta_locked = payment_locked.payment_metadata or {}
-            needs_reprovision = isinstance(meta_locked, dict) and meta_locked.get("needs_provisioning")
-            if not needs_reprovision:
-                # Also check if Remnawave was actually provisioned (remna_user_id may be NULL)
-                _tg_lock_r = await session.execute(
-                    select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+            sub_r = await session.execute(
+                select(Subscription).where(Subscription.id == payment_locked.subscription_id)
+            )
+            existing_synced = sub_r.scalar_one_or_none()
+            if existing_synced and existing_synced.provisioning_state == "synced":
+                logger.info(
+                    f"[{trace_id}] handle_successful_payment: already synced (idempotent) "
+                    f"payment_id={payment_id} subscription_id={existing_synced.id}"
                 )
-                _tg_lock = _tg_lock_r.scalar_one_or_none()
-                if _tg_lock and _tg_lock.remna_user_id:
-                    logger.info(
-                        f"[{trace_id}] handle_successful_payment: already provisioned (concurrent call) "
-                        f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
-                    )
-                    return
-                needs_reprovision = True  # remna_user_id NULL = provisioning silently failed
+                return
             logger.info(
-                f"[{trace_id}] handle_successful_payment: re-provisioning after prior failure "
+                f"[{trace_id}] handle_successful_payment: re-provisioning, prior state="
+                f"{getattr(existing_synced, 'provisioning_state', '?')!r} "
                 f"payment_id={payment_id} subscription_id={payment_locked.subscription_id}"
             )
 
@@ -615,34 +810,138 @@ async def handle_successful_payment(
             logger.error(f"[{trace_id}] subscription_provisioning_failed: tg_id={telegram_user_id} not found in DB")
             return
         
+        # Ищем ЛЮБУЮ подписку юзера, не только active=True. Причина:
+        # `uq_subscriptions_telegram_user_id` — UNIQUE на telegram_user_id (без partial),
+        # т.е. одна подписка на юзера ВСЕГДА. Если предыдущая попытка остановилась в
+        # Phase B (active=False, provisioning_state='pending'/'failed'), мы должны её
+        # переиспользовать; новый INSERT упадёт IntegrityError.
         sub_result = await session.execute(
             select(Subscription).where(
-                Subscription.telegram_user_id == telegram_user_id,
-                Subscription.active == True
+                Subscription.telegram_user_id == telegram_user_id
             )
         )
         existing_sub = sub_result.scalar_one_or_none()
-        
+
+        # ===================== PHASE A: persist intent =====================
+        # Записываем намерение: подписку с provisioning_state='pending'.
+        # Для extension-кейса (existing_sub.active=True) НЕ обнуляем active/valid_until
+        # на время Phase B — старая подписка остаётся валидной до подтверждения. Поле
+        # remnawave_expected_expire_at несёт новое целевое значение для верификации.
+        is_new_subscription = existing_sub is None
         if existing_sub:
             existing_sub.plan_code = plan_code
             existing_sub.plan_name = plan_name
-            existing_sub.valid_until = valid_until
-            existing_sub.active = True
+            existing_sub.provisioning_state = "pending"
+            existing_sub.remnawave_expected_expire_at = valid_until
+            existing_sub.last_provisioning_attempt_at = datetime.utcnow()
+            existing_sub.last_provisioning_error = None
             subscription = existing_sub
-            logger.info(f"[{trace_id}] subscription updated: tg_id={telegram_user_id} plan={plan_code} period={period_months}m")
+            logger.info(
+                f"[{trace_id}] subscription extension intent: tg_id={telegram_user_id} "
+                f"plan={plan_code} period={period_months}m current_valid_until={existing_sub.valid_until} "
+                f"new_expected={valid_until}"
+            )
         else:
             subscription = Subscription(
                 telegram_user_id=telegram_user_id,
                 plan_code=plan_code,
                 plan_name=plan_name,
-                active=True,
-                valid_until=valid_until
+                active=False,  # Активируем только в Phase C, после подтверждения Remnawave
+                valid_until=None,
+                provisioning_state="pending",
+                remnawave_expected_expire_at=valid_until,
+                last_provisioning_attempt_at=datetime.utcnow(),
             )
             session.add(subscription)
-            logger.info(f"[{trace_id}] subscription created: tg_id={telegram_user_id} plan={plan_code} period={period_months}m")
-        
+            logger.info(
+                f"[{trace_id}] subscription new intent: tg_id={telegram_user_id} "
+                f"plan={plan_code} period={period_months}m expected_expire={valid_until}"
+            )
+
         await session.commit()
         await session.refresh(subscription)
+
+        # ===================== PHASE B: sync Remnawave =====================
+        # На любой провал Remnawave: помечаем provisioning_state='failed' и raise.
+        # Уведомления НЕ отправляются. Webhook вернёт 503 и YooKassa повторит;
+        # reconciler страхует, если повторов не будет.
+        try:
+            subscription_url = await get_or_create_remna_user_and_get_subscription_url(
+                telegram_user_id=telegram_user_id,
+                subscription_id=subscription.id,
+                period_months=period_months,
+            )
+        except Exception as e:
+            await _mark_provisioning_failed(
+                session, subscription.id, f"remna_sync_exception: {e}", trace_id
+            )
+            raise ProvisioningPendingError(
+                f"Remnawave sync raised: {e}"
+            ) from e
+
+        # Перечитываем подписку и telegram_user — get_or_create_... мог изменить
+        # remna_user_id и subscription.config_data в своей сессии.
+        subscription_id_for_failure = subscription.id  # сохраняем до reload, на случай гонки
+        sub_r = await session.execute(
+            select(Subscription).where(Subscription.id == subscription_id_for_failure)
+        )
+        subscription = sub_r.scalar_one_or_none()
+        tg_r = await session.execute(
+            select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+        )
+        telegram_user = tg_r.scalar_one_or_none()
+
+        if subscription is None:
+            # Кто-то параллельно удалил подписку. Не пытаемся восстанавливать —
+            # просто пробрасываем как pending; reconciler/recovery разберутся.
+            logger.error(
+                f"[{trace_id}] subscription disappeared after Phase B "
+                f"id={subscription_id_for_failure} tg_id={telegram_user_id}"
+            )
+            raise ProvisioningPendingError(
+                f"Subscription {subscription_id_for_failure} disappeared after Phase B"
+            )
+
+        remna_user_id_post = subscription.remna_user_id or (
+            telegram_user.remna_user_id if telegram_user else None
+        )
+        if not remna_user_id_post or not subscription_url:
+            await _mark_provisioning_failed(
+                session,
+                subscription.id,
+                f"silent failure: remna_user_id={remna_user_id_post!r} "
+                f"subscription_url={'set' if subscription_url else 'missing'}",
+                trace_id,
+            )
+            raise ProvisioningPendingError(
+                f"Remnawave silent failure: remna_user_id={remna_user_id_post!r} "
+                f"url={'set' if subscription_url else 'missing'}"
+            )
+
+        # Верификация: перечитываем юзера из Remnawave и сравниваем expireAt.
+        ok, actual_expire_at, verify_err = await _verify_remnawave_synced(
+            remna_user_id_post, valid_until, trace_id
+        )
+        if not ok:
+            await _mark_provisioning_failed(
+                session, subscription.id, f"verification: {verify_err}", trace_id
+            )
+            raise ProvisioningPendingError(f"Remnawave verification failed: {verify_err}")
+
+        # ===================== PHASE C: finalize =====================
+        # Sync подтверждён. Активируем подписку, ставим payment.subscription_id, отмечаем
+        # provisioning_state='synced'. ТОЛЬКО ПОСЛЕ ЭТОГО — уведомления.
+        subscription.active = True
+        subscription.valid_until = valid_until
+        subscription.provisioning_state = "synced"
+        subscription.remnawave_synced_at = datetime.utcnow()
+        subscription.last_provisioning_error = None
+        if subscription_url:
+            cfg = dict(subscription.config_data or {})
+            cfg["subscription_url"] = subscription_url
+            subscription.config_data = cfg
+        if not subscription.remna_user_id and remna_user_id_post:
+            subscription.remna_user_id = remna_user_id_post
 
         # Сброс кэша last_plan, чтобы кнопка "🔄 Продлить" показала свежий план.
         try:
@@ -658,80 +957,16 @@ async def handle_successful_payment(
         if payment:
             payment.subscription_id = subscription.id
             payment.status = "succeeded"
-            payment.paid_at = datetime.utcnow()
-            await session.commit()
-        
-        actual_expire_at: Optional[datetime] = None
+            if not payment.paid_at:
+                payment.paid_at = datetime.utcnow()
+            # Чистим устаревший needs_provisioning, если оставался от прошлой попытки.
+            _meta = dict(payment.payment_metadata or {}) if isinstance(payment.payment_metadata, dict) else {}
+            _meta.pop("needs_provisioning", None)
+            _meta.pop("provisioning_error", None)
+            payment.payment_metadata = _meta
+        await session.commit()
 
-        subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-            telegram_user_id=telegram_user_id,
-            subscription_id=subscription.id,
-            period_months=period_months,  # P1: продлеваем expireAt от текущего в Remnawave
-        )
-
-        if subscription_url:
-            if not subscription.config_data:
-                subscription.config_data = {}
-            subscription.config_data["subscription_url"] = subscription_url
-            await session.commit()
-
-        # M-1: populate subscription.remna_user_id + H-2: fetch actual Remnawave expiry for message
-        try:
-            tg_refreshed_result = await session.execute(
-                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
-            )
-            tg_refreshed = tg_refreshed_result.scalar_one_or_none()
-            if tg_refreshed and tg_refreshed.remna_user_id:
-                if not subscription.remna_user_id:
-                    subscription.remna_user_id = tg_refreshed.remna_user_id
-                    await session.commit()
-                    logger.debug(f"[{trace_id}] subscription.remna_user_id set: {tg_refreshed.remna_user_id}")
-                # H-2: fetch actual expiry from Remnawave
-                try:
-                    _rc = RemnaClient()
-                    try:
-                        remna_data = await _rc.get_user_by_id(str(tg_refreshed.remna_user_id))
-                        _raw = remna_data.get("response", remna_data) if isinstance(remna_data, dict) else {}
-                        if not isinstance(_raw, dict):
-                            _raw = remna_data if isinstance(remna_data, dict) else {}
-                        expire_raw = _raw.get("expireAt")
-                        if expire_raw:
-                            from app.tasks.expiry_notifier import _parse_expire_dt as _pdt
-                            actual_expire_at = _pdt(expire_raw)
-                            if actual_expire_at:
-                                actual_expire_at = actual_expire_at.replace(tzinfo=None)
-                    finally:
-                        await _rc.close()
-                except Exception as _remna_e:
-                    logger.debug(f"[{trace_id}] H-2: could not fetch actual expiry from Remnawave: {_remna_e}")
-        except Exception as _m1_e:
-            logger.debug(f"[{trace_id}] M-1/H-2 post-provision update failed: {_m1_e}")
-
-        # Safety net: if Remnawave provisioning silently failed (returned None),
-        # mark needs_provisioning=True and abort — do NOT notify with a broken subscription
-        if not subscription_url:
-            _tg_chk_r = await session.execute(
-                select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
-            )
-            _tg_chk = _tg_chk_r.scalar_one_or_none()
-            if not (_tg_chk and _tg_chk.remna_user_id):
-                _pay_r = await session.execute(
-                    select(PaymentModel).where(PaymentModel.id == payment_id)
-                )
-                _pay = _pay_r.scalar_one_or_none()
-                if _pay:
-                    _pmeta = dict(_pay.payment_metadata or {})
-                    _pmeta["needs_provisioning"] = True
-                    _pmeta["provisioning_error"] = "remna_user_id not set after provisioning (silent failure)"
-                    _pay.payment_metadata = _pmeta
-                    await session.commit()
-                logger.warning(
-                    f"[{trace_id}] provisioning_silent_failure: remna_user_id not set after provisioning, "
-                    f"marking needs_provisioning=True. payment_id={payment_id} tg_id={telegram_user_id}"
-                )
-                return  # Recovery loop will retry; don't notify with broken subscription
-
-        # P2: cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
+        # Cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
         try:
             from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
             await invalidate_subscription_cache(telegram_user_id)
@@ -782,7 +1017,7 @@ async def handle_successful_payment(
             except Exception as user_err:
                 logger.warning(f"[{trace_id}] не удалось отправить уведомление пользователю {telegram_user_id}: {user_err}")
 
-        # --- 2. Уведомление администраторам (отдельный guard, чтобы можно было ретраить независимо) ---
+        # --- 2. Уведомление администраторам (отдельный guard, ретраится независимо от notified) ---
         from html import escape as _he
         from app.config import settings as _settings
         if _settings.ADMINS and not admin_already_notified:
@@ -856,6 +1091,11 @@ async def handle_successful_payment(
             f"tg_id={telegram_user_id} remna_user_id={subscription.remna_user_id}"
         )
         
+    except ProvisioningPendingError:
+        # Уже залогировано и помечено в _mark_provisioning_failed.
+        # Пробрасываем дальше — webhook вернёт 503, юзер будет уведомлён только когда
+        # reconciler / повторный webhook доведут sync до конца.
+        raise
     except Exception as e:
         logger.error(f"[{trace_id}] handle_successful_payment failed: payment_id={payment_id} user={telegram_user_id} err={e}")
         import traceback

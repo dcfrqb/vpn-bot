@@ -132,6 +132,21 @@ async def health_check():
         if SessionLocal:
             async with SessionLocal() as session:
                 await session.execute(_sa_text("SELECT 1"))
+                # Доп. сигнал: сколько подписок застряли в pending/failed.
+                # Не делаем degraded — health должен оставаться 200, чтобы балансер не
+                # вырубил веб-хук API. Просто публикуем число для мониторинга.
+                try:
+                    pending_row = await session.execute(
+                        _sa_text(
+                            "SELECT COUNT(*) FROM subscriptions "
+                            "WHERE active = true "
+                            "AND provisioning_state IN ('pending','failed')"
+                        )
+                    )
+                    status_parts["pending_subscriptions"] = str(int(pending_row.scalar() or 0))
+                except Exception:
+                    # Колонка может ещё не существовать (миграция не накатана).
+                    pass
             status_parts["db"] = "ok"
         else:
             status_parts["db"] = "not_configured"
@@ -242,7 +257,21 @@ async def yookassa_webhook(request: Request):
         if event == "payment.succeeded":
             # Единая точка обработки: local DB + Remnawave + уведомление пользователя
             from app.services.payments.yookassa import process_payment_webhook
-            success = await process_payment_webhook(data, bot_instance)
+            from app.services.payments.errors import ProvisioningPendingError
+            try:
+                success = await process_payment_webhook(data, bot_instance)
+            except ProvisioningPendingError as ppe:
+                # Phase B провалилась (Remnawave недоступен / не подтвердил). Local DB
+                # уже помечена provisioning_state='failed'. Отвечаем 503 — YooKassa
+                # повторит webhook; reconciler страхует на случай долгой недоступности.
+                logger.error(
+                    f"Webhook {payment_id}: provisioning pending — returning 503 to "
+                    f"trigger YooKassa retry. err={ppe}"
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "retry", "reason": "provisioning_pending"},
+                )
             logger.info(f"Webhook {payment_id}: process_payment_webhook returned success={success}")
             return JSONResponse(status_code=200, content={"status": "ok", "processed": success})
 

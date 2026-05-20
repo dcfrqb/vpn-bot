@@ -5,8 +5,9 @@ from typing import Dict, Any, Optional
 
 from sqlalchemy import select
 from app.db.session import SessionLocal
-from app.db.models import Payment as PaymentModel, TelegramUser
+from app.db.models import Payment as PaymentModel, TelegramUser, Subscription
 from app.logger import logger
+from app.services.payments.errors import ProvisioningPendingError
 
 
 PENDING_RECHECK_MINUTES = 15
@@ -119,7 +120,14 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
                     select(PaymentModel).where(PaymentModel.id == payment.id)
                 )
                 p = pay_result.scalar_one_or_none()
+                fully_synced = False
                 if p and p.subscription_id:
+                    sub_r = await session.execute(
+                        select(Subscription).where(Subscription.id == p.subscription_id)
+                    )
+                    sub = sub_r.scalar_one_or_none()
+                    fully_synced = bool(sub and sub.provisioning_state == "synced")
+                if fully_synced:
                     meta = p.payment_metadata or {}
                     if isinstance(meta, dict) and meta.get("needs_provisioning"):
                         meta = dict(meta)
@@ -136,8 +144,15 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
                 else:
                     logger.warning(
                         f"recovery_provision_skipped: payment_id={payment.id} "
-                        f"subscription_id still None after handle_successful_payment"
+                        f"not fully synced; reconciler will retry"
                     )
+        except ProvisioningPendingError as ppe:
+            # Phase B провалилась; уже помечено provisioning_state='failed'.
+            # Это ожидаемый transient — НЕ инкрементим errors, reconciler добьёт.
+            logger.warning(
+                f"recovery_provision_pending: payment_id={payment.id} "
+                f"tg_id={payment.telegram_user_id} reason={str(ppe)[:200]}"
+            )
         except Exception as e:
             result["errors"] += 1
             logger.error(
@@ -269,6 +284,13 @@ async def recheck_single_payment(
                     )
                     result["provisioned"] = True
                     logger.info(f"[{trace_id}] recheck_single: provisioned external_id={external_id} tg_user={p.telegram_user_id}")
+                except ProvisioningPendingError as ppe:
+                    logger.warning(
+                        f"[{trace_id}] recheck_single: provisioning pending external_id={external_id} "
+                        f"reason={str(ppe)[:200]}"
+                    )
+                    result["provisioned"] = False
+                    result["error"] = "provisioning_pending"
                 finally:
                     await release_provision_lock(external_id)
         else:
@@ -336,16 +358,22 @@ async def recheck_pending_payments(bot) -> Dict[str, Any]:
                         p.paid_at = datetime.utcnow()
                         p.amount = amount
                         await session.commit()
-                        await handle_successful_payment(
-                            session=session,
-                            payment_id=p.id,
-                            telegram_user_id=p.telegram_user_id,
-                            amount=amount,
-                            description=p.description or "CRS VPN",
-                            bot=bot,
-                        )
-                        result["updated"] += 1
-                        logger.info(f"recovery_pending_provisioned: payment_id={payment.id}")
+                        try:
+                            await handle_successful_payment(
+                                session=session,
+                                payment_id=p.id,
+                                telegram_user_id=p.telegram_user_id,
+                                amount=amount,
+                                description=p.description or "CRS VPN",
+                                bot=bot,
+                            )
+                            result["updated"] += 1
+                            logger.info(f"recovery_pending_provisioned: payment_id={payment.id}")
+                        except ProvisioningPendingError as ppe:
+                            logger.warning(
+                                f"recovery_pending_provisioning_pending: payment_id={payment.id} "
+                                f"reason={str(ppe)[:200]}"
+                            )
             else:
                 async with SessionLocal() as session:
                     pay_result = await session.execute(
