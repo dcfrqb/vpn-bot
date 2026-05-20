@@ -748,32 +748,44 @@ async def handle_successful_payment(
         if not payment:
             return
         meta = payment.payment_metadata or {}
-        if isinstance(meta, dict) and meta.get("notified"):
-            logger.info(f"[{trace_id}] subscription notified already: payment_id={payment_id}, skip send")
-            return
+        if not isinstance(meta, dict):
+            meta = {}
+        user_already_notified = bool(meta.get("notified"))
+        admin_already_notified = bool(meta.get("admin_notified"))
 
-        # H-2: use actual Remnawave expiry if available, fallback to locally computed valid_until
+        # H-2: единое значение даты истечения для user и admin сообщений.
+        # actual_expire_at — реальная дата из Remnawave (учитывает продление существующей подписки),
+        # valid_until — локально вычисленная.
         _display_expire = actual_expire_at if actual_expire_at else valid_until
-        message_text = (
-            "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
-            f"💳 <b>Тариф:</b> {plan_name}\n"
-            f"📅 <b>Действует до:</b> {_display_expire.strftime('%d.%m.%Y %H:%M')}\n"
-            f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
-            "🎉 Теперь вы можете получить ссылку для настройки VPN."
-        )
-        
-        from app.keyboards import get_subscription_link_keyboard
-        await bot.send_message(
-            chat_id=telegram_user_id,
-            text=message_text,
-            reply_markup=get_subscription_link_keyboard(),
-            parse_mode="HTML"
-        )
 
-        # Уведомление администраторам
+        # --- 1. Уведомление пользователю (только если ещё не уведомляли) ---
+        if user_already_notified:
+            logger.info(f"[{trace_id}] user already notified: payment_id={payment_id}, skip user send")
+        else:
+            message_text = (
+                "✅ <b>Оплата подтверждена, подписка активирована!</b>\n\n"
+                f"💳 <b>Тариф:</b> {plan_name}\n"
+                f"📅 <b>Действует до:</b> {_display_expire.strftime('%d.%m.%Y %H:%M')}\n"
+                f"💰 <b>Сумма:</b> {amount:.2f}₽\n\n"
+                "🎉 Теперь вы можете получить ссылку для настройки VPN."
+            )
+
+            from app.keyboards import get_subscription_link_keyboard
+            try:
+                await bot.send_message(
+                    chat_id=telegram_user_id,
+                    text=message_text,
+                    reply_markup=get_subscription_link_keyboard(),
+                    parse_mode="HTML"
+                )
+                meta["notified"] = True
+            except Exception as user_err:
+                logger.warning(f"[{trace_id}] не удалось отправить уведомление пользователю {telegram_user_id}: {user_err}")
+
+        # --- 2. Уведомление администраторам (отдельный guard, чтобы можно было ретраить независимо) ---
         from html import escape as _he
         from app.config import settings as _settings
-        if _settings.ADMINS:
+        if _settings.ADMINS and not admin_already_notified:
             _first = (telegram_user.first_name or "").strip()
             _last = (telegram_user.last_name or "").strip()
             user_full_name = f"{_first} {_last}".strip() or "Без имени"
@@ -791,7 +803,8 @@ async def handle_successful_payment(
                 )
                 plan_label = f"{plan_label} {period_months} {months_word}"
 
-            expires_str = valid_until.strftime("%d.%m.%Y")
+            # Используем единую дату _display_expire (учитывает реальный expireAt из Remnawave при продлении)
+            expires_str = _display_expire.strftime("%d.%m.%Y")
 
             currency_symbol = payment.currency.upper() if payment and payment.currency else "RUB"
             # external_id — это p.id из YooKassa (UUID формата xxxxxxxx-xxxx-...)
@@ -827,11 +840,13 @@ async def handle_successful_payment(
                 except Exception as admin_err:
                     logger.warning(f"[{trace_id}] не удалось отправить уведомление админу {admin_id}: {admin_err}")
 
-        # notified=True — пользователь уведомлён; admin_notified — отдельный флаг для админов
-        meta = dict(meta) if isinstance(meta, dict) else {}
-        meta["notified"] = True
-        if _settings.ADMINS:
-            meta["admin_notified"] = admin_notified
+            # Ставим admin_notified только если хотя бы одному админу дошло.
+            # Иначе оставляем False — recovery-loop сможет повторить.
+            if admin_notified:
+                meta["admin_notified"] = True
+        elif admin_already_notified:
+            logger.info(f"[{trace_id}] admins already notified: payment_id={payment_id}, skip admin send")
+
         payment.payment_metadata = meta
         await session.commit()
         

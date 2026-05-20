@@ -845,7 +845,7 @@ async def _handle_promo_command(
     from app.db.session import SessionLocal
     from app.db.models import Payment as PaymentModel
     from sqlalchemy import select
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     user_id = message.from_user.id
     promo_external_id = f"promo_{promo_code}_{user_id}"
@@ -952,21 +952,39 @@ async def _handle_promo_command(
         logger.error(f"{cmd}: ошибка логирования: {e}")
 
     # 6. Сообщение пользователю об успешной активации
+    expires_at = datetime.utcnow() + timedelta(days=days)
     await message.answer(
         f"🎉 <b>Промокод активирован!</b>\n\n"
         f"Вам выдан {plan_label} на {days} дней.\n"
+        f"📅 <b>Действует до:</b> {expires_at.strftime('%d.%m.%Y')}\n\n"
         "Нажмите «Получить ссылку», чтобы настроить VPN.",
         reply_markup=get_subscription_link_keyboard(),
         parse_mode="HTML",
     )
 
-    # 7. Информационное уведомление админам (без кнопок подтверждения)
+    # 7. Информационное уведомление админам (без кнопок подтверждения).
+    # Достаём remna_user_id чтобы админ мог сразу искать пользователя в панели.
+    remna_id = "—"
+    try:
+        async with SessionLocal() as session:
+            from app.db.models import TelegramUser as _TG
+            _r = await session.execute(
+                select(_TG).where(_TG.telegram_id == user_id)
+            )
+            _tg = _r.scalar_one_or_none()
+            if _tg and _tg.remna_user_id:
+                remna_id = _tg.remna_user_id
+    except Exception as _e:
+        logger.debug(f"{cmd}: не удалось получить remna_user_id для {user_id}: {_e}")
+
     admin_msg = (
         f"🎁 <b>ПРОМОКОД {promo_code.upper()} АКТИВИРОВАН</b>\n\n"
         f"👤 <b>Пользователь:</b> {username}\n"
         f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
         f"📝 <b>Имя:</b> {name}\n\n"
         f"📦 <b>Тариф:</b> {plan_label} {days} дней\n"
+        f"📅 <b>Действует до:</b> {expires_at.strftime('%d.%m.%Y')}\n"
+        f"🔗 <b>Remnawave ID:</b> <code>{remna_id}</code>\n"
         f"✅ <b>Подписка выдана автоматически</b>"
     )
     for admin_id in (settings.ADMINS or []):
