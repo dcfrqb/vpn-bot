@@ -287,11 +287,55 @@ async def get_or_create_telegram_user(
     language_code: Optional[str] = None,
 ):
     """
-    Заглушка: создаёт/проверяет пользователя в Remnawave.
-    Возвращает объект с telegram_id, username, first_name для совместимости.
+    Гарантирует наличие юзера в Remnawave И в локальной таблице `telegram_users`.
+
+    Локальная строка нужна потому, что FK-зависимые таблицы (`payments`,
+    `subscriptions`, `access_requests`, `broadcast_recipients`) ссылаются на
+    `telegram_users.telegram_id`. Без неё `INSERT INTO payments` падает с
+    `ForeignKeyViolationError` — например в `_handle_promo_command` после
+    успешной выдачи подписки, что ломает защиту от повторного использования
+    промокода.
+
+    Idempotent: использует `ON CONFLICT DO UPDATE` по PK `telegram_id`.
+    Non-null поля при апдейте не затирает (если передан `username=None`
+    у существующей строки имя сохраняется).
     """
     name = first_name or username or f"User_{telegram_id}"
     remna_user_id = await ensure_user_in_remnawave(telegram_id, username=username, name=name)
+
+    try:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from app.db.models import TelegramUser
+        from app.db.session import SessionLocal
+
+        if SessionLocal is not None:
+            insert_vals: dict = {"telegram_id": telegram_id}
+            if username:
+                insert_vals["username"] = username
+            if first_name:
+                insert_vals["first_name"] = first_name
+            if last_name:
+                insert_vals["last_name"] = last_name
+            if language_code:
+                insert_vals["language_code"] = language_code
+
+            update_set = {k: v for k, v in insert_vals.items() if k != "telegram_id"}
+
+            async with SessionLocal() as session:
+                stmt = pg_insert(TelegramUser).values(**insert_vals)
+                if update_set:
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["telegram_id"], set_=update_set
+                    )
+                else:
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["telegram_id"])
+                await session.execute(stmt)
+                await session.commit()
+    except Exception as e:
+        logger.warning(
+            f"get_or_create_telegram_user db-upsert soft-fail tg_id={telegram_id}: {e}"
+        )
+
     return type("User", (), {
         "telegram_id": telegram_id,
         "username": username,

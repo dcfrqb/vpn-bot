@@ -70,6 +70,20 @@ async def cmd_start(m: types.Message):
     navigator.clear_flow_anchor(telegram_id)
     navigator._set_current_screen(telegram_id, ScreenID.MAIN_MENU)
 
+    # Гарантируем строку в `telegram_users` — нужна для FK-зависимых
+    # таблиц (payments, subscriptions, access_requests, broadcast_recipients).
+    # Без этого холодный новичок ловит FK-violation в /trial и других хэндлерах.
+    try:
+        await get_or_create_telegram_user(
+            telegram_id=telegram_id,
+            username=m.from_user.username,
+            first_name=m.from_user.first_name,
+            last_name=m.from_user.last_name,
+            language_code=m.from_user.language_code,
+        )
+    except Exception as _e:
+        logger.warning(f"cmd_start: get_or_create_telegram_user soft-fail tg_id={telegram_id}: {_e}")
+
     # Явный re-engage — снимаем broadcast_opt_out (если был выставлен через /stop).
     try:
         from app.routers.admin_broadcast import reset_broadcast_opt_out
@@ -852,6 +866,20 @@ async def _handle_promo_command(
     username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
     cmd = f"/{promo_code}"
+
+    # 0. Гарантируем строку в `telegram_users` — без неё запись в payments на шаге 4
+    # упадёт с ForeignKeyViolationError, защита от повторного использования
+    # промокода не сохранится, юзер сможет переактивировать промик.
+    try:
+        await get_or_create_telegram_user(
+            telegram_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+            language_code=message.from_user.language_code,
+        )
+    except Exception as e:
+        logger.warning(f"{cmd}: get_or_create_telegram_user soft-fail для {user_id}: {e}")
 
     # 1. Проверяем активную подписку
     try:
