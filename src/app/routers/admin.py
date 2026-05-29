@@ -884,17 +884,94 @@ async def cmd_whois(message: types.Message):
         await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")
 
 
+@router.message(Command("referral_payout"))
+async def cmd_referral_payout(message: types.Message):
+    """Фиксирует ручную выплату бонуса Жукову.
+
+    Использование:
+        /referral_payout sun718 <месяцев> [комментарий]
+    Пример:
+        /referral_payout sun718 3 продлил в Remna на 3 мес
+
+    Вычитается из available_months в /referral_stats. Шлёт алерт Жукову.
+    """
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        return
+
+    parts = (message.text or "").split(maxsplit=3)
+    # parts[0]=/referral_payout, parts[1]=code, parts[2]=months, parts[3]=note (opt)
+    if len(parts) < 3:
+        await message.answer(
+            "Использование: <code>/referral_payout sun718 &lt;месяцев&gt; [комментарий]</code>\n"
+            "Пример: <code>/referral_payout sun718 3 продлил в Remna</code>",
+            parse_mode="HTML",
+        )
+        return
+    code = parts[1].strip().lower()
+    if code != "sun718":
+        await message.answer(
+            f"Сейчас поддерживается только промокод <code>sun718</code> (получено: {escape_html(code)})",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        months = int(parts[2].strip())
+    except ValueError:
+        await message.answer("Месяцы должны быть целым числом. Пример: <code>/referral_payout sun718 3</code>",
+                             parse_mode="HTML")
+        return
+    if months <= 0:
+        await message.answer("Месяцы должны быть положительным числом.")
+        return
+    note = parts[3].strip() if len(parts) > 3 else ""
+
+    from app.db.session import SessionLocal
+    if not SessionLocal:
+        await message.answer("❌ БД не настроена")
+        return
+
+    from app.services.referral_tracker import (
+        record_payout, notify_payout, compute_sun718_breakdown,
+    )
+
+    try:
+        async with SessionLocal() as session:
+            # Проверим что available хватает (но разрешим overdraft с warning)
+            before = await compute_sun718_breakdown(session)
+            if months > before["available_months"]:
+                await message.answer(
+                    f"⚠️ <b>Внимание:</b> вы выплачиваете {months} мес, "
+                    f"но <b>доступно только {before['available_months']}</b>.\n\n"
+                    f"Запись будет создана, но available уйдёт в 0 (отрицательного нет).\n"
+                    f"Если это ошибка — отмени через psql.",
+                    parse_mode="HTML",
+                )
+            payout = await record_payout(
+                session, months=months, note=note, admin_id=message.from_user.id
+            )
+            await notify_payout(message.bot, session, payout)
+            after = await compute_sun718_breakdown(session)
+        await message.answer(
+            f"✅ Записано: <b>{months} мес</b> выплачено.\n"
+            f"Доступно теперь: <b>{after['available_months']}</b>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"referral_payout error: code={code} months={months} err={e}")
+        await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")
+
+
 @router.message(Command("referral_stats"))
 async def cmd_referral_stats(message: types.Message):
     """Реферальная статистика по промокоду (по умолчанию sun718).
 
-    Учёт:
-    - Только Pro-платежи (plan_code='pro' в payment_metadata)
-    - После активации: ВСЕ Pro-платежи приглашённого, period_months полностью
-    - До активации: ОДИН Pro-платёж — самый поздний из тех, что ещё покрывали
-      момент активации (paid_at + period_months >= activated_at), +1 мес (cap)
-    - 5 мес = 1 бонусный (дробно)
-    - Владелец PROMO_SUN718_OWNER_TG_ID из пула исключается (только для sun718)
+    Учёт (через services.referral_tracker.compute_sun718_breakdown):
+    - earned: только Pro-платежи приглашённых (после акт. полностью, до акт. +1 cap)
+    - paid_out: сумма всех /referral_payout записей
+    - available = earned // 5 − paid_out
+
+    Владелец PROMO_SUN718_OWNER_TG_ID из пула исключается (только для sun718).
     """
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет прав")
@@ -977,13 +1054,25 @@ async def cmd_referral_stats(message: types.Message):
         bonus = total_months / 5.0
         paying = sum(1 for _, m, _, _ in per_user if m > 0)
 
+        # Считаем payout (только для sun718 пока)
+        paid_out = 0
+        if promo_code == "sun718":
+            from app.services.referral_tracker import compute_sun718_paid_out
+            async with SessionLocal() as s2:
+                paid_out = await compute_sun718_paid_out(s2)
+        full_bonus = total_months // 5
+        available = max(0, full_bonus - paid_out)
+
         lines = [f"📊 <b>Рефералка /{escape_html(promo_code)}</b>", ""]
         lines.append(f"Активаций: <b>{len(activations)}</b>")
         lines.append(f"Из них с зачётом: <b>{paying}</b>")
-        lines.append(f"Сумма Pro-месяцев: <b>{total_months}</b>")
-        lines.append(f"🎁 Бонусных месяцев: <b>{bonus:.2f}</b>")
+        lines.append("")
+        lines.append(f"💰 <b>Заработано Pro-месяцев:</b> {total_months}")
+        lines.append(f"🎁 <b>Бонусов (целых):</b> {full_bonus}  ({bonus:.2f})")
+        lines.append(f"💸 <b>Уже выплачено:</b> {paid_out}")
+        lines.append(f"✅ <b>Доступно к выдаче:</b> <b>{available}</b>")
         if owner_id:
-            lines.append(f"\n<i>Владелец <code>{owner_id}</code> исключён</i>")
+            lines.append(f"\n<i>Владелец <code>{owner_id}</code> исключён из пула</i>")
 
         top = sorted(per_user, key=lambda x: -x[1])[:20]
         paid_top = [(tg, m, c, pre) for tg, m, c, pre in top if m > 0]
@@ -994,6 +1083,9 @@ async def cmd_referral_stats(message: types.Message):
                 if pre:
                     tag += "+1 пред-кредит"
                 lines.append(f"• <code>{tg_id}</code> — {m} мес ({tag})")
+
+        lines.append("\n<i>Выдал бонус? зафиксируй:</i>")
+        lines.append("<code>/referral_payout sun718 N комментарий</code>")
 
         await message.answer("\n".join(lines), parse_mode="HTML")
     except Exception as e:
