@@ -888,9 +888,13 @@ async def cmd_whois(message: types.Message):
 async def cmd_referral_stats(message: types.Message):
     """Реферальная статистика по промокоду (по умолчанию sun718).
 
-    Считает сумму period_months по всем платным успешным платежам юзеров,
-    активировавших промокод (после момента активации). 5 мес = 1 бонусный.
-    Владелец рефералки (PROMO_SUN718_OWNER_TG_ID) из пула исключается.
+    Учёт:
+    - Только Pro-платежи (plan_code='pro' в payment_metadata)
+    - После активации: ВСЕ Pro-платежи приглашённого, period_months полностью
+    - До активации: ОДИН Pro-платёж — самый поздний из тех, что ещё покрывали
+      момент активации (paid_at + period_months >= activated_at), +1 мес (cap)
+    - 5 мес = 1 бонусный (дробно)
+    - Владелец PROMO_SUN718_OWNER_TG_ID из пула исключается (только для sun718)
     """
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет прав")
@@ -906,12 +910,25 @@ async def cmd_referral_stats(message: types.Message):
 
     from sqlalchemy import select
     from app.db.models import Payment as PaymentModel
+    from datetime import timedelta
 
     owner_id = getattr(settings, "PROMO_SUN718_OWNER_TG_ID", None) if promo_code == "sun718" else None
 
+    def _pro_months(p) -> int:
+        """Возвращает period_months если платёж pro и положительный, иначе 0."""
+        meta = p.payment_metadata or {}
+        plan = str(meta.get("plan_code") or "").lower()
+        if plan != "pro":
+            return 0
+        pm = meta.get("period_months")
+        try:
+            m = int(pm) if pm is not None else 0
+        except (TypeError, ValueError):
+            m = 0
+        return m if m > 0 else 0
+
     try:
         async with SessionLocal() as session:
-            # 1. Все активации промокода: external_id = 'promo_{code}_{tg_id}'
             act_res = await session.execute(
                 select(PaymentModel.telegram_user_id, PaymentModel.paid_at)
                 .where(PaymentModel.provider == "promo")
@@ -923,50 +940,60 @@ async def cmd_referral_stats(message: types.Message):
                 await message.answer(f"Нет активаций промокода /{escape_html(promo_code)}")
                 return
 
-            # 2. Для каждого юзера — сумма period_months по платным после активации
-            per_user: list[tuple[int, int, int]] = []  # (tg_id, months, payments_count)
+            per_user: list[tuple[int, int, int, int]] = []  # (tg_id, months, after_cnt, pre_credit)
             total_months = 0
             for tg_id, activated_at in activations:
-                pays = await session.execute(
+                # Все платные succeeded платежи юзера
+                pays_res = await session.execute(
                     select(PaymentModel)
                     .where(PaymentModel.telegram_user_id == tg_id)
                     .where(PaymentModel.provider != "promo")
                     .where(PaymentModel.status == "succeeded")
                     .where(PaymentModel.paid_at != None)  # noqa: E711
-                    .where(PaymentModel.paid_at > activated_at)
                 )
                 user_months = 0
-                pay_count = 0
-                for p in pays.scalars():
-                    meta = p.payment_metadata or {}
-                    pm = meta.get("period_months")
-                    try:
-                        m = int(pm) if pm is not None else 0
-                    except (TypeError, ValueError):
-                        m = 0
-                    if m > 0:
+                after_count = 0
+                best_pre = None  # (paid_at, period_months) кандидат для до-активационного кредита
+                for p in pays_res.scalars():
+                    m = _pro_months(p)
+                    if m <= 0:
+                        continue
+                    if p.paid_at > activated_at:
+                        # После активации — целиком
                         user_months += m
-                        pay_count += 1
-                per_user.append((tg_id, user_months, pay_count))
+                        after_count += 1
+                    else:
+                        # До активации — рассмотрим как кандидат на +1 кредит
+                        # Покрывает момент активации, если paid_at + m мес >= activated_at
+                        coverage_end = p.paid_at + timedelta(days=30 * m)
+                        if coverage_end >= activated_at:
+                            if best_pre is None or p.paid_at > best_pre[0]:
+                                best_pre = (p.paid_at, m)
+                pre_credit = 1 if best_pre is not None else 0
+                user_months += pre_credit
+                per_user.append((tg_id, user_months, after_count, pre_credit))
                 total_months += user_months
 
         bonus = total_months / 5.0
-        paying = sum(1 for _, m, _ in per_user if m > 0)
+        paying = sum(1 for _, m, _, _ in per_user if m > 0)
 
         lines = [f"📊 <b>Рефералка /{escape_html(promo_code)}</b>", ""]
         lines.append(f"Активаций: <b>{len(activations)}</b>")
-        lines.append(f"Из них с оплатами: <b>{paying}</b>")
-        lines.append(f"Сумма оплаченных месяцев: <b>{total_months}</b>")
+        lines.append(f"Из них с зачётом: <b>{paying}</b>")
+        lines.append(f"Сумма Pro-месяцев: <b>{total_months}</b>")
         lines.append(f"🎁 Бонусных месяцев: <b>{bonus:.2f}</b>")
         if owner_id:
             lines.append(f"\n<i>Владелец <code>{owner_id}</code> исключён</i>")
 
         top = sorted(per_user, key=lambda x: -x[1])[:20]
-        paid_top = [(tg, m, c) for tg, m, c in top if m > 0]
+        paid_top = [(tg, m, c, pre) for tg, m, c, pre in top if m > 0]
         if paid_top:
-            lines.append("\n<b>Топ приглашённых (мес × платежей):</b>")
-            for tg_id, m, c in paid_top:
-                lines.append(f"• <code>{tg_id}</code> — {m} мес ({c} плт)")
+            lines.append("\n<b>Топ приглашённых:</b>")
+            for tg_id, m, c, pre in paid_top:
+                tag = f"{c} плт"
+                if pre:
+                    tag += "+1 пред-кредит"
+                lines.append(f"• <code>{tg_id}</code> — {m} мес ({tag})")
 
         await message.answer("\n".join(lines), parse_mode="HTML")
     except Exception as e:

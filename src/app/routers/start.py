@@ -1,6 +1,7 @@
 from aiogram import Router, types
 from aiogram.filters import CommandStart, Command
 from aiogram.exceptions import TelegramBadRequest
+from typing import Optional
 import asyncio
 import time
 import uuid
@@ -1072,26 +1073,380 @@ async def cmd_trial(message: types.Message):
     )
 
 
+async def _get_last_paid_plan_code(user_id: int) -> Optional[str]:
+    """plan_code из последнего успешного платного платежа (None если нет).
+
+    Используется в /sun718 и в revert-таске:
+    - В /sun718: определить активный план юзера (pro → +5 дней extend, не-pro → +5 дней Pro + revert)
+    - В revert: понять на что вернуть squad (за 5 дней мог купить Pro — тогда оставить pro)
+    """
+    from app.db.session import SessionLocal
+    from app.db.models import Payment as PaymentModel
+    from sqlalchemy import select
+
+    if not SessionLocal:
+        return None
+    try:
+        async with SessionLocal() as session:
+            res = await session.execute(
+                select(PaymentModel)
+                .where(PaymentModel.telegram_user_id == user_id)
+                .where(PaymentModel.provider != "promo")
+                .where(PaymentModel.status == "succeeded")
+                .order_by(PaymentModel.paid_at.desc().nullslast())
+                .limit(1)
+            )
+            p = res.scalar_one_or_none()
+            if p and p.payment_metadata:
+                pc = p.payment_metadata.get("plan_code")
+                return str(pc).lower() if pc else None
+    except Exception as e:
+        logger.warning(f"_get_last_paid_plan_code soft-fail {user_id}: {e}")
+    return None
+
+
+def _sun718_support_footer() -> str:
+    """Стандартная подпись для юзера: куда писать если ошибка."""
+    handle = getattr(settings, "ADMIN_SUPPORT_USERNAME", None)
+    if handle:
+        h = handle.lstrip("@")
+        return f"\n\n💬 Если это ошибка — напишите @{h}"
+    return "\n\n💬 Если это ошибка — обратитесь к администратору"
+
+
+async def _sun718_notify_admins(
+    bot,
+    *,
+    user_id: int,
+    username: str,
+    name: str,
+    title: str,
+    body: str,
+) -> None:
+    """Шлёт уведомление в ЛС всем admin'ам. Универсальный шаблон.
+
+    Используется для всех событий /sun718: успех, отказы (уже использовал,
+    лайфтайм), внутренние ошибки. Цель — чтобы admin видел любое касание /sun718.
+    """
+    text = (
+        f"<b>{title}</b>\n\n"
+        f"👤 <b>Пользователь:</b> {username}\n"
+        f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
+        f"📝 <b>Имя:</b> {name}\n\n"
+        f"{body}"
+    )
+    for admin_id in (settings.ADMINS or []):
+        if isinstance(admin_id, int):
+            try:
+                await bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"sun718 admin notify {admin_id} fail: {e}")
+
+
 @router.message(Command("sun718"))
 async def cmd_sun718(message: types.Message):
-    """Промокод Sun718 — Pro на 5 дней (реферальный).
+    """Промокод Sun718 — реферальный (Pro 5 дней).
 
-    Юзеры с активной подпиской получают отказ внутри `_handle_promo_command`.
-    Счёт оплаченных месяцев приглашённых ведётся в /referral_stats sun718.
+    Полная матрица случаев см. в коде ниже. Алерт админу шлётся ВСЕГДА (включая
+    отказы). Юзеру всегда добавляется подпись «если ошибка — пишите @support».
     """
+    from app.services.jsonl_logger import log_payment_event
+    from app.services.remna_service import provision_tariff
+    from app.keyboards import get_subscription_link_keyboard
+    from app.db.session import SessionLocal
+    from app.db.models import Payment as PaymentModel
+    from app.services.payment_request import generate_req_id
+    from sqlalchemy import select
+    from datetime import datetime, timedelta
+
     if not getattr(settings, "PROMO_SUN718_ENABLED", True):
         return
-    if await _handle_promo_command(
-        message,
-        promo_code="sun718",
-        tariff="sun718_5d",
-        days=5,
-        plan_label="Pro",
-    ):
+
+    user_id = message.from_user.id
+    promo_code = "sun718"
+    tariff = "sun718_5d"
+    days = 5
+    promo_external_id = f"promo_{promo_code}_{user_id}"
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
+    name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or username
+    cmd = f"/{promo_code}"
+    footer = _sun718_support_footer()
+
+    # 0. FK guard — обязательно до записи в payments
+    try:
+        await get_or_create_telegram_user(
+            telegram_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+            language_code=message.from_user.language_code,
+        )
+    except Exception as e:
+        logger.warning(f"{cmd}: get_or_create_telegram_user soft-fail {user_id}: {e}")
+
+    # 1. Защита от повторного использования
+    if SessionLocal:
+        try:
+            async with SessionLocal() as session:
+                exists = await session.execute(
+                    select(PaymentModel).where(PaymentModel.external_id == promo_external_id)
+                )
+                if exists.scalar_one_or_none():
+                    await message.answer(
+                        f"❌ Промокод {cmd} уже был использован вами ранее.\n\n"
+                        "Повторная активация невозможна." + footer,
+                        reply_markup=get_main_menu_keyboard(user_id=user_id),
+                        parse_mode="HTML",
+                    )
+                    await _sun718_notify_admins(
+                        message.bot,
+                        user_id=user_id, username=username, name=name,
+                        title="⚠️ SUN718: повторная активация",
+                        body=("Пользователь уже использовал /sun718 ранее.\n"
+                              "Повторно подписку не выдавали, в БД ничего не дописывали."),
+                    )
+                    return
+        except Exception as e:
+            logger.error(f"{cmd}: проверка повтора упала {user_id}: {e}")
+            await message.answer(
+                "❌ Произошла ошибка. Попробуйте позже." + footer,
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+                parse_mode="HTML",
+            )
+            await _sun718_notify_admins(
+                message.bot,
+                user_id=user_id, username=username, name=name,
+                title="❌ SUN718: ошибка проверки повтора",
+                body=f"DB error: <code>{str(e)[:200]}</code>",
+            )
+            return
+
+    # 2. Узнаём текущий статус подписки
+    is_active = False
+    is_lifetime = False
+    expires_at = None
+    try:
+        sync_service = SyncService()
+        sync_result = await sync_service.sync_user_and_subscription(
+            telegram_id=user_id,
+            tg_username=message.from_user.username,
+            tg_first_name=message.from_user.first_name,
+            tg_last_name=message.from_user.last_name,
+            use_fallback=False,
+            use_cache=True,
+        )
+        is_active = (sync_result.subscription_status == "active")
+        expires_at = sync_result.expires_at
+        if expires_at and getattr(expires_at, "year", 0) >= 2099:
+            is_lifetime = True
+    except RemnaUnavailableError:
+        await message.answer(
+            "❌ Не удалось проверить статус подписки. Попробуйте позже." + footer,
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+            parse_mode="HTML",
+        )
+        await _sun718_notify_admins(
+            message.bot, user_id=user_id, username=username, name=name,
+            title="❌ SUN718: Remnawave недоступен",
+            body="sync_user_and_subscription упал с RemnaUnavailableError",
+        )
         return
-    await message.answer(
-        "❌ Не удалось обработать промокод. Попробуйте позже или напишите администратору.",
-        reply_markup=get_main_menu_keyboard(user_id=message.from_user.id),
+    except Exception as e:
+        logger.error(f"{cmd}: sync упал {user_id}: {e}")
+        await message.answer(
+            "❌ Произошла ошибка. Попробуйте позже." + footer,
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+            parse_mode="HTML",
+        )
+        await _sun718_notify_admins(
+            message.bot, user_id=user_id, username=username, name=name,
+            title="❌ SUN718: ошибка sync",
+            body=f"<code>{str(e)[:200]}</code>",
+        )
+        return
+
+    # 3. Лайфтайм — отказ, БД не трогаем (рефералить нельзя)
+    if is_lifetime:
+        await message.answer(
+            "🌟 У вас лайфтайм-подписка — промокод вам не нужен.\n\n"
+            "Спасибо, что пользуетесь сервисом!" + footer,
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+            parse_mode="HTML",
+        )
+        await _sun718_notify_admins(
+            message.bot, user_id=user_id, username=username, name=name,
+            title="🌟 SUN718: лайфтайм-юзер",
+            body="Активация отклонена (рефералить лайфтаймов нельзя), в БД ничего не писали.",
+        )
+        return
+
+    # 4. Решаем сценарий
+    current_plan: Optional[str] = None
+    if is_active:
+        current_plan = await _get_last_paid_plan_code(user_id)
+    # provision = выдать/продлить Pro. Применяется и для не-Pro активных
+    # (squad сменится на Pro, expireAt +5d, через 5 дней revert-таска вернёт squad).
+    will_provision = True
+    schedule_revert = is_active and (current_plan != "pro")
+    pre_promo_plan = current_plan if schedule_revert else None
+    pre_promo_expire_iso = None
+    if expires_at:
+        try:
+            pre_promo_expire_iso = (
+                expires_at.replace(tzinfo=None).isoformat()
+                if expires_at.tzinfo else expires_at.isoformat()
+            )
+        except Exception:
+            pre_promo_expire_iso = None
+
+    # 5. Provisioning
+    req_id = generate_req_id()
+    if will_provision:
+        success = await provision_tariff(user_id, tariff, req_id=req_id)
+        if not success:
+            logger.error(f"{cmd}: provision_tariff failed for {user_id}")
+            await message.answer(
+                "❌ Не удалось активировать промокод. Попробуйте позже." + footer,
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+                parse_mode="HTML",
+            )
+            await _sun718_notify_admins(
+                message.bot, user_id=user_id, username=username, name=name,
+                title="❌ SUN718: provision_tariff failed",
+                body=f"tariff={tariff} req_id={req_id}",
+            )
+            return
+
+    # 6. Запись активации в payments (для трекинга + revert metadata)
+    activated_at = datetime.utcnow()
+    revert_at_iso = None
+    if schedule_revert:
+        revert_at_iso = (activated_at + timedelta(days=days)).isoformat()
+    pay_metadata = {
+        "promo_code": promo_code,
+        "tariff": tariff,
+        "auto": True,
+        "provisioned": will_provision,
+        "was_active": is_active,
+        "current_plan": current_plan,
+    }
+    if schedule_revert:
+        pay_metadata.update({
+            "revert_at": revert_at_iso,
+            "pre_promo_plan": pre_promo_plan or "basic",
+            "pre_promo_expire_at": pre_promo_expire_iso,
+            "revert_completed": False,
+        })
+
+    if SessionLocal:
+        try:
+            async with SessionLocal() as session:
+                usage_record = PaymentModel(
+                    telegram_user_id=user_id,
+                    provider="promo",
+                    external_id=promo_external_id,
+                    amount=0,
+                    currency="RUB",
+                    status="succeeded",
+                    description=f"Promo {promo_code} {days} days",
+                    paid_at=activated_at,
+                    payment_metadata=pay_metadata,
+                )
+                session.add(usage_record)
+                await session.commit()
+        except Exception as e:
+            logger.error(f"{cmd}: запись в payments упала {user_id}: {e}")
+            await _sun718_notify_admins(
+                message.bot, user_id=user_id, username=username, name=name,
+                title="⚠️ SUN718: не записали активацию в БД",
+                body=(f"Подписка выдана, но Payment не записан в БД.\n"
+                      f"Юзер не учтётся в /referral_stats. Ошибка:\n"
+                      f"<code>{str(e)[:200]}</code>"),
+            )
+            # Не возвращаемся — Pro уже выдан, нужно довести флоу
+
+    try:
+        log_payment_event(
+            event="promo_granted",
+            req_id=req_id,
+            tg_id=user_id,
+            payload={
+                "promo_code": promo_code, "tariff": tariff, "auto": True,
+                "provisioned": will_provision, "was_active": is_active,
+                "current_plan": current_plan,
+                "schedule_revert": schedule_revert,
+                "revert_at": revert_at_iso,
+            },
+        )
+    except Exception as e:
+        logger.error(f"{cmd}: log_payment_event упал: {e}")
+
+    # 7. Ответ юзеру
+    new_expires = activated_at + timedelta(days=days)
+    if is_active and expires_at:
+        try:
+            base = expires_at.replace(tzinfo=None) if expires_at.tzinfo else expires_at
+            new_expires = base + timedelta(days=days)
+        except Exception:
+            pass
+
+    if schedule_revert:
+        # Активный не-Pro: 5 дней Pro поверх, потом revert
+        await message.answer(
+            f"🎉 <b>Промокод активирован!</b>\n\n"
+            f"Вам выдано 5 бонусных дней <b>Pro</b> поверх вашего тарифа "
+            f"<b>{(pre_promo_plan or 'не-Pro').title()}</b>.\n"
+            f"📅 <b>Pro действует до:</b> {(activated_at + timedelta(days=days)).strftime('%d.%m.%Y')}\n"
+            f"После этого тариф вернётся к <b>{(pre_promo_plan or 'не-Pro').title()}</b>, "
+            f"общий срок подписки продлён на {days} дней (до {new_expires.strftime('%d.%m.%Y')}).\n\n"
+            f"Нажмите «Получить ссылку», чтобы настроить VPN." + footer,
+            reply_markup=get_subscription_link_keyboard(),
+            parse_mode="HTML",
+        )
+    else:
+        # Без подписки / активный Pro — обычный текст
+        verb = "продлён" if is_active else "выдан"
+        await message.answer(
+            f"🎉 <b>Промокод активирован!</b>\n\n"
+            f"Вам {verb} <b>Pro</b> на {days} дней.\n"
+            f"📅 <b>Действует до:</b> {new_expires.strftime('%d.%m.%Y')}\n\n"
+            f"Нажмите «Получить ссылку», чтобы настроить VPN." + footer,
+            reply_markup=get_subscription_link_keyboard(),
+            parse_mode="HTML",
+        )
+
+    # 8. Уведомление админам — успех
+    remna_id = "—"
+    if SessionLocal:
+        try:
+            async with SessionLocal() as session:
+                from app.db.models import TelegramUser as _TG
+                _r = await session.execute(select(_TG).where(_TG.telegram_id == user_id))
+                _tg = _r.scalar_one_or_none()
+                if _tg and _tg.remna_user_id:
+                    remna_id = _tg.remna_user_id
+        except Exception as _e:
+            logger.debug(f"{cmd}: get remna_user_id soft-fail {user_id}: {_e}")
+
+    if schedule_revert:
+        revert_dt_display = (activated_at + timedelta(days=days)).strftime("%d.%m.%Y %H:%M UTC")
+        provision_line = (
+            f"📦 <b>Тариф:</b> Pro {days} дней (поверх {pre_promo_plan or 'не-Pro'})\n"
+            f"🔄 <b>Revert:</b> {revert_dt_display} → {pre_promo_plan or 'basic'}"
+        )
+    else:
+        provision_line = f"📦 <b>Тариф:</b> Pro {days} дней{' (продление)' if is_active else ''}"
+
+    await _sun718_notify_admins(
+        message.bot,
+        user_id=user_id, username=username, name=name,
+        title="🎁 SUN718 АКТИВИРОВАН",
+        body=(
+            f"{provision_line}\n"
+            f"📅 <b>Pro до:</b> {new_expires.strftime('%d.%m.%Y')}\n"
+            f"🔗 <b>Remnawave ID:</b> <code>{remna_id}</code>\n"
+            f"✅ <b>Записано в БД для рефералки</b>"
+        ),
     )
 
 

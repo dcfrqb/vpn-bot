@@ -141,6 +141,10 @@ async def run_polling():
     subscription_checker.start()
     logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
 
+    from app.tasks.sun718_revert import Sun718RevertTask
+    sun718_revert_task = Sun718RevertTask(bot, check_interval=3600)
+    sun718_revert_task.start()
+
     # Broadcast: подхватываем рассылки, которые не закончились до рестарта
     try:
         from app.services.broadcast import resume_unfinished_broadcasts
@@ -226,6 +230,10 @@ async def run_webhook():
     subscription_checker = SubscriptionChecker(bot, check_interval=3600)
     subscription_checker.start()
     logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
+
+    from app.tasks.sun718_revert import Sun718RevertTask
+    sun718_revert_task = Sun718RevertTask(bot, check_interval=3600)
+    sun718_revert_task.start()
 
     # Broadcast: подхватываем рассылки, которые не закончились до рестарта
     try:
