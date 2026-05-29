@@ -1072,6 +1072,29 @@ async def cmd_trial(message: types.Message):
     )
 
 
+@router.message(Command("sun718"))
+async def cmd_sun718(message: types.Message):
+    """Промокод Sun718 — Pro на 5 дней (реферальный).
+
+    Юзеры с активной подпиской получают отказ внутри `_handle_promo_command`.
+    Счёт оплаченных месяцев приглашённых ведётся в /referral_stats sun718.
+    """
+    if not getattr(settings, "PROMO_SUN718_ENABLED", True):
+        return
+    if await _handle_promo_command(
+        message,
+        promo_code="sun718",
+        tariff="sun718_5d",
+        days=5,
+        plan_label="Pro",
+    ):
+        return
+    await message.answer(
+        "❌ Не удалось обработать промокод. Попробуйте позже или напишите администратору.",
+        reply_markup=get_main_menu_keyboard(user_id=message.from_user.id),
+    )
+
+
 @router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     """Команда /myid показывает ваш Telegram ID"""

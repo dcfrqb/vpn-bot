@@ -882,3 +882,93 @@ async def cmd_whois(message: types.Message):
     except Exception as e:
         logger.error(f"admin whois error: target={target_id} err={e}")
         await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")
+
+
+@router.message(Command("referral_stats"))
+async def cmd_referral_stats(message: types.Message):
+    """Реферальная статистика по промокоду (по умолчанию sun718).
+
+    Считает сумму period_months по всем платным успешным платежам юзеров,
+    активировавших промокод (после момента активации). 5 мес = 1 бонусный.
+    Владелец рефералки (PROMO_SUN718_OWNER_TG_ID) из пула исключается.
+    """
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Нет прав")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    promo_code = (parts[1].strip().lower() if len(parts) > 1 else "sun718")
+
+    from app.db.session import SessionLocal
+    if not SessionLocal:
+        await message.answer("❌ БД не настроена")
+        return
+
+    from sqlalchemy import select
+    from app.db.models import Payment as PaymentModel
+
+    owner_id = getattr(settings, "PROMO_SUN718_OWNER_TG_ID", None) if promo_code == "sun718" else None
+
+    try:
+        async with SessionLocal() as session:
+            # 1. Все активации промокода: external_id = 'promo_{code}_{tg_id}'
+            act_res = await session.execute(
+                select(PaymentModel.telegram_user_id, PaymentModel.paid_at)
+                .where(PaymentModel.provider == "promo")
+                .where(PaymentModel.external_id.like(f"promo_{promo_code}_%"))
+            )
+            activations = [(tg, dt) for tg, dt in act_res.all() if tg != owner_id]
+
+            if not activations:
+                await message.answer(f"Нет активаций промокода /{escape_html(promo_code)}")
+                return
+
+            # 2. Для каждого юзера — сумма period_months по платным после активации
+            per_user: list[tuple[int, int, int]] = []  # (tg_id, months, payments_count)
+            total_months = 0
+            for tg_id, activated_at in activations:
+                pays = await session.execute(
+                    select(PaymentModel)
+                    .where(PaymentModel.telegram_user_id == tg_id)
+                    .where(PaymentModel.provider != "promo")
+                    .where(PaymentModel.status == "succeeded")
+                    .where(PaymentModel.paid_at != None)  # noqa: E711
+                    .where(PaymentModel.paid_at > activated_at)
+                )
+                user_months = 0
+                pay_count = 0
+                for p in pays.scalars():
+                    meta = p.payment_metadata or {}
+                    pm = meta.get("period_months")
+                    try:
+                        m = int(pm) if pm is not None else 0
+                    except (TypeError, ValueError):
+                        m = 0
+                    if m > 0:
+                        user_months += m
+                        pay_count += 1
+                per_user.append((tg_id, user_months, pay_count))
+                total_months += user_months
+
+        bonus = total_months / 5.0
+        paying = sum(1 for _, m, _ in per_user if m > 0)
+
+        lines = [f"📊 <b>Рефералка /{escape_html(promo_code)}</b>", ""]
+        lines.append(f"Активаций: <b>{len(activations)}</b>")
+        lines.append(f"Из них с оплатами: <b>{paying}</b>")
+        lines.append(f"Сумма оплаченных месяцев: <b>{total_months}</b>")
+        lines.append(f"🎁 Бонусных месяцев: <b>{bonus:.2f}</b>")
+        if owner_id:
+            lines.append(f"\n<i>Владелец <code>{owner_id}</code> исключён</i>")
+
+        top = sorted(per_user, key=lambda x: -x[1])[:20]
+        paid_top = [(tg, m, c) for tg, m, c in top if m > 0]
+        if paid_top:
+            lines.append("\n<b>Топ приглашённых (мес × платежей):</b>")
+            for tg_id, m, c in paid_top:
+                lines.append(f"• <code>{tg_id}</code> — {m} мес ({c} плт)")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"referral_stats error: code={promo_code} err={e}")
+        await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")
