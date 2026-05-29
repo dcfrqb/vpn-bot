@@ -1145,7 +1145,15 @@ async def handle_successful_payment(
             f"subscription_id={subscription.id} plan={plan_code} period={period_months}m "
             f"tg_id={telegram_user_id} remna_user_id={subscription.remna_user_id}"
         )
-        
+
+        # Реферальный трекер /sun718: если плательщик — приглашённый юзер,
+        # шлёт админу алерты B (+N мес) и C (бонус-порог). Soft-fail внутри.
+        try:
+            from app.services.referral_tracker import notify_referral_payment_if_applicable
+            await notify_referral_payment_if_applicable(bot, session, payment)
+        except Exception as _ref_e:
+            logger.warning(f"[{trace_id}] referral_tracker hook soft-fail: {_ref_e}")
+
     except ProvisioningPendingError:
         # Уже залогировано и помечено в _mark_provisioning_failed.
         # Пробрасываем дальше — webhook вернёт 503, юзер будет уведомлён только когда
