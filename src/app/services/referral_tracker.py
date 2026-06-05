@@ -23,10 +23,10 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.config import settings
-from app.db.models import Payment, TelegramUser
+from app.db.models import Payment, ReferralPayout, TelegramUser
 from app.logger import logger
 
 
@@ -95,23 +95,13 @@ async def compute_sun718_earned_months(session) -> int:
 
 
 async def compute_sun718_paid_out(session) -> int:
-    """Сумма выплаченных бонусных месяцев (из журнала /referral_payout)."""
+    """Сумма выплаченных бонусных месяцев (из леджера referral_payouts)."""
     res = await session.execute(
-        select(Payment)
-        .where(Payment.provider == "referral_payout")
-        .where(Payment.external_id.like("referral_payout_sun718_%"))
-        .where(Payment.status == "succeeded")
+        select(func.coalesce(func.sum(ReferralPayout.payout_months), 0))
+        .where(ReferralPayout.promo_code == "sun718")
     )
-    total = 0
-    for p in res.scalars():
-        meta = p.payment_metadata or {}
-        try:
-            n = int(meta.get("payout_months") or 0)
-        except (TypeError, ValueError):
-            n = 0
-        if n > 0:
-            total += n
-    return total
+    total = res.scalar_one()
+    return int(total or 0)
 
 
 async def compute_sun718_breakdown(session) -> dict:
@@ -242,40 +232,30 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
 
 async def record_payout(
     session, *, months: int, note: str, admin_id: int
-) -> Payment:
-    """Записывает выплату бонуса в Payment как provider='referral_payout'.
+) -> ReferralPayout:
+    """Записывает выплату бонуса в леджер referral_payouts.
 
-    Возвращает созданный Payment. Идемпотентность не гарантируется — каждый
-    вызов = новая запись (админ должен сам не дублировать).
+    Это НЕ платёж — реальное продление получателю делается руками в панели,
+    запись здесь только для учёта (вычитается из «доступно» в /referral_stats).
+    Возвращает созданный ReferralPayout. Идемпотентность не гарантируется —
+    каждый вызов = новая запись (админ должен сам не дублировать).
     """
-    now = datetime.utcnow()
-    ext_id = f"referral_payout_sun718_{int(now.timestamp())}_{admin_id}"
-    rec = Payment(
-        telegram_user_id=admin_id,  # FK на админа который выдал
-        provider="referral_payout",
-        external_id=ext_id,
-        amount=0,
-        currency="RUB",
-        status="succeeded",
-        description=f"Sun718 payout: {months} мес ({note or 'без комментария'})",
-        paid_at=now,
-        payment_metadata={
-            "promo_code": "sun718",
-            "payout_months": int(months),
-            "note": str(note or "")[:500],
-            "admin_id": admin_id,
-        },
+    rec = ReferralPayout(
+        admin_id=admin_id,  # кто выдал
+        promo_code="sun718",
+        payout_months=int(months),
+        note=str(note or "")[:500] or None,
+        created_at=datetime.utcnow(),
     )
     session.add(rec)
     await session.commit()
     return rec
 
 
-async def notify_payout(bot, session, payout: Payment) -> None:
+async def notify_payout(bot, session, payout: ReferralPayout) -> None:
     """Алерт о ручной выплате — админу + владельцу (если задан)."""
-    meta = payout.payment_metadata or {}
-    months = int(meta.get("payout_months") or 0)
-    note = meta.get("note") or ""
+    months = int(payout.payout_months or 0)
+    note = payout.note or ""
 
     paid_out = await compute_sun718_paid_out(session)
     earned = await compute_sun718_earned_months(session)
