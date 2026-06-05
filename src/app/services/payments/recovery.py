@@ -35,11 +35,15 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
     recent_threshold = datetime.utcnow() - timedelta(hours=24)
 
     async with SessionLocal() as session:
-        # Case 1: succeeded without subscription_id (classic missing provisioning)
+        # Case 1: succeeded without subscription_id (classic missing provisioning).
+        # ВАЖНО: только реальные покупки (provider='yookassa'). Нулёвые записи
+        # promo/referral_payout/trial НЕ должны провижиниться здесь — у них нет
+        # plan_code, и handle_successful_payment свалится в AMOUNT FALLBACK (0₽ → basic),
+        # перезаписав юзеру тариф и повторно отправив "оплата подтверждена".
         stmt_no_sub = select(PaymentModel).where(
             PaymentModel.status == "succeeded",
             PaymentModel.subscription_id.is_(None),
-            PaymentModel.provider != "promo",
+            PaymentModel.provider == "yookassa",
         )
         rows_no_sub = await session.execute(stmt_no_sub)
         payments_no_sub = list(rows_no_sub.scalars().all())
@@ -50,6 +54,7 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
         stmt_with_sub = select(PaymentModel).where(
             PaymentModel.status == "succeeded",
             PaymentModel.subscription_id.isnot(None),
+            PaymentModel.provider == "yookassa",
             PaymentModel.created_at > recent_threshold,
         )
         rows_with_sub = await session.execute(stmt_with_sub)
@@ -65,6 +70,7 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
         ).where(
             PaymentModel.status == "succeeded",
             PaymentModel.subscription_id.isnot(None),
+            PaymentModel.provider == "yookassa",
             TelegramUser.remna_user_id.is_(None),
         )
         rows_case3 = await session.execute(stmt_case3)

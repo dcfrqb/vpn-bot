@@ -708,6 +708,19 @@ async def handle_successful_payment(
 
         meta = payment.payment_metadata or {}
 
+        # Guard: провижинить можно только реальные покупки YooKassa. Нулёвые записи
+        # promo/referral_payout/trial не несут plan_code — без этого guard они бы
+        # ушли в AMOUNT FALLBACK ниже (0₽ → basic) и перезаписали юзеру тариф плюс
+        # повторно отправили "оплата подтверждена". Реальное начисление по промо/
+        # выплатам делает provision_tariff в remna_service, а не этот путь.
+        if payment.provider and payment.provider != "yookassa":
+            logger.warning(
+                f"[{trace_id}] handle_successful_payment: skipping non-purchase "
+                f"provider={payment.provider!r} payment_id={payment_id} "
+                f"tg_id={telegram_user_id} amount={amount}"
+            )
+            return
+
         # Идемпотентность: блокируем платёж и проверяем, не была ли подписка уже
         # успешно засинкана. Гейт — provisioning_state='synced' (а не subscription_id),
         # это закрывает баг split-state когда subscription_id выставлен, но Remnawave
