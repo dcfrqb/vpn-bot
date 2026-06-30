@@ -163,24 +163,84 @@ async def ensure_obhod_for_pro(
                 first_name=tg.first_name,
                 last_name=tg.last_name,
             )
-            # Lazy-import: generate_remna_password живёт в yookassa-сервисе
-            # (избегаем тяжёлого import на уровне модуля + цикла).
-            from app.services.payments.yookassa import generate_remna_password
 
-            password = generate_remna_password(length=24)
-            obhod_uuid = await client.create_obhod_user(
-                username=username,
-                password=password,
-                expire_at=expire_str,
-                active_internal_squads=[squad_uuid],
-                traffic_limit_bytes=base_limit,
-                traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
-                display_name=f"obhod {telegram_user_id}",
-            )
-            logger.info(
-                f"[{trace_id}] obhod created: tg_id={telegram_user_id} uuid={obhod_uuid} "
-                f"expire={expire_str} limit_bytes={base_limit}"
-            )
+            # M1 recovery: username детерминирован. Если предыдущая попытка создала
+            # юзера в Remnawave, но DB-строка не записалась (сбой commit → rollback),
+            # повторный create упёрся бы в duplicate-username и обход не завёлся бы
+            # никогда. Поэтому СНАЧАЛА пробуем до-резолвить uuid по username; если
+            # юзер уже есть — переиспользуем его (продлеваем срок/кап), не создаём.
+            obhod_uuid = None
+            try:
+                existing_remote = await client.get_user_by_username(username)
+                if existing_remote:
+                    obhod_uuid = existing_remote.get("uuid") or existing_remote.get(
+                        "id"
+                    )
+            except Exception as _re:
+                logger.debug(
+                    f"[{trace_id}] obhod: предрезолв по username {username!r} не дал результата: {_re}"
+                )
+
+            if obhod_uuid:
+                # Орфан из прошлой попытки — приводим к нужному состоянию.
+                obhod_uuid = str(obhod_uuid)
+                await client.update_user(
+                    obhod_uuid,
+                    expire_at=expire_str,
+                    activeInternalSquads=[squad_uuid],
+                    traffic_limit_bytes=base_limit,
+                    traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
+                )
+                logger.info(
+                    f"[{trace_id}] obhod recovered by username: tg_id={telegram_user_id} "
+                    f"username={username} uuid={obhod_uuid} expire={expire_str}"
+                )
+            else:
+                # Lazy-import: generate_remna_password живёт в yookassa-сервисе
+                # (избегаем тяжёлого import на уровне модуля + цикла).
+                from app.services.payments.yookassa import generate_remna_password
+
+                password = generate_remna_password(length=24)
+                try:
+                    obhod_uuid = await client.create_obhod_user(
+                        username=username,
+                        password=password,
+                        expire_at=expire_str,
+                        active_internal_squads=[squad_uuid],
+                        traffic_limit_bytes=base_limit,
+                        traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
+                        display_name=f"obhod {telegram_user_id}",
+                    )
+                    logger.info(
+                        f"[{trace_id}] obhod created: tg_id={telegram_user_id} uuid={obhod_uuid} "
+                        f"expire={expire_str} limit_bytes={base_limit}"
+                    )
+                except Exception as create_err:
+                    # M1: гонка / орфан между предрезолвом и create — duplicate
+                    # username. Резолвим uuid существующего юзера, иначе пробрасываем.
+                    resolved = None
+                    try:
+                        existing_remote = await client.get_user_by_username(username)
+                        if existing_remote:
+                            resolved = existing_remote.get(
+                                "uuid"
+                            ) or existing_remote.get("id")
+                    except Exception:
+                        resolved = None
+                    if not resolved:
+                        raise create_err
+                    obhod_uuid = str(resolved)
+                    await client.update_user(
+                        obhod_uuid,
+                        expire_at=expire_str,
+                        activeInternalSquads=[squad_uuid],
+                        traffic_limit_bytes=base_limit,
+                        traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
+                    )
+                    logger.warning(
+                        f"[{trace_id}] obhod create hit duplicate, recovered by username: "
+                        f"tg_id={telegram_user_id} username={username} uuid={obhod_uuid}"
+                    )
 
         subscription_url = await client.get_user_subscription_url(obhod_uuid)
 

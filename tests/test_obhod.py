@@ -140,6 +140,8 @@ def _patch_remna_for_obhod(create_uuid="obhod-uuid-new", sub_url="https://sub/ob
     mock_client.create_obhod_user = AsyncMock(return_value=create_uuid)
     mock_client.update_user = AsyncMock(return_value={})
     mock_client.get_user_subscription_url = AsyncMock(return_value=sub_url)
+    # По умолчанию обходного юзера в Remnawave ещё нет (предрезолв пуст).
+    mock_client.get_user_by_username = AsyncMock(return_value=None)
     mock_client.close = AsyncMock()
     return mock_client
 
@@ -226,6 +228,75 @@ async def test_ensure_obhod_extends_existing_user():
     upd_kwargs = mock_client.update_user.await_args.kwargs
     assert upd_kwargs["traffic_limit_bytes"] == plans.obhod_base_limit_bytes()
     assert existing.valid_until == valid_until
+
+
+@pytest.mark.asyncio
+async def test_ensure_obhod_recovers_orphan_by_username():
+    """M1: юзер уже есть в Remnawave (орфан из прошлой попытки) → ensure находит
+    его по username, переиспользует uuid и пишет DB-строку, НЕ создаёт нового."""
+    from app.services import obhod_service
+
+    tg = TelegramUser(telegram_id=555, username="vasya")
+    session, state = _fake_session(existing_obhod=None, tg=tg)
+    mock_client = _patch_remna_for_obhod()
+    # Предрезолв находит существующего obhod-юзера.
+    mock_client.get_user_by_username = AsyncMock(
+        return_value={"uuid": "orphan-uuid-1"}
+    )
+    valid_until = datetime.utcnow() + timedelta(days=30)
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        url = await obhod_service.ensure_obhod_for_pro(
+            session=session,
+            telegram_user_id=555,
+            plan_code="pro",
+            valid_until=valid_until,
+        )
+
+    assert url == "https://sub/obhod"
+    # НЕ создаём нового — переиспользуем орфана.
+    mock_client.create_obhod_user.assert_not_called()
+    mock_client.update_user.assert_awaited()
+    # DB-строка записана с uuid орфана.
+    subs = [o for o in state["added"] if isinstance(o, Subscription)]
+    assert len(subs) == 1
+    assert subs[0].remna_user_id == "orphan-uuid-1"
+    assert subs[0].sub_kind == "obhod"
+
+
+@pytest.mark.asyncio
+async def test_ensure_obhod_recovers_on_duplicate_create():
+    """M1: гонка — предрезолв пуст, create падает duplicate, затем резолв по
+    username восстанавливает uuid (а не валит обход)."""
+    from app.services import obhod_service
+
+    tg = TelegramUser(telegram_id=555, username="vasya")
+    session, state = _fake_session(existing_obhod=None, tg=tg)
+    mock_client = _patch_remna_for_obhod()
+    # Предрезолв пуст в первый раз, после duplicate-create — находит юзера.
+    mock_client.get_user_by_username = AsyncMock(
+        side_effect=[None, {"uuid": "dup-uuid-2"}]
+    )
+    mock_client.create_obhod_user = AsyncMock(
+        side_effect=Exception("user already exists")
+    )
+    valid_until = datetime.utcnow() + timedelta(days=30)
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        url = await obhod_service.ensure_obhod_for_pro(
+            session=session,
+            telegram_user_id=555,
+            plan_code="pro",
+            valid_until=valid_until,
+        )
+
+    assert url == "https://sub/obhod"
+    mock_client.create_obhod_user.assert_awaited_once()  # попытка была
+    # Восстановились по username и обновили юзера.
+    mock_client.update_user.assert_awaited()
+    subs = [o for o in state["added"] if isinstance(o, Subscription)]
+    assert len(subs) == 1
+    assert subs[0].remna_user_id == "dup-uuid-2"
 
 
 @pytest.mark.asyncio

@@ -590,6 +590,16 @@ class RemnaClient:
             logger.error(f"Ошибка создания пользователя {telegram_id}: {e.response.status_code}")
             raise
 
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Публичный резолв пользователя Remnawave по username (или None).
+
+        Тонкая обёртка над _find_user_by_username. Используется для recovery
+        обходного юзера (M1): username детерминирован (tg_<id>_obhod), и если
+        DB-строка не записалась (сбой commit после create), uuid восстанавливаем
+        отсюда вместо повторного create (который упёрся бы в duplicate-username).
+        """
+        return await self._find_user_by_username(username)
+
     async def _find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """
         Найти пользователя по username.
