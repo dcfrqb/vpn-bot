@@ -392,6 +392,49 @@ async def test_apply_obhod_package_idempotent_same_payment():
 
 
 @pytest.mark.asyncio
+async def test_apply_obhod_package_commit_fail_rolls_back_cap():
+    """M2: кап поднят в Remnawave, commit упал → кап откатывается к базовому,
+    возвращается False (split-state не остаётся)."""
+    from app.services import obhod_service
+
+    existing = Subscription(
+        id=7,
+        telegram_user_id=555,
+        plan_code="obhod",
+        sub_kind="obhod",
+        active=True,
+        remna_user_id="obhod-existing-uuid",
+        config_data={},  # пакета раньше не было → откат к базовому 100 ГБ
+    )
+    session, _ = _fake_session(existing_obhod=existing)
+    # commit падает.
+    session.commit = AsyncMock(side_effect=Exception("db down"))
+
+    mock_client = AsyncMock()
+    mock_client.update_user = AsyncMock(return_value={})
+    mock_client.close = AsyncMock()
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        ok = await obhod_service.apply_obhod_package(
+            session=session,
+            telegram_user_id=555,
+            package_code="obhod_250",
+            payment_id=7,
+        )
+
+    assert ok is False
+    # update_user вызван дважды: подъём капа + откат.
+    assert mock_client.update_user.await_count == 2
+    raise_call = mock_client.update_user.await_args_list[0]
+    restore_call = mock_client.update_user.await_args_list[1]
+    assert raise_call.kwargs["traffic_limit_bytes"] == 250 * 1024**3
+    # Откат — к базовому лимиту (пакета раньше не было).
+    assert restore_call.kwargs["traffic_limit_bytes"] == plans.obhod_base_limit_bytes()
+    # Rollback БД вызван.
+    session.rollback.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_apply_obhod_package_different_payment_applies_again():
     """C1: другой payment_id (легитимная докупка) применяется заново."""
     from app.services import obhod_service

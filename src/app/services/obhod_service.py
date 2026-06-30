@@ -390,6 +390,23 @@ async def apply_obhod_package(
 
     package_until = datetime.utcnow() + relativedelta(months=period_months)
 
+    # M2: прежний кап (на случай отката при сбое commit). Если уже стоял активный
+    # пакет — его лимит, иначе базовые 100 ГБ. Так split-state (кап поднят в
+    # Remnawave, но БД не записала package_until) не оставит юзера с поднятым капом
+    # без срока — при сбое commit мы вернём кап к прежнему значению.
+    prev_limit = obhod_base_limit_bytes()
+    prev_cfg = obhod_sub.config_data or {}
+    prev_pkg = prev_cfg.get("package")
+    prev_until_raw = prev_cfg.get("package_until")
+    if prev_pkg and prev_until_raw:
+        try:
+            if datetime.fromisoformat(prev_until_raw) > datetime.utcnow():
+                _pl = get_obhod_package_limit_bytes(prev_pkg)
+                if _pl:
+                    prev_limit = _pl
+        except Exception:
+            pass
+
     client = RemnaClient()
     try:
         await client.update_user(
@@ -402,9 +419,8 @@ async def apply_obhod_package(
             f"[{trace_id}] obhod package: не смогли поднять кап uuid="
             f"{obhod_sub.remna_user_id} err={e}"
         )
-        return False
-    finally:
         await client.close()
+        return False
 
     cfg = dict(obhod_sub.config_data or {})
     cfg["package"] = package_code
@@ -413,7 +429,38 @@ async def apply_obhod_package(
     if payment_id is not None:
         cfg["applied_payment_id"] = payment_id
     obhod_sub.config_data = cfg
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception as commit_err:
+        # M2: БД не записала состояние пакета, а кап в Remnawave уже поднят.
+        # Откатываем кап обратно к прежнему значению, чтобы не оставить
+        # неоплаченно-расширенный кап без package_until (который при синке Pro
+        # всё равно сбросится к базовому, но до синка юзер бы пользовался лишним
+        # трафиком). Безопаснее вернуть как было и дать платежу пере-провизиниться.
+        logger.error(
+            f"[{trace_id}] obhod package: commit упал, откатываем кап в Remnawave "
+            f"uuid={obhod_sub.remna_user_id} к {prev_limit} err={commit_err}"
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        try:
+            await client.update_user(
+                obhod_sub.remna_user_id,
+                traffic_limit_bytes=prev_limit,
+                traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
+            )
+        except Exception as restore_err:
+            logger.error(
+                f"[{trace_id}] obhod package: НЕ смогли откатить кап после сбоя commit "
+                f"uuid={obhod_sub.remna_user_id} err={restore_err}"
+            )
+        finally:
+            await client.close()
+        return False
+
+    await client.close()
     logger.info(
         f"[{trace_id}] obhod package applied: tg_id={telegram_user_id} "
         f"package={package_code} limit_bytes={limit_bytes} until={package_until.isoformat()}"
