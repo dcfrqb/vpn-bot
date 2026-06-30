@@ -24,6 +24,8 @@ ACTION_MAP: Dict[ScreenID, Dict[str, Tuple[ActionEffect, Optional[ScreenID]]]] =
         "open": ("NAVIGATION", None),
         "select": ("NAVIGATION", ScreenID.SUBSCRIPTION_PLAN_DETAIL),  # Выбор тарифа -> переход на детальный экран
         "extend": ("NAVIGATION", ScreenID.SUBSCRIPTION_PLAN_DETAIL),  # Продлить последний тариф юзера
+        "obhod": ("STATE", None),  # Категория пакетов «Обход +трафик» — рендер на том же экране
+        "buy_obhod": ("STATE", None),  # Покупка пакета обхода — рендер ссылки на оплату
         "back": ("NAVIGATION", ScreenID.MAIN_MENU),
     },
     ScreenID.SUBSCRIPTION_PLAN_DETAIL: {
