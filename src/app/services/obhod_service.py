@@ -29,7 +29,7 @@ from app.core.plans import (
 )
 from app.db.models import RemnaUser, Subscription, TelegramUser
 from app.logger import logger
-from app.remnawave.client import RemnaClient, generate_remna_password, normalize_expire_at
+from app.remnawave.client import RemnaClient, normalize_expire_at
 from app.utils.remna_username import build_remna_username
 
 
@@ -157,6 +157,10 @@ async def ensure_obhod_for_pro(
                 first_name=tg.first_name,
                 last_name=tg.last_name,
             )
+            # Lazy-import: generate_remna_password живёт в yookassa-сервисе
+            # (избегаем тяжёлого import на уровне модуля + цикла).
+            from app.services.payments.yookassa import generate_remna_password
+
             password = generate_remna_password(length=24)
             obhod_uuid = await client.create_obhod_user(
                 username=username,
