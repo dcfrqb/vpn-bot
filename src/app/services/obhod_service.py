@@ -240,7 +240,8 @@ async def deactivate_obhod(
     счётчик трафика). Возвращает True если что-то поменяли.
     """
     obhod_sub = await get_obhod_subscription(session, telegram_user_id)
-    if not obhod_sub or not obhod_sub.active:
+    # Защита: действуем строго на obhod-строке (sub_kind='obhod') и только если активна.
+    if not obhod_sub or getattr(obhod_sub, "sub_kind", None) != "obhod" or not obhod_sub.active:
         return False
 
     if obhod_sub.remna_user_id:
