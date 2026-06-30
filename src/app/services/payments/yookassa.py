@@ -749,6 +749,47 @@ async def handle_successful_payment(
                     except (ValueError, TypeError):
                         period_months = None
 
+        # ===== Платёж за ПАКЕТ ОБХОДА (а не за тариф) =====
+        # plan_code здесь — код пакета (obhod_250/...). Это НЕ основная подписка:
+        # поднимаем кап на существующем obhod-юзере и завершаем без provision'а main.
+        from app.core.plans import is_obhod_package_code
+        if is_obhod_package_code(plan_code):
+            from app.services.obhod_service import apply_obhod_package
+            applied = await apply_obhod_package(
+                session=session,
+                telegram_user_id=telegram_user_id,
+                package_code=plan_code,
+                trace_id=trace_id,
+            )
+            # Привязываем платёж к obhod-подписке (для аудита) и закрываем.
+            payment.subscription_id = None
+            payment.status = "succeeded"
+            if not payment.paid_at:
+                payment.paid_at = datetime.utcnow()
+            _pmeta = dict(payment.payment_metadata or {}) if isinstance(payment.payment_metadata, dict) else {}
+            _pmeta["obhod_package_applied"] = bool(applied)
+            payment.payment_metadata = _pmeta
+            await session.commit()
+            if applied:
+                try:
+                    await bot.send_message(
+                        chat_id=telegram_user_id,
+                        text=(
+                            "✅ <b>Пакет обхода подключён</b>\n\n"
+                            "Лимит обхода поднят. Открыть ссылку обхода можно на "
+                            "экране «Подключиться»."
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception as _e:
+                    logger.debug(f"[{trace_id}] obhod package notify soft-fail: {_e}")
+            else:
+                logger.error(
+                    f"[{trace_id}] obhod package paid but NOT applied "
+                    f"(нет активного обхода?): tg_id={telegram_user_id} package={plan_code}"
+                )
+            return
+
         # Если не нашли в metadata, определяем тариф и период по сумме платежа.
         # ВНИМАНИЕ: после ввода тарифов lite/standard/pro суммы пересекаются
         # (249, 1199, 2199 — двусмысленны). Этот fallback ОСОЗНАННО мапит

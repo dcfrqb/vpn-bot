@@ -144,23 +144,59 @@ async def get_connect_viewmodel(
     """
     from app.services.connection import can_user_connect
     from app.ui.screens.connect import ConnectScreen
-    
+
     # Проверяем, может ли пользователь подключиться
     has_subscription = await can_user_connect(telegram_id)
-    
+
     # Если статус не указан явно, определяем его
     if status == "loading":
         if not has_subscription:
             status = "no_subscription"
         elif subscription_url:
             status = "success"
-    
+
+    # --- Обход (две подписки): обогащаем VM данными обхода для экрана connect ---
+    # is_pro определяем по факту наличия obhod-подписки в БД (obhod выдаётся
+    # только в Pro) — это устойчивее, чем парсить plan_code из Remnawave, который
+    # может прийти пустым. obhod-инфа берётся live из Remnawave по uuid.
+    is_pro = False
+    obhod_url = None
+    obhod_used_bytes = None
+    obhod_limit_bytes = None
+    obhod_active = False
+    if status == "success":
+        try:
+            from app.services.obhod_service import get_obhod_link_info
+            obhod = await get_obhod_link_info(telegram_id)
+            if obhod is not None:
+                is_pro = True  # obhod-строка существует ⇒ юзер Pro
+                obhod_active = bool(obhod.get("active"))
+                obhod_url = obhod.get("url")
+                obhod_used_bytes = obhod.get("used_bytes")
+                obhod_limit_bytes = obhod.get("limit_bytes")
+            else:
+                # Fallback: если obhod-строки нет, всё равно попробуем понять Pro
+                # по plan_code основной подписки (на случай, если obhod ещё не
+                # успел провизиониться).
+                from app.core.plans import is_obhod_eligible_plan
+                from app.services.users import get_user_active_subscription
+                main_sub = await get_user_active_subscription(telegram_id, use_cache=True)
+                if main_sub and is_obhod_eligible_plan(main_sub.plan_code):
+                    is_pro = True
+        except Exception:
+            pass
+
     screen = ConnectScreen()
     return await screen.create_viewmodel(
         has_subscription=has_subscription,
         subscription_url=subscription_url,
         status=status,
-        error_message=error_message
+        error_message=error_message,
+        is_pro=is_pro,
+        obhod_url=obhod_url,
+        obhod_used_bytes=obhod_used_bytes,
+        obhod_limit_bytes=obhod_limit_bytes,
+        obhod_active=obhod_active,
     )
 
 

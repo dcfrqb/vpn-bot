@@ -76,8 +76,77 @@ class SubscriptionPlansScreen(BaseScreen):
         message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
-        """select - выбор нового тарифа из меню; extend - продление текущего."""
+        """select - выбор нового тарифа; extend - продление; obhod - пакеты обхода."""
         from app.ui.screen_manager import get_screen_manager
+
+        if action == "obhod":
+            # Категория «Обход +трафик» внутри экрана подписки (без новой кнопки в меню).
+            from app.ui.keyboards.subscription import build_obhod_packages_keyboard
+            from app.ui.renderers.subscription import render_obhod_packages
+
+            text = render_obhod_packages()
+            keyboard = build_obhod_packages_keyboard()
+            if isinstance(message_or_callback, types.CallbackQuery):
+                try:
+                    await message_or_callback.message.edit_text(
+                        text, reply_markup=keyboard, parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.debug(f"obhod packages render edit failed: {e}")
+                    await message_or_callback.answer()
+                return True
+            return False
+
+        if action == "buy_obhod":
+            # payload = код пакета. Доступно только при реальной цене (placeholder=0 → нет).
+            from app.core.plans import (
+                get_obhod_package,
+                is_obhod_package_purchasable,
+            )
+
+            package_code = payload
+            if not is_obhod_package_purchasable(package_code):
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    await message_or_callback.answer(
+                        "Пакет пока недоступен", show_alert=True
+                    )
+                return False
+
+            meta = get_obhod_package(package_code)
+            amount = int(meta["price"])
+            period_months = int(meta.get("period_months", 1))
+            plan_name = meta["display"]
+
+            from app.services.payments.yookassa import create_payment
+            from app.keyboards import get_payment_keyboard
+
+            try:
+                payment_url, external_id = await create_payment(
+                    amount_rub=amount,
+                    description=f"CRS VPN - {plan_name}",
+                    user_id=int(user_id) if user_id else 0,
+                    plan_code=package_code,
+                    period_months=period_months,
+                )
+            except Exception as e:
+                logger.error(f"buy_obhod: create_payment failed package={package_code} err={e}")
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    await message_or_callback.answer(
+                        "Не удалось создать платёж, попробуйте позже", show_alert=True
+                    )
+                return False
+
+            if isinstance(message_or_callback, types.CallbackQuery):
+                await message_or_callback.message.edit_text(
+                    f"💳 <b>{plan_name}</b>\n"
+                    f"💰 <b>Сумма:</b> {amount}₽\n\n"
+                    "🔗 <b>Для оплаты перейдите по ссылке:</b>\n"
+                    f"<a href='{payment_url}'>Оплатить пакет обхода</a>\n\n"
+                    "💡 После оплаты лимит обхода поднимется автоматически.",
+                    reply_markup=get_payment_keyboard(payment_url, external_id),
+                    parse_mode="HTML",
+                )
+            return True
 
         if action == "extend":
             # Дёргаем live last_plan, чтобы на race-условия (юзер мог купить
