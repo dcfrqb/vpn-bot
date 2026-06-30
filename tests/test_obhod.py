@@ -351,6 +351,82 @@ async def test_apply_obhod_package_different_payment_applies_again():
     assert existing.config_data["applied_payment_id"] == 99
 
 
+# ---------------------------------------------------------------------------
+# 3b. H1 — гейт активного Pro при СОЗДАНИИ платежа за пакет
+# ---------------------------------------------------------------------------
+
+
+def _mock_buy_obhod_callback(user_id=555):
+    cb = MagicMock()
+    # isinstance(cb, types.CallbackQuery) должен быть True
+    from aiogram import types
+
+    cb.__class__ = types.CallbackQuery
+    cb.answer = AsyncMock()
+    cb.message = MagicMock()
+    cb.message.edit_text = AsyncMock()
+    return cb
+
+
+@pytest.mark.asyncio
+async def test_buy_obhod_without_active_pro_no_payment():
+    """H1: без активного обхода/Pro платёж за пакет НЕ создаётся."""
+    from app.ui.screens.subscription import SubscriptionPlansScreen
+    from app.services import obhod_service
+
+    cb = _mock_buy_obhod_callback()
+
+    # Делаем пакет покупаемым (реальная цена) и гарантируем «нет активного обхода».
+    with patch.dict(
+        plans.OBHOD_PACKAGE_CATALOG,
+        {"obhod_250": {**plans.OBHOD_PACKAGE_CATALOG["obhod_250"], "price": 199}},
+    ), patch.object(
+        obhod_service, "has_active_obhod", AsyncMock(return_value=False)
+    ), patch(
+        "app.services.payments.yookassa.create_payment", new=AsyncMock()
+    ) as mock_create:
+        result = await SubscriptionPlansScreen().handle_action(
+            action="buy_obhod",
+            payload="obhod_250",
+            message_or_callback=cb,
+            user_id=555,
+        )
+
+    assert result is False
+    mock_create.assert_not_called()  # платёж НЕ создан
+    cb.answer.assert_awaited()  # юзеру показано сообщение
+
+
+@pytest.mark.asyncio
+async def test_buy_obhod_with_active_pro_creates_payment():
+    """H1: при активном обходе платёж за пакет создаётся (гейт пропускает)."""
+    from app.ui.screens.subscription import SubscriptionPlansScreen
+    from app.services import obhod_service
+
+    cb = _mock_buy_obhod_callback()
+
+    with patch.dict(
+        plans.OBHOD_PACKAGE_CATALOG,
+        {"obhod_250": {**plans.OBHOD_PACKAGE_CATALOG["obhod_250"], "price": 199}},
+    ), patch.object(
+        obhod_service, "has_active_obhod", AsyncMock(return_value=True)
+    ), patch(
+        "app.services.payments.yookassa.create_payment",
+        new=AsyncMock(return_value=("https://pay/url", "ext-id-1")),
+    ) as mock_create:
+        result = await SubscriptionPlansScreen().handle_action(
+            action="buy_obhod",
+            payload="obhod_250",
+            message_or_callback=cb,
+            user_id=555,
+        )
+
+    assert result is True
+    mock_create.assert_awaited_once()
+    # Пакет передан как plan_code в платёж.
+    assert mock_create.await_args.kwargs["plan_code"] == "obhod_250"
+
+
 @pytest.mark.asyncio
 async def test_deactivate_obhod():
     from app.services import obhod_service

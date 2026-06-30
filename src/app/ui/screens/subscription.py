@@ -112,6 +112,29 @@ class SubscriptionPlansScreen(BaseScreen):
                     )
                 return False
 
+            # H1: пакет поднимает кап на обходном юзере и применим только при
+            # активном обходе (то есть активном Pro). Проверяем ДО создания платежа,
+            # иначе оплата пройдёт, а кап не выдастся (apply_obhod_package вернёт
+            # False) и деньги уйдут «в никуда». Pro мог истечь между показом кнопки
+            # и оплатой — поэтому проверка свежая, по БД.
+            has_active = False
+            if user_id is not None:
+                try:
+                    from app.services.obhod_service import has_active_obhod
+                    has_active = await has_active_obhod(int(user_id))
+                except Exception as e:
+                    logger.warning(
+                        f"buy_obhod: проверка активного обхода упала user_id={user_id} err={e}"
+                    )
+            if not has_active:
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    await message_or_callback.answer(
+                        "Пакеты обхода доступны только при активном тарифе Pro. "
+                        "Оформите или продлите Pro, потом возьмите пакет.",
+                        show_alert=True,
+                    )
+                return False
+
             meta = get_obhod_package(package_code)
             amount = int(meta["price"])
             period_months = int(meta.get("period_months", 1))

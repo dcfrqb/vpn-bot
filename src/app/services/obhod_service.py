@@ -361,6 +361,27 @@ async def apply_obhod_package(
     return True
 
 
+async def has_active_obhod(telegram_user_id: int) -> bool:
+    """True, если у юзера есть АКТИВНАЯ obhod-подписка (значит активный Pro).
+
+    H1: гейт на покупку пакета обхода. Пакет поднимает кап на существующем
+    obhod-юзере и применим только при активном обходе; без него apply_obhod_package
+    вернёт False, а платёж уже succeeded — деньги «в никуда». Проверяем ДО создания
+    платежа.
+
+    Открывает свою сессию (вызывается из UI-хендлера, где сессии нет). При
+    недоступной БД (SessionLocal is None) возвращает False — безопасный отказ.
+    """
+    from app.db.session import SessionLocal
+
+    if SessionLocal is None:
+        return False
+
+    async with SessionLocal() as session:
+        obhod_sub = await get_obhod_subscription(session, telegram_user_id)
+        return bool(obhod_sub and obhod_sub.active)
+
+
 async def get_obhod_link_info(telegram_user_id: int) -> Optional[dict]:
     """Для UI экрана connect: данные обхода у Pro-юзера.
 
