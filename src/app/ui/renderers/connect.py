@@ -51,23 +51,14 @@ def _render_obhod_block(
             "нажмите «Обновить»."
         )
 
-    # Остаток трафика. limit_bytes == 0 в Remnawave значит безлимит.
-    if obhod_limit_bytes and obhod_limit_bytes > 0:
-        used = obhod_used_bytes or 0
-        left = max(obhod_limit_bytes - used, 0)
-        limit_line = (
-            f"📊 Осталось в этом месяце: <b>{_fmt_gb(left)}</b> "
-            f"из {_fmt_gb(obhod_limit_bytes)}\n"
-        )
-    else:
-        limit_line = ""
-
     return (
         "\n\n———\n"
         "🛡 <b>Обход блокировок</b>\n"
-        f"{limit_line}"
-        "Отдельная ссылка. Включайте обход, когда сайт заблокирован, "
-        "и выключайте, когда всё работает напрямую.\n\n"
+        "<blockquote>"
+        "Отдельная ссылка. Добавляется так же, как и первая. "
+        "Включайте обход, когда мобильный интернет отключён, "
+        "и выключайте, когда всё работает штатно."
+        "</blockquote>\n\n"
         f"<code>{escape_html(obhod_url)}</code>"
     )
 

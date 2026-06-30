@@ -40,9 +40,11 @@ def render_obhod_packages() -> str:
     """
     header = (
         "🛡 <b>Обход блокировок — больше трафика</b>\n\n"
+        "<blockquote>"
         f"В тарифе Pro обход включён с лимитом {OBHOD_BASE_LIMIT_GB} ГБ в месяц. "
         "Если нужно больше — докупите пакет, и месячный лимит обхода поднимется "
-        "на вашей же ссылке обхода.\n\n"
+        "на вашей ссылке обхода."
+        "</blockquote>\n\n"
     )
 
     purchasable = [c for c in OBHOD_PACKAGE_CODES if is_obhod_package_purchasable(c)]
