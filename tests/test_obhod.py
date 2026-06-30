@@ -568,6 +568,82 @@ async def test_deactivate_obhod():
 
 
 # ---------------------------------------------------------------------------
+# 3c. M3 — is_pro/ссылка обхода не должны зависеть от живого Remnawave
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_obhod_link_info_soft_degrades_to_saved_url():
+    """M3: live-трафик недоступен → url берётся из config_data (не теряется),
+    остаток None; active/url не зависят от живого Remnawave."""
+    from app.services import obhod_service
+
+    existing = Subscription(
+        id=7,
+        telegram_user_id=555,
+        sub_kind="obhod",
+        plan_code="obhod",
+        active=True,
+        remna_user_id="obhod-uuid-1",
+        valid_until=datetime.utcnow() + timedelta(days=30),
+        config_data={"subscription_url": "https://saved/obhod"},
+    )
+
+    # Сессия, отдающая нашу obhod-строку.
+    async def mock_execute(query):
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = existing
+        return r
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=mock_execute)
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    # Remnawave недоступен — get_user_traffic_info падает.
+    mock_client = AsyncMock()
+    mock_client.get_user_traffic_info = AsyncMock(side_effect=Exception("remna down"))
+    mock_client.get_user_subscription_url = AsyncMock(side_effect=Exception("remna down"))
+    mock_client.close = AsyncMock()
+
+    with patch(
+        "app.db.session.SessionLocal", MagicMock(return_value=session_cm)
+    ), patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        info = await obhod_service.get_obhod_link_info(555)
+
+    assert info is not None
+    # Ссылка сохранена несмотря на падение live.
+    assert info["url"] == "https://saved/obhod"
+    # Цифры остатка скрыты (None), но не сама ссылка.
+    assert info["used_bytes"] is None
+    assert info["limit_bytes"] is None
+    assert info["active"] is True
+
+
+@pytest.mark.asyncio
+async def test_connect_renderer_pro_link_shown_without_live_traffic():
+    """M3: Pro с сохранённой ссылкой, но без live-остатка → ссылка показана,
+    а не заглушка «готовим ссылку»."""
+    from app.ui.renderers.connect import render_connect_success_with_obhod
+    from app.ui.viewmodels.connect import ConnectViewModel
+
+    vm = ConnectViewModel(
+        has_subscription=True,
+        subscription_url="https://sub/main",
+        status="success",
+        is_pro=True,
+        obhod_url="https://saved/obhod",
+        obhod_used_bytes=None,  # live недоступен
+        obhod_limit_bytes=None,
+        obhod_active=True,
+    )
+    text = await render_connect_success_with_obhod(vm)
+    assert "https://saved/obhod" in text  # ссылка показана
+    assert "Готовим" not in text  # не заглушка
+
+
+# ---------------------------------------------------------------------------
 # 4. Connect VM/renderer — две ссылки у Pro, одна у не-Pro
 # ---------------------------------------------------------------------------
 
