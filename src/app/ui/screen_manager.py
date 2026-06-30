@@ -1074,10 +1074,11 @@ class ScreenManager:
             return False
         
         # Если у экрана есть handle_action, делегируем
-        if hasattr(screen, 'handle_action') and action in ("page", "filter", "select", "select_period"):
+        if hasattr(screen, 'handle_action') and action in ("page", "filter", "select", "select_period", "obhod", "buy_obhod"):
             try:
-                # select_period не требует Navigator — делегируем напрямую в экран
-                if action == "select_period":
+                # select_period/obhod/buy_obhod не требуют Navigator — рендерят на том же
+                # экране (edit message), делегируем напрямую в экран.
+                if action in ("select_period", "obhod", "buy_obhod"):
                     result = await screen.handle_action(
                         action, payload, message_or_callback, user_id
                     )
