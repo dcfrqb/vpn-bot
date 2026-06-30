@@ -283,7 +283,7 @@ class RemnaClient:
 
         # Если имя состоит только из спецсимволов/эмодзи — fallback
         import re
-        # Убираем всё кроме букв, цифр, пробелов и базовых знаков препинания
+        # Убираем все кроме букв, цифр, пробелов и базовых знаков препинания
         text_only = re.sub(r'[^\w\s\-\.]', '', clean_name, flags=re.UNICODE)
         if not text_only.strip():
             return f"User {telegram_id}"
@@ -405,9 +405,9 @@ class RemnaClient:
     ) -> str:
         """Создать обходного пользователя БЕЗ telegramId и вернуть его uuid.
 
-        КРИТИЧНО: obhod-юзер создаётся БЕЗ telegramId — иначе лукап
+        КРИТИЧНО: obhod-юзер создается БЕЗ telegramId — иначе лукап
         get_user_by_telegram_id/{id} станет неоднозначным и сломает основную
-        подписку. К obhod-юзеру обращаемся ТОЛЬКО по сохранённому uuid.
+        подписку. К obhod-юзеру обращаемся ТОЛЬКО по сохраненному uuid.
 
         username должен быть уникальным (обычно tg_<id>_obhod, см.
         build_remna_username + суффикс).
@@ -416,7 +416,7 @@ class RemnaClient:
             username=username,
             password=password,
             expire_at=expire_at,
-            telegram_id=None,  # НИКОГДА не задаём telegramId обходному юзеру
+            telegram_id=None,  # НИКОГДА не задаем telegramId обходному юзеру
             active_internal_squads=active_internal_squads,
             display_name=display_name,
             hwid_device_limit=hwid_device_limit,
@@ -445,7 +445,7 @@ class RemnaClient:
         if not isinstance(raw, dict):
             raw = {}
         return {
-            # API отдаёт использованный трафик вложенно: userTraffic.usedTrafficBytes
+            # API отдает использованный трафик вложенно: userTraffic.usedTrafficBytes
             # (топ-левел usedTrafficBytes нет — проверено на живой панели 2.8.0)
             "used_bytes": (raw.get("userTraffic") or {}).get("usedTrafficBytes"),
             "limit_bytes": raw.get("trafficLimitBytes"),
@@ -474,7 +474,7 @@ class RemnaClient:
         Args:
             telegram_id:    Telegram ID пользователя
             name:           Устаревший параметр display-имени (для обратной совместимости)
-            expire_at:      Дата истечения (если не указано - создаётся без активной подписки)
+            expire_at:      Дата истечения (если не указано - создается без активной подписки)
             tg_username:    Telegram @username (без @)
             tg_first_name:  Имя из Telegram
             tg_last_name:   Фамилия из Telegram
@@ -511,8 +511,8 @@ class RemnaClient:
 
             return existing
 
-        # 2. Не найден — создаём без подписки.
-        # expire_at не выставляем — пользователь создаётся без активной подписки.
+        # 2. Не найден — создаем без подписки.
+        # expire_at не выставляем — пользователь создается без активной подписки.
         # Подписка появится только после оплаты (provision_tariff).
         password = secrets.token_urlsafe(16)
 
@@ -551,7 +551,7 @@ class RemnaClient:
                         uuid = found.get('uuid') or found.get('id')
                         if uuid:
                             await self.update_user(uuid, telegramId=telegram_id)
-                            logger.info(f"Обновлён telegramId для пользователя {uuid}")
+                            logger.info(f"Обновлен telegramId для пользователя {uuid}")
                             return RemnaUser(
                                 uuid=str(uuid),
                                 telegram_id=telegram_id,
@@ -562,10 +562,10 @@ class RemnaClient:
                 except Exception as find_err:
                     logger.debug(f"Не удалось найти по username: {find_err}")
 
-                # Пользователь не найден в API — создаём с альтернативным username
+                # Пользователь не найден в API — создаем с альтернативным username
                 import time
                 alt_username = f"tg_{telegram_id}_{int(time.time())}"
-                logger.info(f"Создаём пользователя с альтернативным username: {alt_username}")
+                logger.info(f"Создаем пользователя с альтернативным username: {alt_username}")
 
                 try:
                     alt_response = await self.create_user(
@@ -595,10 +595,10 @@ class RemnaClient:
     async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """Публичный резолв пользователя Remnawave по username (или None).
 
-        Тонкая обёртка над _find_user_by_username. Используется для recovery
+        Тонкая обертка над _find_user_by_username. Используется для recovery
         обходного юзера (M1): username детерминирован (tg_<id>_obhod), и если
         DB-строка не записалась (сбой commit после create), uuid восстанавливаем
-        отсюда вместо повторного create (который упёрся бы в duplicate-username).
+        отсюда вместо повторного create (который уперся бы в duplicate-username).
         """
         return await self._find_user_by_username(username)
 
@@ -639,9 +639,9 @@ class RemnaClient:
     async def disable_user(self, user_id: str) -> Dict[str, Any]:
         """Деактивировать пользователя (status=DISABLED).
 
-        Надёжнее, чем expireAt в прошлом: Remnawave 2.8.0 отклоняет past expireAt
+        Надежнее, чем expireAt в прошлом: Remnawave 2.8.0 отклоняет past expireAt
         с 400 «Expiration date cannot be in the past». Disable отзывает доступ,
-        сохраняя юзера/счётчик трафика. Обратимо через enable_user.
+        сохраняя юзера/счетчик трафика. Обратимо через enable_user.
         """
         return await self.request("POST", f"/api/users/{user_id}/actions/disable")
 
@@ -878,7 +878,7 @@ class RemnaClient:
                                 sub_base,
                                 1,
                             )
-                            logger.info(f"Применён SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
+                            logger.info(f"Применен SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
                     except Exception as url_err:
                         logger.warning(f"Не удалось применить SUBSCRIPTION_BASE_URL override: {url_err}")
                 logger.info(f"Найден subscriptionUrl для пользователя {user_id}: {subscription_url[:50]}...")
@@ -893,7 +893,7 @@ class RemnaClient:
                     return subscription_url
                 else:
                     logger.warning(
-                        f"SUBSCRIPTION_BASE_URL не задан — не удаётся построить URL из token для пользователя {user_id}. "
+                        f"SUBSCRIPTION_BASE_URL не задан — не удается построить URL из token для пользователя {user_id}. "
                         "Задайте SUBSCRIPTION_BASE_URL в .env"
                     )
             

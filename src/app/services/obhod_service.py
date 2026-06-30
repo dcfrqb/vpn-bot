@@ -4,13 +4,13 @@
 Архитектура «две подписки»: у клиента максимум ДВА Remnawave-юзера —
   main  — основная подписка (тарифный сквад, без лимита), резолвится по telegramId;
   obhod — отдельный сквад OBHOD_SQUAD_NAME, помесячный кап трафика, БЕЗ telegramId,
-          адресуется ТОЛЬКО по сохранённому uuid (Subscription.remna_user_id строки
+          адресуется ТОЛЬКО по сохраненному uuid (Subscription.remna_user_id строки
           sub_kind='obhod').
 
-Обход выдаётся ТОЛЬКО в тарифе Pro и его срок = срок Pro. Пакеты «Обход +трафик»
-поднимают месячный кап на ТОМ ЖЕ obhod-юзере (третья сущность не создаётся).
+Обход выдается ТОЛЬКО в тарифе Pro и его срок = срок Pro. Пакеты «Обход +трафик»
+поднимают месячный кап на ТОМ ЖЕ obhod-юзере (третья сущность не создается).
 
-Этот модуль НЕ дёргается фоновым reconciler'ом главной подписки: obhod-строки
+Этот модуль НЕ дергается фоновым reconciler'ом главной подписки: obhod-строки
 исключены из main-резолва (sub_kind='main') и из resync-пути (см. reconciler).
 Жизненный цикл обхода привязан к main: обновление/истечение Pro синкает обход.
 """
@@ -44,7 +44,7 @@ def build_obhod_username(
 ) -> str:
     """Уникальный username обходного юзера: <main_username>_obhod.
 
-    main даёт tg_<...>; добавляем суффикс _obhod, чтобы не коллидировать с
+    main дает tg_<...>; добавляем суффикс _obhod, чтобы не коллидировать с
     основным юзером в Remnawave.
     """
     base = build_remna_username(
@@ -83,11 +83,11 @@ async def ensure_obhod_for_pro(
     valid_until: datetime,
     trace_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Создаёт/обновляет обходного юзера и его подписку для активного Pro.
+    """Создает/обновляет обходного юзера и его подписку для активного Pro.
 
     Вызывается в Phase C handle_successful_payment ПОСЛЕ синка основной подписки,
-    если plan_code даёт обход (Pro). Идемпотентна: при повторном вызове
-    переиспользует существующего obhod-юзера по сохранённому uuid.
+    если plan_code дает обход (Pro). Идемпотентна: при повторном вызове
+    переиспользует существующего obhod-юзера по сохраненному uuid.
 
     valid_until — срок Pro (UTC naive, как в основной подписке). Обходу ставится
     тот же expireAt. Кап трафика НЕ трогаем, если он уже поднят пакетом выше
@@ -126,7 +126,7 @@ async def ensure_obhod_for_pro(
 
         if obhod_uuid:
             # Уже есть obhod-юзер — продлеваем срок и подтверждаем сквад.
-            # Кап: если ранее пакетом подняли выше базового и пакет ещё активен —
+            # Кап: если ранее пакетом подняли выше базового и пакет еще активен —
             # оставляем поднятый; иначе ставим базовый.
             limit_bytes = base_limit
             pkg = (obhod_sub.config_data or {}).get("package") if obhod_sub else None
@@ -144,7 +144,7 @@ async def ensure_obhod_for_pro(
                             limit_bytes = pkg_limit
                 except Exception:
                     pass
-            # Снимаем DISABLED, только если он реально стоит — иначе панель вернёт
+            # Снимаем DISABLED, только если он реально стоит — иначе панель вернет
             # 400 «User already enabled» и в логах будет лишний ERROR на каждом продлении.
             try:
                 _info = await client.get_user_traffic_info(obhod_uuid)
@@ -164,7 +164,7 @@ async def ensure_obhod_for_pro(
                 f"expire={expire_str} limit_bytes={limit_bytes}"
             )
         else:
-            # Создаём нового obhod-юзера БЕЗ telegramId.
+            # Создаем нового obhod-юзера БЕЗ telegramId.
             username = build_obhod_username(
                 telegram_id=telegram_user_id,
                 username=tg.username,
@@ -174,9 +174,9 @@ async def ensure_obhod_for_pro(
 
             # M1 recovery: username детерминирован. Если предыдущая попытка создала
             # юзера в Remnawave, но DB-строка не записалась (сбой commit → rollback),
-            # повторный create упёрся бы в duplicate-username и обход не завёлся бы
+            # повторный create уперся бы в duplicate-username и обход не завелся бы
             # никогда. Поэтому СНАЧАЛА пробуем до-резолвить uuid по username; если
-            # юзер уже есть — переиспользуем его (продлеваем срок/кап), не создаём.
+            # юзер уже есть — переиспользуем его (продлеваем срок/кап), не создаем.
             obhod_uuid = None
             try:
                 existing_remote = await client.get_user_by_username(username)
@@ -204,8 +204,8 @@ async def ensure_obhod_for_pro(
                     f"username={username} uuid={obhod_uuid} expire={expire_str}"
                 )
             else:
-                # Lazy-import: generate_remna_password живёт в yookassa-сервисе
-                # (избегаем тяжёлого import на уровне модуля + цикла).
+                # Lazy-import: generate_remna_password живет в yookassa-сервисе
+                # (избегаем тяжелого import на уровне модуля + цикла).
                 from app.services.payments.yookassa import generate_remna_password
 
                 password = generate_remna_password(length=24)
@@ -252,7 +252,7 @@ async def ensure_obhod_for_pro(
 
         subscription_url = await client.get_user_subscription_url(obhod_uuid)
 
-        # Upsert RemnaUser-записи (FK не на subscription, но держим консистентно с main-путём).
+        # Upsert RemnaUser-записи (FK не на subscription, но держим консистентно с main-путем).
         ru_res = await session.execute(
             select(RemnaUser).where(RemnaUser.remna_id == str(obhod_uuid))
         )
@@ -313,7 +313,7 @@ async def deactivate_obhod(
     """Гасит обход (истечение/даунгрейд Pro): active=false и EXPIRED в Remnawave.
 
     Не удаляет obhod-юзера (чтобы при возобновлении Pro переиспользовать uuid и
-    счётчик трафика). Возвращает True если что-то поменяли.
+    счетчик трафика). Возвращает True если что-то поменяли.
     """
     obhod_sub = await get_obhod_subscription(session, telegram_user_id)
     # Защита: действуем строго на obhod-строке (sub_kind='obhod') и только если активна.
@@ -329,7 +329,7 @@ async def deactivate_obhod(
         try:
             # Disable-экшен Remnawave (status=DISABLED). НЕ ставим expireAt в прошлое:
             # панель 2.8.0 отклоняет past expireAt с 400. Disable отзывает доступ,
-            # сохраняя uuid/счётчик; возобновление Pro делает enable в ensure_obhod_for_pro.
+            # сохраняя uuid/счетчик; возобновление Pro делает enable в ensure_obhod_for_pro.
             await client.disable_user(obhod_sub.remna_user_id)
         except Exception as e:
             logger.warning(
@@ -380,17 +380,17 @@ async def apply_obhod_package(
     if not obhod_sub or not obhod_sub.active or not obhod_sub.remna_user_id:
         logger.warning(
             f"[{trace_id}] obhod package: нет активного обхода у tg_id={telegram_user_id} "
-            f"— пакет не применён (нужен активный Pro)"
+            f"— пакет не применен (нужен активный Pro)"
         )
         return False
 
-    # C1: идемпотентность по конкретному платежу. Если этот payment_id уже применён —
-    # ничего не делаем (не дёргаем Remnawave, не двигаем package_until).
+    # C1: идемпотентность по конкретному платежу. Если этот payment_id уже применен —
+    # ничего не делаем (не дергаем Remnawave, не двигаем package_until).
     if payment_id is not None:
         applied_id = (obhod_sub.config_data or {}).get("applied_payment_id")
         if applied_id is not None and str(applied_id) == str(payment_id):
             logger.info(
-                f"[{trace_id}] obhod package: payment_id={payment_id} уже применён "
+                f"[{trace_id}] obhod package: payment_id={payment_id} уже применен "
                 f"(идемпотентный повтор) — no-op tg_id={telegram_user_id}"
             )
             return True
@@ -400,7 +400,7 @@ async def apply_obhod_package(
     # M2: прежний кап (на случай отката при сбое commit). Если уже стоял активный
     # пакет — его лимит, иначе базовые 100 ГБ. Так split-state (кап поднят в
     # Remnawave, но БД не записала package_until) не оставит юзера с поднятым капом
-    # без срока — при сбое commit мы вернём кап к прежнему значению.
+    # без срока — при сбое commit мы вернем кап к прежнему значению.
     prev_limit = obhod_base_limit_bytes()
     prev_cfg = obhod_sub.config_data or {}
     prev_pkg = prev_cfg.get("package")
@@ -442,7 +442,7 @@ async def apply_obhod_package(
         # M2: БД не записала состояние пакета, а кап в Remnawave уже поднят.
         # Откатываем кап обратно к прежнему значению, чтобы не оставить
         # неоплаченно-расширенный кап без package_until (который при синке Pro
-        # всё равно сбросится к базовому, но до синка юзер бы пользовался лишним
+        # все равно сбросится к базовому, но до синка юзер бы пользовался лишним
         # трафиком). Безопаснее вернуть как было и дать платежу пере-провизиниться.
         logger.error(
             f"[{trace_id}] obhod package: commit упал, откатываем кап в Remnawave "
@@ -480,7 +480,7 @@ async def has_active_obhod(telegram_user_id: int) -> bool:
 
     H1: гейт на покупку пакета обхода. Пакет поднимает кап на существующем
     obhod-юзере и применим только при активном обходе; без него apply_obhod_package
-    вернёт False, а платёж уже succeeded — деньги «в никуда». Проверяем ДО создания
+    вернет False, а платеж уже succeeded — деньги «в никуда». Проверяем ДО создания
     платежа.
 
     Открывает свою сессию (вызывается из UI-хендлера, где сессии нет). При
@@ -500,7 +500,7 @@ async def get_obhod_link_info(telegram_user_id: int) -> Optional[dict]:
     """Для UI экрана connect: данные обхода у Pro-юзера.
 
     Возвращает dict {url, used_bytes, limit_bytes, expire_at, active} или None,
-    если обхода нет. Лимит/остаток читаем live из Remnawave по сохранённому uuid.
+    если обхода нет. Лимит/остаток читаем live из Remnawave по сохраненному uuid.
     """
     from app.db.session import SessionLocal
 

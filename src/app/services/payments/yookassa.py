@@ -123,7 +123,7 @@ async def create_payment(
         }
         
         # Детерминированный idempotence_key: user+план+сумма+10-мин. окно.
-        # Повторный вызов с теми же параметрами в течение 10 минут вернёт тот же платёж YooKassa.
+        # Повторный вызов с теми же параметрами в течение 10 минут вернет тот же платеж YooKassa.
         _time_bucket = int(datetime.utcnow().timestamp()) // 600
         idempotence_key = f"cp_{user_id}_{plan_code or 'x'}_{period_months or 0}_{amount_rub}_{_time_bucket}"
 
@@ -611,7 +611,7 @@ async def resync_subscription_to_remnawave(
         # Вычисляем expected expire: для не-lifetime — valid_until.
         expected_expire = subscription.valid_until if not subscription.is_lifetime else None
 
-        # period_months=None: get_or_create_remna_user_and_get_subscription_url пойдёт по
+        # period_months=None: get_or_create_remna_user_and_get_subscription_url пойдет по
         # fallback-ветке "обновить expireAt = subscription.valid_until".
         try:
             subscription_url = await get_or_create_remna_user_and_get_subscription_url(
@@ -685,7 +685,7 @@ async def handle_successful_payment(
           сбрасываем active/valid_until до подтверждения Remnawave.
       B — sync Remnawave (get_or_create_remna_user_and_get_subscription_url) и
           верификация через get_user_by_id. При провале — provisioning_state='failed',
-          raise ProvisioningPendingError (webhook вернёт 503, юзер не будет уведомлён).
+          raise ProvisioningPendingError (webhook вернет 503, юзер не будет уведомлен).
       C — финализация: provisioning_state='synced', payment.subscription_id, valid_until,
           уведомления юзеру/админу.
     """
@@ -702,10 +702,10 @@ async def handle_successful_payment(
 
         meta = payment.payment_metadata or {}
 
-        # Идемпотентность: блокируем платёж и проверяем, не была ли подписка уже
+        # Идемпотентность: блокируем платеж и проверяем, не была ли подписка уже
         # успешно засинкана. Гейт — provisioning_state='synced' (а не subscription_id),
         # это закрывает баг split-state когда subscription_id выставлен, но Remnawave
-        # не обновлён.
+        # не обновлен.
         pay_locked = await session.execute(
             select(PaymentModel).where(PaymentModel.id == payment_id).with_for_update()
         )
@@ -749,7 +749,7 @@ async def handle_successful_payment(
                     except (ValueError, TypeError):
                         period_months = None
 
-        # ===== Платёж за ПАКЕТ ОБХОДА (а не за тариф) =====
+        # ===== Платеж за ПАКЕТ ОБХОДА (а не за тариф) =====
         # plan_code здесь — код пакета (obhod_250/...). Это НЕ основная подписка:
         # поднимаем кап на существующем obhod-юзере и завершаем без provision'а main.
         from app.core.plans import is_obhod_package_code
@@ -760,10 +760,10 @@ async def handle_successful_payment(
             # Общий гейт already_synced тут не срабатывает (subscription_id
             # зануляется ниже), а redis-дедуп best-effort — поэтому при дубль-
             # доставке вебхука мы бы повторно подняли кап/период. Ранний выход,
-            # если этот платёж уже был успешно применён.
+            # если этот платеж уже был успешно применен.
             if isinstance(meta, dict) and meta.get("obhod_package_applied") is True:
                 logger.info(
-                    f"[{trace_id}] obhod package: платёж id={payment_id} уже применён "
+                    f"[{trace_id}] obhod package: платеж id={payment_id} уже применен "
                     f"(идемпотентный повтор вебхука) — skip tg_id={telegram_user_id}"
                 )
                 return
@@ -775,7 +775,7 @@ async def handle_successful_payment(
                 trace_id=trace_id,
                 payment_id=payment.id,
             )
-            # Привязываем платёж к obhod-подписке (для аудита) и закрываем.
+            # Привязываем платеж к obhod-подписке (для аудита) и закрываем.
             payment.subscription_id = None
             payment.status = "succeeded"
             if not payment.paid_at:
@@ -789,7 +789,7 @@ async def handle_successful_payment(
                     await bot.send_message(
                         chat_id=telegram_user_id,
                         text=(
-                            "✅ <b>Пакет обхода подключён</b>\n\n"
+                            "✅ <b>Пакет обхода подключен</b>\n\n"
                             "Лимит обхода поднят. Открыть ссылку обхода можно на "
                             "экране «Подключиться»."
                         ),
@@ -868,10 +868,10 @@ async def handle_successful_payment(
         # Ищем ЛЮБУЮ подписку юзера, не только active=True. Причина:
         # `uq_subscriptions_telegram_user_id` — UNIQUE на telegram_user_id (без partial),
         # т.е. одна подписка на юзера ВСЕГДА. Если предыдущая попытка остановилась в
-        # Phase B (active=False, provisioning_state='pending'/'failed'), мы должны её
-        # переиспользовать; новый INSERT упадёт IntegrityError.
+        # Phase B (active=False, provisioning_state='pending'/'failed'), мы должны ее
+        # переиспользовать; новый INSERT упадет IntegrityError.
         # ВАЖНО (две подписки): фильтруем по sub_kind='main'. Иначе при наличии
-        # obhod-строки scalar_one_or_none() упадёт "more than one row".
+        # obhod-строки scalar_one_or_none() упадет "more than one row".
         sub_result = await session.execute(
             select(Subscription).where(
                 Subscription.telegram_user_id == telegram_user_id,
@@ -883,8 +883,8 @@ async def handle_successful_payment(
         # ===================== PHASE A: persist intent =====================
         # Записываем намерение: подписку с provisioning_state='pending'.
         # Для extension-кейса (existing_sub.active=True) НЕ обнуляем active/valid_until
-        # на время Phase B — старая подписка остаётся валидной до подтверждения. Поле
-        # remnawave_expected_expire_at несёт новое целевое значение для верификации.
+        # на время Phase B — старая подписка остается валидной до подтверждения. Поле
+        # remnawave_expected_expire_at несет новое целевое значение для верификации.
         is_new_subscription = existing_sub is None
         if existing_sub:
             existing_sub.plan_code = plan_code
@@ -921,7 +921,7 @@ async def handle_successful_payment(
 
         # ===================== PHASE B: sync Remnawave =====================
         # На любой провал Remnawave: помечаем provisioning_state='failed' и raise.
-        # Уведомления НЕ отправляются. Webhook вернёт 503 и YooKassa повторит;
+        # Уведомления НЕ отправляются. Webhook вернет 503 и YooKassa повторит;
         # reconciler страхует, если повторов не будет.
         try:
             subscription_url = await get_or_create_remna_user_and_get_subscription_url(
@@ -987,7 +987,7 @@ async def handle_successful_payment(
             raise ProvisioningPendingError(f"Remnawave verification failed: {verify_err}")
 
         # ===================== PHASE C: finalize =====================
-        # Sync подтверждён. Активируем подписку, ставим payment.subscription_id, отмечаем
+        # Sync подтвержден. Активируем подписку, ставим payment.subscription_id, отмечаем
         # provisioning_state='synced'. ТОЛЬКО ПОСЛЕ ЭТОГО — уведомления.
         subscription.active = True
         subscription.valid_until = valid_until
@@ -1142,7 +1142,7 @@ async def handle_successful_payment(
                 except Exception as admin_err:
                     logger.warning(f"[{trace_id}] не удалось отправить уведомление админу {admin_id}: {admin_err}")
 
-        # notified=True — пользователь уведомлён; admin_notified — отдельный флаг для админов
+        # notified=True — пользователь уведомлен; admin_notified — отдельный флаг для админов
         meta = dict(meta) if isinstance(meta, dict) else {}
         meta["notified"] = True
         if _settings.ADMINS:
@@ -1158,7 +1158,7 @@ async def handle_successful_payment(
         
     except ProvisioningPendingError:
         # Уже залогировано и помечено в _mark_provisioning_failed.
-        # Пробрасываем дальше — webhook вернёт 503, юзер будет уведомлён только когда
+        # Пробрасываем дальше — webhook вернет 503, юзер будет уведомлен только когда
         # reconciler / повторный webhook доведут sync до конца.
         raise
     except Exception as e:
@@ -1187,7 +1187,7 @@ async def handle_successful_payment(
 async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
     """
     Проверяет статус платежа в YooKassa.
-    Returns: dict с status/amount/... или {"error": "not_found"} если платёж не найден в YooKassa,
+    Returns: dict с status/amount/... или {"error": "not_found"} если платеж не найден в YooKassa,
     или None при ошибке API/сети.
     """
     try:
@@ -1327,7 +1327,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         await client.close()
                         return subscription_url
                 
-                # remna_user_id не сохранён в БД — ищем по telegram_id в Remnawave
+                # remna_user_id не сохранен в БД — ищем по telegram_id в Remnawave
                 # (пользователь мог быть создан ранее без привязки UUID к telegram_users)
                 try:
                     found_remna = await client.get_user_by_telegram_id(telegram_user_id)

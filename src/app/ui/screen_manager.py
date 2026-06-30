@@ -278,7 +278,7 @@ class ScreenManager:
                             if message_key:
                                 last_text_hash, last_keyboard_hash = self._last_render_cache.get(message_key, (None, None))
                                 if last_keyboard_hash != keyboard_hash:
-                                    # Клавиатура изменилась - обновляем только её
+                                    # Клавиатура изменилась - обновляем только ее
                                     try:
                                         await message_or_callback.message.edit_reply_markup(reply_markup=keyboard)
                                         self._last_render_cache[message_key] = (text_hash, keyboard_hash)
@@ -626,11 +626,11 @@ class ScreenManager:
         user_id: Optional[int] = None
     ) -> bool:
         """
-        Центральный dispatcher для UI действий - жёсткий ACTION → EFFECT pipeline
+        Центральный dispatcher для UI действий - жесткий ACTION → EFFECT pipeline
         
         Правила:
         1. ВСЕГДА логирует action
-        2. ПРОВЕРЯЕТ action разрешён для screen_id (ACTION_MAP)
+        2. ПРОВЕРЯЕТ action разрешен для screen_id (ACTION_MAP)
         3. ДЕЛЕГИРУЕТ по типу эффекта:
            - NAVIGATION → navigate()
            - STATE → show_screen(edit=True)
@@ -662,10 +662,10 @@ class ScreenManager:
             f"action={action}, payload={payload}, user_id={user_id}, backstack_size={backstack_size}"
         )
         
-        # ШАГ 2: ПРОВЕРЯЕМ action разрешён для screen_id
+        # ШАГ 2: ПРОВЕРЯЕМ action разрешен для screen_id
         action_effect = get_action_effect(screen_id, action)
         if not action_effect:
-            # Action не определён в ACTION_MAP → ERROR screen + лог
+            # Action не определен в ACTION_MAP → ERROR screen + лог
             duration = (time.monotonic() - start_time) * 1000
             error_msg = f"Action '{action}' not allowed for screen '{screen_id.value}'"
             logger.error(f"[UI ACTION FAILED] {error_msg}")
@@ -943,7 +943,7 @@ class ScreenManager:
                     )
             return False
         
-        # Создаём ViewModel для целевого экрана
+        # Создаем ViewModel для целевого экрана
         viewmodel = await self._create_viewmodel_for_screen(
             nav_result.target_screen, message_or_callback, user_id, payload
         )
@@ -1182,7 +1182,7 @@ class ScreenManager:
                 )
                 return False
         
-        # Для refresh создаём ViewModel и показываем
+        # Для refresh создаем ViewModel и показываем
         viewmodel = await self._create_viewmodel_for_screen(
             screen_id, message_or_callback, user_id, payload
         )
@@ -1496,7 +1496,7 @@ class ScreenManager:
         payload: str = "-"
     ) -> Optional[BaseViewModel]:
         """
-        Создаёт ViewModel для экрана
+        Создает ViewModel для экрана
         Централизованная логика создания ViewModel
         
         ОПТИМИЗАЦИЯ: Логирует время создания ViewModel для выявления узких мест

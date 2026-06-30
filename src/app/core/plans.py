@@ -127,7 +127,7 @@ VALID_PLAN_CODES: frozenset[str] = frozenset(PLAN_CATALOG.keys())
 # =============================================================================
 # Обход блокировок (вторая подписка с лимитом трафика)
 # =============================================================================
-# Архитектура «две подписки»: при оплате тарифа Pro клиенту выдаётся ДВА
+# Архитектура «две подписки»: при оплате тарифа Pro клиенту выдается ДВА
 # Remnawave-юзера одной оплатой:
 #   main  — зарубежный выход, тарифный сквад (как сейчас), без лимита трафика;
 #   obhod — отдельный сквад OBHOD_SQUAD_NAME, базовый кап OBHOD_BASE_LIMIT_GB
@@ -160,7 +160,7 @@ def obhod_base_limit_bytes() -> int:
 
 
 def is_obhod_eligible_plan(plan_code: Optional[str]) -> bool:
-    """True если тариф даёт обход (сейчас только Pro)."""
+    """True если тариф дает обход (сейчас только Pro)."""
     if not plan_code:
         return False
     return str(plan_code).lower().strip() in OBHOD_ELIGIBLE_PLAN_CODES
@@ -173,7 +173,7 @@ def is_obhod_eligible_plan(plan_code: Optional[str]) -> bool:
 # Поля пакета:
 #   limit_gb       — итоговый месячный кап (НЕ добавка к базовому, а целевой кап)
 #                    пока пакет активен;
-#   period_months  — на сколько месяцев продаётся пакет;
+#   period_months  — на сколько месяцев продается пакет;
 #   price          — цена в RUB. TODO(заказчик): проставить финальные цены.
 #   display        — заголовок для UI.
 #

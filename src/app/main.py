@@ -4,7 +4,7 @@ import signal
 
 from app.utils.preflight import run_preflight_bot
 
-# Preflight: проверка обязательных env до импорта тяжёлых модулей
+# Preflight: проверка обязательных env до импорта тяжелых модулей
 run_preflight_bot()
 
 from aiogram import Bot, Dispatcher
@@ -269,7 +269,7 @@ async def run_webhook():
     webhook_requests_handler.register(app, path=webhook_path)
     setup_application(app, dp, bot=bot)
     
-    # YooKassa webhook отключён — платежи обрабатываются вручную администратором
+    # YooKassa webhook отключен — платежи обрабатываются вручную администратором
     
     logger.info("=" * 50)
     logger.info("БОТ РАБОТАЕТ В WEBHOOK РЕЖИМЕ!")
@@ -298,7 +298,7 @@ async def run_webhook():
         except Exception as _e:
             logger.warning(f"subscription_checker.stop() failed: {_e}")
         try:
-            # Drain: даём in-flight broadcast-ам/хендлерам шанс завершиться (до 10с).
+            # Drain: даем in-flight broadcast-ам/хендлерам шанс завершиться (до 10с).
             from app.services.broadcast import shutdown_broadcast_worker
             await asyncio.wait_for(shutdown_broadcast_worker(), timeout=10.0)
         except asyncio.TimeoutError:

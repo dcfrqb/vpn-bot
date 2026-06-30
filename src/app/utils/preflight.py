@@ -84,7 +84,7 @@ def run_preflight(
         warnings.append("BOT_SECRET_TOKEN не задан — Telegram webhook без проверки X-Telegram-Bot-Api-Secret-Token")
 
     if not _get("SUBSCRIPTION_BASE_URL"):
-        warnings.append("SUBSCRIPTION_BASE_URL не задан — subscription URL берётся из API без domain override (задайте https://sub.yourdomain.com)")
+        warnings.append("SUBSCRIPTION_BASE_URL не задан — subscription URL берется из API без domain override (задайте https://sub.yourdomain.com)")
 
     for w in warnings:
         logger.warning(f"Preflight: {w}")

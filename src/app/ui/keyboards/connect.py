@@ -37,7 +37,7 @@ def build_connect_success_keyboard_with_obhod(
             [types.InlineKeyboardButton(text="🛡 Открыть ссылку обхода", url=obhod_url)]
         )
     if is_pro and show_more_obhod:
-        # Ведём в категорию пакетов обхода внутри экрана подписки.
+        # Ведем в категорию пакетов обхода внутри экрана подписки.
         rows.append([types.InlineKeyboardButton(
             text="➕ Нужно больше обхода",
             callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "obhod"),

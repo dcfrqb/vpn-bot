@@ -189,7 +189,7 @@ async def check_expiry_notifications(bot: Bot) -> Dict[str, Any]:
             ttl = TTL_0D
             text = (
                 "❌ <b>Ваша подписка VPN истекает сегодня.</b>\n\n"
-                "Продлите её, чтобы сохранить доступ к VPN."
+                "Продлите ее, чтобы сохранить доступ к VPN."
             )
         elif days_until == WINDOW_SOON:
             notice_type = "3d"

@@ -296,7 +296,7 @@ async def cmd_start(m: types.Message):
         )
         return
     
-    # Deep link payment_success отключён — платежи обрабатываются вручную администратором
+    # Deep link payment_success отключен — платежи обрабатываются вручную администратором
         
     # ВСЕГДА показываем MAIN_MENU через Navigator с RenderMode.OPEN
     # (независимо от start_param - deep links обрабатываются отдельно в фоне)
@@ -837,7 +837,7 @@ async def _handle_promo_command(
     Проверки:
     - Активная подписка → отказ
     - Уже использовал промокод → отказ (по payments.external_id = 'promo_{promo_code}_{user_id}')
-    Выдаёт tariff через provision_tariff, записывает в payments, уведомляет админов.
+    Выдает tariff через provision_tariff, записывает в payments, уведомляет админов.
     """
     from app.services.jsonl_logger import log_payment_event
     from app.services.remna_service import provision_tariff
@@ -907,7 +907,7 @@ async def _handle_promo_command(
             )
             return True
 
-    # 3. Выдаём подписку сразу
+    # 3. Выдаем подписку сразу
     from app.services.payment_request import generate_req_id
     req_id = generate_req_id()
     success = await provision_tariff(user_id, tariff, req_id=req_id)
@@ -985,7 +985,7 @@ async def _handle_promo_command(
 
 @router.message(Command("solokhin"))
 async def cmd_solokhin(message: types.Message):
-    """Промокод Solokhin — автоматически выдаёт Premium 15 дней (только slash-команда)."""
+    """Промокод Solokhin — автоматически выдает Premium 15 дней (только slash-команда)."""
     if not getattr(settings, "PROMO_SOLOKHIN_ENABLED", True):
         return
     if await _handle_promo_command(
@@ -1150,5 +1150,5 @@ async def friend_request_yes(callback: types.CallbackQuery):
 async def friend_request_no(callback: types.CallbackQuery):
     """Обработчик кнопки 'Нет' для запроса на доступ"""
     await callback.answer()
-    await callback.message.edit_text("Запрос отменён", reply_markup=None)
+    await callback.message.edit_text("Запрос отменен", reply_markup=None)
 

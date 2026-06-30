@@ -25,7 +25,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Partial unique — только для active=true.
     # Если в БД уже есть несколько active подписок у одного юзера (артефакт гонки),
-    # миграция упадёт с IntegrityError — это ОК, требует ручной чистки перед upgrade.
+    # миграция упадет с IntegrityError — это ОК, требует ручной чистки перед upgrade.
     op.create_index(
         "uq_active_subscription_per_user",
         "subscriptions",

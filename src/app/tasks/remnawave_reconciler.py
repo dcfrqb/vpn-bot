@@ -5,18 +5,18 @@
 
 Два режима скана (внутри одного цикла):
 
-1. **Shallow** (каждый interval): берёт active подписки с
+1. **Shallow** (каждый interval): берет active подписки с
    `provisioning_state IN ('pending', 'failed')` и пытается дотянуть sync через
    `resync_subscription_to_remnawave`. С backoff'ом по `last_provisioning_attempt_at`,
    чтобы не толкать одно и то же чаще раза в N минут.
 
-2. **Deep** (раз в DEEP_SCAN_INTERVAL): берёт active+synced подписки, дёргает
+2. **Deep** (раз в DEEP_SCAN_INTERVAL): берет active+synced подписки, дергает
    Remnawave батчами и сравнивает actual `expireAt` с `valid_until`. При расхождении
    > tolerance — сбрасывает `provisioning_state='failed'`, и shallow-скан подхватит
    на следующей итерации.
 
 Не отправляет уведомления юзеру — только синкает Remnawave. При исчерпании
-`MAX_ATTEMPTS` шлёт алерт админам в Telegram (rate-limited 1/24h на subscription).
+`MAX_ATTEMPTS` шлет алерт админам в Telegram (rate-limited 1/24h на subscription).
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -94,7 +94,7 @@ class RemnawaveReconciler:
                 break
 
     async def run_once(self) -> Dict[str, Any]:
-        """Один цикл reconciler'а. Возвращает счётчики (для тестов и метрик)."""
+        """Один цикл reconciler'а. Возвращает счетчики (для тестов и метрик)."""
         result = {"shallow_found": 0, "shallow_synced": 0, "shallow_failed": 0,
                  "deep_scanned": 0, "deep_desynced": 0}
 
@@ -131,16 +131,16 @@ class RemnawaveReconciler:
         backoff_threshold = now - timedelta(seconds=RESYNC_BACKOFF_SECONDS)
 
         async with SessionLocal() as session:
-            # Не синкать подписки, у которых срок уже истёк: Remnawave всё равно
-            # вернёт EXPIRED — verify провалится, попадём в alert-цикл. Истёкшие
-            # подхватит deep_scan и переведёт в provisioning_state='expired'.
+            # Не синкать подписки, у которых срок уже истек: Remnawave все равно
+            # вернет EXPIRED — verify провалится, попадем в alert-цикл. Истекшие
+            # подхватит deep_scan и переведет в provisioning_state='expired'.
             stmt = (
                 select(Subscription)
                 .where(
                     Subscription.active == True,
                     # Только основные подписки. Обход (sub_kind='obhod') синкается
                     # синхронно через obhod_service.ensure_obhod_for_pro и НЕ должен
-                    # лечиться main-путём resync (он клобберит сквад/лимит/телеграм-id).
+                    # лечиться main-путем resync (он клобберит сквад/лимит/телеграм-id).
                     Subscription.sub_kind == "main",
                     Subscription.provisioning_state.in_(["pending", "failed"]),
                     or_(
@@ -196,7 +196,7 @@ class RemnawaveReconciler:
                 .where(
                     Subscription.active == True,
                     # Только основные подписки (см. _shallow_scan): обход не сверяем
-                    # этим путём, его expireAt/лимит ведёт obhod_service.
+                    # этим путем, его expireAt/лимит ведет obhod_service.
                     Subscription.sub_kind == "main",
                     Subscription.provisioning_state == "synced",
                     Subscription.remna_user_id.isnot(None),
@@ -245,9 +245,9 @@ class RemnawaveReconciler:
 
                 now_naive = datetime.utcnow()
 
-                # Честная истёкшая подписка: Remnawave EXPIRED + valid_until уже
+                # Честная истекшая подписка: Remnawave EXPIRED + valid_until уже
                 # в прошлом — юзер просто не продлил. Не desync, а нормальный
-                # конец жизни. Снимаем active, чтобы реконсилер забыл про неё.
+                # конец жизни. Снимаем active, чтобы реконсилер забыл про нее.
                 if status == "EXPIRED" and expected and expected <= now_naive:
                     out["deep_desynced"] += 1
                     logger.info(
@@ -293,10 +293,10 @@ class RemnawaveReconciler:
 
     async def _mark_naturally_expired(self, subscription_id: int) -> None:
         """Снимает active и переводит в provisioning_state='expired' для подписок,
-        у которых valid_until прошёл и Remnawave честно показывает EXPIRED.
+        у которых valid_until прошел и Remnawave честно показывает EXPIRED.
 
         После этого подписка выпадает из active-фильтров shallow/deep сканов,
-        алертов не будет. Renewal-flow создаёт новую подписку штатно.
+        алертов не будет. Renewal-flow создает новую подписку штатно.
         """
         if not SessionLocal:
             return
@@ -347,9 +347,9 @@ class RemnawaveReconciler:
             logger.error(f"reconciler_mark_failed: subscription_id={subscription_id} err={e}")
 
     async def _maybe_alert_exhausted(self, subscription_id: int) -> None:
-        """Шлёт алерт админам, если подписка не синкается > MAX_RESYNC_ATTEMPTS подряд.
+        """Шлет алерт админам, если подписка не синкается > MAX_RESYNC_ATTEMPTS подряд.
 
-        Состояние счётчика держим в Redis (rate-limit 1/24h per subscription).
+        Состояние счетчика держим в Redis (rate-limit 1/24h per subscription).
         """
         if not getattr(settings, "ADMINS", None):
             return

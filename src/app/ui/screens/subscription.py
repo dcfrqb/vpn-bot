@@ -107,7 +107,7 @@ class SubscriptionPlansScreen(BaseScreen):
 
             # callback уже отвечен в ui_callback_handler ДО хендлера, поэтому
             # callback.answer(текст) здесь Telegram уже не покажет. Для обратной
-            # связи (отказ/ошибка) редактируем сообщение, а не шлём второй answer.
+            # связи (отказ/ошибка) редактируем сообщение, а не шлем второй answer.
             async def _obhod_notice(text: str) -> bool:
                 if isinstance(message_or_callback, types.CallbackQuery):
                     try:
@@ -126,7 +126,7 @@ class SubscriptionPlansScreen(BaseScreen):
 
             # H1: пакет поднимает кап на обходном юзере и применим только при
             # активном обходе (то есть активном Pro). Проверяем ДО создания платежа,
-            # иначе оплата пройдёт, а кап не выдастся (apply_obhod_package вернёт
+            # иначе оплата пройдет, а кап не выдастся (apply_obhod_package вернет
             # False) и деньги уйдут «в никуда». Pro мог истечь между показом кнопки
             # и оплатой — поэтому проверка свежая, по БД.
             has_active = False
@@ -164,7 +164,7 @@ class SubscriptionPlansScreen(BaseScreen):
             except Exception as e:
                 logger.error(f"buy_obhod: create_payment failed package={package_code} err={e}")
                 return await _obhod_notice(
-                    "❌ Не удалось создать платёж. Попробуйте позже."
+                    "❌ Не удалось создать платеж. Попробуйте позже."
                 )
 
             if isinstance(message_or_callback, types.CallbackQuery):
@@ -180,7 +180,7 @@ class SubscriptionPlansScreen(BaseScreen):
             return True
 
         if action == "extend":
-            # Дёргаем live last_plan, чтобы на race-условия (юзер мог купить
+            # Дергаем live last_plan, чтобы на race-условия (юзер мог купить
             # что-то в другом окне) была свежая инфа.
             last_plan_code: Optional[str] = None
             if user_id is not None:

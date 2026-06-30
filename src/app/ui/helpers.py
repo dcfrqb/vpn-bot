@@ -156,9 +156,9 @@ async def get_connect_viewmodel(
             status = "success"
 
     # --- Обход (две подписки): обогащаем VM данными обхода для экрана connect ---
-    # is_pro определяем по факту наличия obhod-подписки в БД (obhod выдаётся
+    # is_pro определяем по факту наличия obhod-подписки в БД (obhod выдается
     # только в Pro) — это устойчивее, чем парсить plan_code из Remnawave, который
-    # может прийти пустым. obhod-инфа берётся live из Remnawave по uuid.
+    # может прийти пустым. obhod-инфа берется live из Remnawave по uuid.
     is_pro = False
     obhod_url = None
     obhod_used_bytes = None
@@ -175,8 +175,8 @@ async def get_connect_viewmodel(
                 obhod_used_bytes = obhod.get("used_bytes")
                 obhod_limit_bytes = obhod.get("limit_bytes")
             else:
-                # Fallback: если obhod-строки нет, всё равно попробуем понять Pro
-                # по plan_code основной подписки (на случай, если obhod ещё не
+                # Fallback: если obhod-строки нет, все равно попробуем понять Pro
+                # по plan_code основной подписки (на случай, если obhod еще не
                 # успел провизиониться).
                 from app.core.plans import is_obhod_eligible_plan
                 from app.services.users import get_user_active_subscription

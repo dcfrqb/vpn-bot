@@ -14,13 +14,13 @@ Create Date: 2026-06-30
       (мигр. 8bbcc038627b): запрещает любую вторую строку у юзера;
     * uq_active_subscription_per_user — partial unique index WHERE active=true
       (мигр. f1a2b3c4d5e6): запрещает вторую active-подписку.
-- Создаётся новый partial unique index по (telegram_user_id, sub_kind)
+- Создается новый partial unique index по (telegram_user_id, sub_kind)
   WHERE active=true: один main + один obhod на юзера одновременно, но не два
   одинакового вида.
 
 downgrade: восстанавливает старые ограничения и удаляет sub_kind. Перед
 downgrade'ом в БД не должно быть >1 active-строки на юзера (иначе восстановление
-uq_active_subscription_per_user упадёт IntegrityError — ожидаемо, требует чистки).
+uq_active_subscription_per_user упадет IntegrityError — ожидаемо, требует чистки).
 """
 
 from typing import Sequence, Union
@@ -87,7 +87,7 @@ def downgrade() -> None:
     )
 
     # Старая схема (uq_subscriptions_telegram_user_id) — НЕ partial UNIQUE на
-    # telegram_user_id, т.е. одна СТРОКА на юзера всего. obhod-строки её нарушат,
+    # telegram_user_id, т.е. одна СТРОКА на юзера всего. obhod-строки ее нарушат,
     # поэтому перед восстановлением удаляем все подписки обхода. Это деструктивно,
     # но downgrade этой миграции означает отказ от фичи «две подписки».
     op.execute("DELETE FROM subscriptions WHERE sub_kind = 'obhod'")

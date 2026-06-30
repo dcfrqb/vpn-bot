@@ -101,8 +101,8 @@ async def is_legacy_user(telegram_id: int) -> bool:
     basic/premium со старыми ценами; новые — lite/standard/pro по новой сетке.
 
     Fail-safe: при любой ошибке (Redis/БД недоступны) возвращает False —
-    т.е. fallback в new-cohort. Это даёт ARPU-приоритет: legacy в худшем
-    случае увидят новые цены и заплатят больше, но при этом всё равно
+    т.е. fallback в new-cohort. Это дает ARPU-приоритет: legacy в худшем
+    случае увидят новые цены и заплатят больше, но при этом все равно
     провизионятся в правильный squad по plan_code из payment.metadata.
     """
     # 1. Redis cache lookup
@@ -219,7 +219,7 @@ async def get_user_last_plan(telegram_id: int) -> Optional[str]:
             if sub_row and sub_row[0] in purchasable:
                 plan_code = sub_row[0]
 
-            # 2b. Если активной нет — последний succeeded непромо-платёж.
+            # 2b. Если активной нет — последний succeeded непромо-платеж.
             if plan_code is None:
                 pay_stmt = (
                     _select(Payment.payment_metadata)
@@ -242,7 +242,7 @@ async def get_user_last_plan(telegram_id: int) -> Optional[str]:
         logger.warning(f"get_user_last_plan db-error tg_id={telegram_id}: {e} → None")
         return None
 
-    # 3. Положить в кэш (даже None — sentinel, чтобы не дёргать БД повторно).
+    # 3. Положить в кэш (даже None — sentinel, чтобы не дергать БД повторно).
     try:
         from app.services.cache import get_redis_client
         client = get_redis_client()
@@ -260,7 +260,7 @@ async def get_user_last_plan(telegram_id: int) -> Optional[str]:
 
 
 async def invalidate_last_plan_cache(telegram_id: int) -> None:
-    """Сбросить кэш последнего плана. Зовётся после успешной оплаты/провижна."""
+    """Сбросить кэш последнего плана. Зовется после успешной оплаты/провижна."""
     try:
         from app.services.cache import get_redis_client
         client = get_redis_client()
@@ -289,7 +289,7 @@ async def get_or_create_telegram_user(
     language_code: Optional[str] = None,
 ):
     """
-    Заглушка: создаёт/проверяет пользователя в Remnawave.
+    Заглушка: создает/проверяет пользователя в Remnawave.
     Возвращает объект с telegram_id, username, first_name для совместимости.
     """
     name = first_name or username or f"User_{telegram_id}"

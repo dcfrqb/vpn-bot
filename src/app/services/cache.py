@@ -316,7 +316,7 @@ PROVISION_LOCK_TTL = 120  # секунд — дольше любой цепоч�
 
 async def acquire_provision_lock(external_id: str) -> bool:
     """
-    Пытается захватить распределённую блокировку для provisioning платежа.
+    Пытается захватить распределенную блокировку для provisioning платежа.
     Ключ: provision_lock:{external_id}, TTL=120s.
 
     Нужна потому что webhook-api и bot — разные процессы и могут одновременно

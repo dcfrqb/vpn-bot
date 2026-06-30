@@ -107,9 +107,9 @@ def get_back_to_plans_keyboard() -> types.InlineKeyboardMarkup:
 
 
 def get_new_payment_keyboard() -> types.InlineKeyboardMarkup:
-    """Клавиатура для NOT_FOUND: кнопка «Создать новый платёж» (buy_subscription)"""
+    """Клавиатура для NOT_FOUND: кнопка «Создать новый платеж» (buy_subscription)"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="💳 Создать новый платёж", callback_data="buy_subscription")],
+        [types.InlineKeyboardButton(text="💳 Создать новый платеж", callback_data="buy_subscription")],
         [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
     ])
 
