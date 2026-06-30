@@ -257,6 +257,16 @@ async def provision_tariff(
                 from app.core.plans import is_obhod_eligible_plan
                 async with SessionLocal() as obhod_session:
                     if is_obhod_eligible_plan(plan_code):
+                        # Гарантируем строку telegram_users (FK + lookup в
+                        # ensure_obhod_for_pro). Legacy-путь её сам не создаёт,
+                        # в отличие от DB-backed yookassa-пути.
+                        from sqlalchemy.dialects.postgresql import insert as _pg_insert
+                        from app.db.models import TelegramUser as _TgUser
+                        await obhod_session.execute(
+                            _pg_insert(_TgUser)
+                            .values(telegram_id=telegram_id)
+                            .on_conflict_do_nothing(index_elements=["telegram_id"])
+                        )
                         from app.services.obhod_service import ensure_obhod_for_pro
                         await ensure_obhod_for_pro(
                             session=obhod_session,
