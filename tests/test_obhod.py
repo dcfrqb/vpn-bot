@@ -240,9 +240,7 @@ async def test_ensure_obhod_recovers_orphan_by_username():
     session, state = _fake_session(existing_obhod=None, tg=tg)
     mock_client = _patch_remna_for_obhod()
     # Предрезолв находит существующего obhod-юзера.
-    mock_client.get_user_by_username = AsyncMock(
-        return_value={"uuid": "orphan-uuid-1"}
-    )
+    mock_client.get_user_by_username = AsyncMock(return_value={"uuid": "orphan-uuid-1"})
     valid_until = datetime.utcnow() + timedelta(days=30)
 
     with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
@@ -604,7 +602,9 @@ async def test_get_obhod_link_info_soft_degrades_to_saved_url():
     # Remnawave недоступен — get_user_traffic_info падает.
     mock_client = AsyncMock()
     mock_client.get_user_traffic_info = AsyncMock(side_effect=Exception("remna down"))
-    mock_client.get_user_subscription_url = AsyncMock(side_effect=Exception("remna down"))
+    mock_client.get_user_subscription_url = AsyncMock(
+        side_effect=Exception("remna down")
+    )
     mock_client.close = AsyncMock()
 
     with patch(
