@@ -72,6 +72,7 @@ TARIFF_TO_DAYS = {
     "solokhin_15d": ("premium", 15),
     "trial_10d": ("basic", 10),
     "trial_standard_10d": ("standard", 10),
+    "sun718_5d": ("pro", 5),
 }
 
 

@@ -178,6 +178,31 @@ class Payment(Base):
     subscription: Mapped[Optional["Subscription"]] = relationship("Subscription", foreign_keys=[subscription_id])
 
 
+class ReferralPayout(Base):
+    """Журнал ручных выплат реферальных бонусов (напр. /referral_payout sun718).
+
+    Это ЛЕДЖЕР учёта, а не платёж: реальное продление получателю делается руками
+    в панели Remnawave, а запись здесь лишь фиксирует факт выплаты для вычитания
+    из «доступно» в /referral_stats. Намеренно вынесено из таблицы payments, чтобы
+    ни один платёжный воркер (recovery/reconciler/webhook) не мог принять её за
+    настоящую покупку и перепровизионить (это была первопричина бага с 0₽ → basic).
+    """
+    __tablename__ = "referral_payouts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admin_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("telegram_users.telegram_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Админ, выдавший выплату (FK мягкий: журнал переживает удаление учётки)",
+    )
+    promo_code: Mapped[str] = mapped_column(String(32), nullable=False, default="sun718", server_default="sun718", index=True)
+    payout_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now(), index=True)
+
+
 class Squad(Base):
     """Сквады из Remna API (если нужны)"""
     __tablename__ = "squads"

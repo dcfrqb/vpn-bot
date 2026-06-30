@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     payreq_hmac_secret: Union[str, None] = None
     LOG_DIR: str = "./logs"
 
+    # Промокод /sun718 (реферальный, Pro 5 дней).
+    # OWNER_TG_ID — владелец рефералки, его собственные оплаты не считаются в /referral_stats.
+    PROMO_SUN718_ENABLED: bool = True
+    PROMO_SUN718_OWNER_TG_ID: Union[int, None] = None
+
     # Путь к .env файлу
     _base_path = Path("/opt/crs-vpn-bot/.env")
     _local_path = Path(__file__).resolve().parents[2] / ".env"
