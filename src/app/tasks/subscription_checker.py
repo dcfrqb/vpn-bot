@@ -84,7 +84,7 @@ class SubscriptionChecker:
         # Stage D: Remnawave reconciler shallow scan
         # Дополняет recovery.retry_needs_provisioning: тот ходит по платежам,
         # этот — по подпискам, через provisioning_state. Покрывает кейсы, когда
-        # платёж был провижионен идемпотентно, а Remnawave ушёл в desync.
+        # платеж был провижионен идемпотентно, а Remnawave ушел в desync.
         try:
             from app.tasks.remnawave_reconciler import RemnawaveReconciler
             if not hasattr(self, "_reconciler_singleton"):

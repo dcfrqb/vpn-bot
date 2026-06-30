@@ -25,7 +25,7 @@ _YOOKASSA_NETWORKS = [
 
 
 def _get_client_ip(request: Request) -> str | None:
-    """Возвращает IP клиента с учётом nginx-прокси."""
+    """Возвращает IP клиента с учетом nginx-прокси."""
     for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
         raw = request.headers.get(header)
         if raw:
@@ -34,7 +34,7 @@ def _get_client_ip(request: Request) -> str | None:
 
 
 def _is_yookassa_ip(ip_str: str | None) -> bool:
-    """Проверяет, входит ли IP в разрешённые диапазоны YooKassa."""
+    """Проверяет, входит ли IP в разрешенные диапазоны YooKassa."""
     if not ip_str:
         return False
     try:
@@ -145,7 +145,7 @@ async def health_check():
                     )
                     status_parts["pending_subscriptions"] = str(int(pending_row.scalar() or 0))
                 except Exception:
-                    # Колонка может ещё не существовать (миграция не накатана).
+                    # Колонка может еще не существовать (миграция не накатана).
                     pass
             status_parts["db"] = "ok"
         else:
@@ -217,7 +217,7 @@ async def yookassa_webhook(request: Request):
     # --- SECURITY: IP whitelist ---
     client_ip = _get_client_ip(request)
     if not _is_yookassa_ip(client_ip):
-        logger.warning(f"Webhook YooKassa отклонён: неизвестный IP {client_ip!r}")
+        logger.warning(f"Webhook YooKassa отклонен: неизвестный IP {client_ip!r}")
         raise HTTPException(status_code=403, detail="Forbidden")
 
     # --- SECURITY: rate-limit (вторая линия защиты за IP whitelist) ---

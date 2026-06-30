@@ -10,8 +10,11 @@ from aiogram import types
 
 from app.core.plans import (
     MENU_PLAN_CODES,
+    OBHOD_PACKAGE_CODES,
+    get_obhod_package,
     get_plan_name,
     get_plan_price,
+    is_obhod_package_purchasable,
 )
 from app.ui.callbacks import build_cb
 from app.ui.screens import ScreenID
@@ -55,6 +58,17 @@ async def build_subscription_plans_keyboard(
             types.InlineKeyboardButton(
                 text=_plan_button_text(code),
                 callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "select", code),
+            )
+        ])
+
+    # Вход в категорию пакетов «Обход +трафик» — только если есть покупаемый пакет
+    # (цена>0). При плейсхолдер-ценах (0) категория скрыта.
+    from app.core.plans import OBHOD_PACKAGE_CODES
+    if any(is_obhod_package_purchasable(c) for c in OBHOD_PACKAGE_CODES):
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text="🛡 Обход +трафик",
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "obhod"),
             )
         ])
 
@@ -141,6 +155,34 @@ async def build_subscription_payment_keyboard(
         callback_data=build_cb(viewmodel.screen_id, "back"),
     )])
 
+    return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_obhod_packages_keyboard() -> types.InlineKeyboardMarkup:
+    """Клавиатура категории пакетов обхода.
+
+    Кнопка покупки рисуется только для пакетов с реальной ценой
+    (placeholder=0 → кнопки нет). Всегда есть «Назад» к тарифам.
+    """
+    keyboard: list[list[types.InlineKeyboardButton]] = []
+    for code in OBHOD_PACKAGE_CODES:
+        if not is_obhod_package_purchasable(code):
+            continue
+        meta = get_obhod_package(code)
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text=f"{meta['display']} - {int(meta['price'])}₽",
+                callback_data=build_cb(
+                    ScreenID.SUBSCRIPTION_PLANS, "buy_obhod", code
+                ),
+            )
+        ])
+    keyboard.append([
+        types.InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "back"),
+        )
+    ])
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 

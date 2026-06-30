@@ -41,7 +41,7 @@ async def admin_panel(message: types.Message):
         )
         return
 
-    # Не админ — промокод /admin (запрос на выдачу) — только если включён
+    # Не админ — промокод /admin (запрос на выдачу) — только если включен
     if not getattr(settings, "PROMO_ADMIN_ENABLED", True):
         await message.answer("❌ У вас нет прав администратора")
         return
@@ -486,7 +486,7 @@ def _parse_friend_user_id(callback_data: str, prefix: str) -> int | None:
         return None
 
 
-# Админ-grant выдаёт топ-тариф (pro) — после ввода новой сетки lite/standard/pro
+# Админ-grant выдает топ-тариф (pro) — после ввода новой сетки lite/standard/pro
 # подарок «другу» = premium-уровень новой инфраструктуры. Squad="pro" в Remnawave.
 _FRIEND_GRANT_MAP = {
     "1m": ("pro_1", "1 месяц"),
@@ -496,7 +496,7 @@ _FRIEND_GRANT_MAP = {
 
 
 async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
-    """Выдаёт топ-тариф (Pro) через NoDB. key: 1m, 3m, forever."""
+    """Выдает топ-тариф (Pro) через NoDB. key: 1m, 3m, forever."""
     if not callback.data or key not in _FRIEND_GRANT_MAP:
         return False
     tariff_code, period_label = _FRIEND_GRANT_MAP[key]
@@ -568,7 +568,7 @@ async def _handle_friend_reject(callback: types.CallbackQuery) -> bool:
     try:
         await callback.bot.send_message(
             chat_id=user_id,
-            text="❌ Ваш запрос на доступ отклонён. Свяжитесь с администратором при необходимости.",
+            text="❌ Ваш запрос на доступ отклонен. Свяжитесь с администратором при необходимости.",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="✍️ Написать", url=f"https://t.me/{admin_username.replace('@', '')}")],
             ]),
@@ -577,9 +577,9 @@ async def _handle_friend_reject(callback: types.CallbackQuery) -> bool:
     except Exception as e:
         logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
 
-    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонён."
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонен."
     await callback.message.edit_text(new_text, reply_markup=None)
-    await callback.answer("✅ Запрос отклонён")
+    await callback.answer("✅ Запрос отклонен")
     return True
 
 
@@ -627,7 +627,7 @@ def _parse_admin_promo_user_id(callback_data: str, prefix: str) -> int | None:
 
 
 async def _handle_admin_promo_grant(callback: types.CallbackQuery, key: str) -> bool:
-    """Выдаёт Premium через промокод /admin. key: 1m, 3m, forever."""
+    """Выдает Premium через промокод /admin. key: 1m, 3m, forever."""
     if key not in _FRIEND_GRANT_MAP:
         return False
     tariff_code, period_label = _FRIEND_GRANT_MAP[key]
@@ -699,7 +699,7 @@ async def _handle_admin_promo_reject(callback: types.CallbackQuery) -> bool:
     try:
         await callback.bot.send_message(
             chat_id=user_id,
-            text="❌ Ваш запрос на доступ отклонён. Свяжитесь с администратором при необходимости.",
+            text="❌ Ваш запрос на доступ отклонен. Свяжитесь с администратором при необходимости.",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="✍️ Написать", url=f"https://t.me/{admin_username.replace('@', '')}")],
             ]),
@@ -708,9 +708,9 @@ async def _handle_admin_promo_reject(callback: types.CallbackQuery) -> bool:
     except Exception as e:
         logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
 
-    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонён."
+    new_text = text.split("\n\n")[0] + f"\n\n{_FRIEND_PROCESSED_MARKER}\n❌ Запрос отклонен."
     await callback.message.edit_text(new_text, reply_markup=None)
-    await callback.answer("✅ Запрос отклонён")
+    await callback.answer("✅ Запрос отклонен")
     return True
 
 

@@ -14,19 +14,19 @@ from app.logger import logger
 from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISION_SUCCESS, EVENT_REMNAWAVE_PROVISION_FAILED
 
 
-# Жёсткий timeout на отдельный Remnawave-вызов в provision-пути.
+# Жесткий timeout на отдельный Remnawave-вызов в provision-пути.
 # Внутренние retry клиента могут съесть до 90с; webhook-хендлер не должен так висеть.
 # При превышении — asyncio.TimeoutError, caller помечает payment.needs_provisioning=True,
-# recovery task дожмёт асинхронно.
+# recovery task дожмет асинхронно.
 REMNAWAVE_CALL_TIMEOUT = 20.0
 
 
 # Маппинг тарифов на plan_code и период (в месяцах).
 #
-# LEGACY (basic/premium) сохраняем как было — продление старых юзеров идёт
+# LEGACY (basic/premium) сохраняем как было — продление старых юзеров идет
 # через эти же ключи с теми же squad-именами в Remnawave.
 #
-# NEW (lite/standard/pro) — новая когорта; squads тех же имён должны
+# NEW (lite/standard/pro) — новая когорта; squads тех же имен должны
 # существовать в Remnawave (см. PLAN_CATALOG).
 TARIFF_TO_PLAN = {
     # Legacy uppercase aliases (исторические)
@@ -67,7 +67,7 @@ TARIFF_TO_PLAN = {
 # Тарифы с точным числом дней (не календарные месяцы).
 # trial_10d (legacy) → squad=basic, для legacy-юзеров.
 # trial_standard_10d (new) → squad=standard, для новых юзеров.
-# solokhin_15d остаётся на premium (редкий админский промо).
+# solokhin_15d остается на premium (редкий админский промо).
 TARIFF_TO_DAYS = {
     "solokhin_15d": ("premium", 15),
     "trial_10d": ("basic", 10),
@@ -84,7 +84,7 @@ async def ensure_user_in_remnawave(
     tg_last_name: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Получает или создаёт пользователя в Remnawave.
+    Получает или создает пользователя в Remnawave.
     Возвращает remna_user_id (uuid) или None при ошибке/таймауте.
 
     Логика:
@@ -122,7 +122,7 @@ async def provision_tariff(
     req_id: Optional[str] = None,
 ) -> bool:
     """
-    Выдаёт доступ пользователю в Remnawave по тарифу.
+    Выдает доступ пользователю в Remnawave по тарифу.
     tariff: PRO_1M, BASIC_1M, basic_1, premium_3, premium_forever и т.д.
     Календарные месяцы, продление от текущего expireAt если активна подписка.
     Возвращает True при успехе.
@@ -168,7 +168,7 @@ async def provision_tariff(
         else:
             now = datetime.now(timezone.utc)
             base = now
-            # Продление от текущего expireAt если ещё активна
+            # Продление от текущего expireAt если еще активна
             try:
                 user_data = await asyncio.wait_for(
                     client.get_user_by_id(remna_user_id),
@@ -241,6 +241,50 @@ async def provision_tariff(
             f"subscription_provisioning_success: tg_id={telegram_id} remna_user_id={remna_user_id} "
             f"tariff={tariff} expire_at={valid_until_str}"
         )
+
+        # ===== ОБХОД (две подписки): провижн obhod-юзера для Pro =====
+        # provision_tariff — legacy-путь (промокоды /sun718, админ/«друг»-выдачи).
+        # Обход интегрирован здесь так же, как в DB-backed handle_successful_payment,
+        # чтобы ЛЮБАЯ выдача Pro давала обход (модель «у каждого Pro есть обход»).
+        # Мягкий fail: ошибка обхода не должна ронять основную выдачу.
+        try:
+            # valid_until как naive-UTC datetime (как ждет ensure_obhod_for_pro)
+            try:
+                obhod_valid_until = datetime.strptime(valid_until_str, "%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                obhod_valid_until = datetime.utcnow() + timedelta(days=3650)  # lifetime fallback
+            from app.db.session import SessionLocal
+            if SessionLocal:
+                from app.core.plans import is_obhod_eligible_plan
+                async with SessionLocal() as obhod_session:
+                    if is_obhod_eligible_plan(plan_code):
+                        # Гарантируем строку telegram_users (FK + lookup в
+                        # ensure_obhod_for_pro). Legacy-путь ее сам не создает,
+                        # в отличие от DB-backed yookassa-пути.
+                        from sqlalchemy.dialects.postgresql import insert as _pg_insert
+                        from app.db.models import TelegramUser as _TgUser
+                        await obhod_session.execute(
+                            _pg_insert(_TgUser)
+                            .values(telegram_id=telegram_id)
+                            .on_conflict_do_nothing(index_elements=["telegram_id"])
+                        )
+                        from app.services.obhod_service import ensure_obhod_for_pro
+                        await ensure_obhod_for_pro(
+                            session=obhod_session,
+                            telegram_user_id=telegram_id,
+                            plan_code=plan_code,
+                            valid_until=obhod_valid_until,
+                            trace_id=req_id,
+                        )
+                    else:
+                        # Не-Pro: если был обход (даунгрейд) — гасим.
+                        from app.services.obhod_service import deactivate_obhod
+                        await deactivate_obhod(obhod_session, telegram_id, trace_id=req_id)
+                    await obhod_session.commit()
+        except Exception as _obhod_e:
+            logger.warning(
+                f"obhod provision soft-fail (provision_tariff): tg_id={telegram_id} err={_obhod_e}"
+            )
 
         # Инвалидируем кэш, чтобы статус обновился сразу
         try:

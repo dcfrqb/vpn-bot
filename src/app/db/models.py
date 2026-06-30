@@ -100,6 +100,14 @@ class Subscription(Base):
     )
     plan_code: Mapped[str] = mapped_column(String(32), nullable=False, index=True, comment="Код тарифа: basic, premium, pro")
     plan_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="Название тарифа")
+    sub_kind: Mapped[str] = mapped_column(
+        String(16),
+        default="main",
+        server_default="main",
+        nullable=False,
+        index=True,
+        comment="Дискриминатор подписки: main (основная) | obhod (обход с лимитом трафика)",
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     is_lifetime: Mapped[bool] = mapped_column(Boolean, default=False, index=True, comment="Подписка навсегда (admin grant forever)")

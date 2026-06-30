@@ -102,7 +102,7 @@ async def cb_close(callback: types.CallbackQuery) -> None:
     try:
         await callback.message.delete()
     except Exception as e:
-        # Telegram не даёт удалять сообщения старше 48ч от бота —
+        # Telegram не дает удалять сообщения старше 48ч от бота —
         # тогда хотя бы убираем клавиатуру.
         logger.debug(f"bc:close delete failed: {e}")
         try:
@@ -240,12 +240,12 @@ async def _ask_segment(message: types.Message, state: FSMContext) -> None:
     await state.set_state(BroadcastDraft.WAIT_SEGMENT)
     await message.answer(
         "👥 <b>Шаг 4/5 — сегмент</b>\n\n"
-        "Кому шлём?\n"
+        "Кому шлем?\n"
         "• <code>all</code> — все активные юзеры не в opt-out\n"
         "• <code>active</code> — с активной подпиской\n"
         "• <code>expired</code> — были, но истекли\n"
         "• <code>never</code> — никогда не платили\n\n"
-        "Пришлите одно из четырёх значений.",
+        "Пришлите одно из четырех значений.",
         parse_mode="HTML",
     )
 
@@ -287,7 +287,7 @@ async def bc_step_notify(message: types.Message, state: FSMContext) -> None:
         return
     await state.update_data(disable_notification=disable_notification)
 
-    # Создаём черновик в БД.
+    # Создаем черновик в БД.
     data = await state.get_data()
     if not SessionLocal:
         await message.answer("❌ БД не настроена")

@@ -174,9 +174,9 @@ async def handle_check_payment(callback: types.CallbackQuery):
     external_id = parts[1] if len(parts) > 1 and parts[1] else None
 
     if not external_id:
-        await callback.answer("⚠️ Ссылка устарела. Создайте новый платёж.", show_alert=True)
+        await callback.answer("⚠️ Ссылка устарела. Создайте новый платеж.", show_alert=True)
         await callback.message.edit_text(
-            "ℹ️ Ссылка на платёж устарела.\n\nСоздайте новый платёж через «Подписка» → «Выбрать тариф».",
+            "ℹ️ Ссылка на платеж устарела.\n\nСоздайте новый платеж через «Подписка» → «Выбрать тариф».",
             reply_markup=get_back_to_plans_keyboard()
         )
         return
@@ -211,8 +211,8 @@ async def handle_check_payment(callback: types.CallbackQuery):
         if not payment:
             logger.warning(f"[{trace_id}] check_payment: payment not found external_id={external_id} tg_user_id={user_id}")
             await callback.message.edit_text(
-                "ℹ️ Платёж не найден.\n\n"
-                "Возможно, ссылка устарела — создайте новый платёж.",
+                "ℹ️ Платеж не найден.\n\n"
+                "Возможно, ссылка устарела — создайте новый платеж.",
                 reply_markup=get_new_payment_keyboard()
             )
             return
@@ -232,8 +232,8 @@ async def handle_check_payment(callback: types.CallbackQuery):
         if recheck_result.get("error") == "not_found":
             logger.info(f"[{trace_id}] check_payment NOT_FOUND: tg_user_id={user_id} external_id={external_id}")
             await callback.message.edit_text(
-                "ℹ️ <b>Платёж не найден</b>.\n\n"
-                "Возможно, ссылка устарела — создайте новый платёж.",
+                "ℹ️ <b>Платеж не найден</b>.\n\n"
+                "Возможно, ссылка устарела — создайте новый платеж.",
                 reply_markup=get_new_payment_keyboard(),
                 parse_mode="HTML"
             )
@@ -241,7 +241,7 @@ async def handle_check_payment(callback: types.CallbackQuery):
 
         if recheck_result.get("error") == "api_error":
             await callback.message.edit_text(
-                "⚠️ Не удалось проверить статус в платёжной системе.\n\n"
+                "⚠️ Не удалось проверить статус в платежной системе.\n\n"
                 "Попробуйте позже или обратитесь в поддержку.",
                 reply_markup=get_back_to_plans_keyboard()
             )
@@ -274,7 +274,7 @@ async def handle_check_payment(callback: types.CallbackQuery):
                     if payment_url:
                         break
             await callback.message.edit_text(
-                "⏳ Платёж ещё не получен.\n\n"
+                "⏳ Платеж еще не получен.\n\n"
                 "Если вы уже оплатили — подождите 1–2 минуты и нажмите «Проверить оплату» снова.",
                 reply_markup=get_payment_keyboard(payment_url, external_id) if payment_url else get_back_to_plans_keyboard()
             )
@@ -327,7 +327,7 @@ async def get_subscription_link(callback: types.CallbackQuery):
                 logger.warning(f"⚠️ Сохраненная ссылка пустая для пользователя {callback.from_user.id}")
                 subscription_url = None
         
-        # Если ссылки нет, пытаемся получить её из Remna API
+        # Если ссылки нет, пытаемся получить ее из Remna API
         if not subscription_url:
             remna_user_id = subscription.remna_user_id
             if not remna_user_id:

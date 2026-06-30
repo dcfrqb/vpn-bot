@@ -24,6 +24,10 @@ _USER_UPDATE_WHITELIST = {
     "activeInternalSquads": "activeInternalSquads",
     "hwid_device_limit": "hwidDeviceLimit",
     "hwidDeviceLimit": "hwidDeviceLimit",
+    "traffic_limit_bytes": "trafficLimitBytes",
+    "trafficLimitBytes": "trafficLimitBytes",
+    "traffic_limit_strategy": "trafficLimitStrategy",
+    "trafficLimitStrategy": "trafficLimitStrategy",
 }
 
 
@@ -89,6 +93,8 @@ def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             result["telegramId"] = int(val)
         elif api_key == "activeInternalSquads":
             result["activeInternalSquads"] = val if isinstance(val, list) else [val]
+        elif api_key == "trafficLimitBytes":
+            result["trafficLimitBytes"] = int(val)
         else:
             result[api_key] = val
     return result
@@ -277,7 +283,7 @@ class RemnaClient:
 
         # Если имя состоит только из спецсимволов/эмодзи — fallback
         import re
-        # Убираем всё кроме букв, цифр, пробелов и базовых знаков препинания
+        # Убираем все кроме букв, цифр, пробелов и базовых знаков препинания
         text_only = re.sub(r'[^\w\s\-\.]', '', clean_name, flags=re.UNICODE)
         if not text_only.strip():
             return f"User {telegram_id}"
@@ -360,6 +366,8 @@ class RemnaClient:
         active_internal_squads: Optional[list] = None,
         display_name: Optional[str] = None,
         hwid_device_limit: Optional[int] = None,
+        traffic_limit_bytes: Optional[int] = None,
+        traffic_limit_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
         # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
@@ -378,7 +386,73 @@ class RemnaClient:
             payload["name"] = display_name  # Человекочитаемое имя для админки
         if hwid_device_limit is not None:
             payload["hwidDeviceLimit"] = hwid_device_limit
+        if traffic_limit_bytes is not None:
+            payload["trafficLimitBytes"] = int(traffic_limit_bytes)
+        if traffic_limit_strategy is not None:
+            payload["trafficLimitStrategy"] = traffic_limit_strategy
         return await self.request("POST", "/api/users", json=payload)
+
+    async def create_obhod_user(
+        self,
+        username: str,
+        password: str,
+        expire_at: Optional[Union[str, datetime, date]],
+        active_internal_squads: list,
+        traffic_limit_bytes: int,
+        traffic_limit_strategy: str,
+        display_name: Optional[str] = None,
+        hwid_device_limit: Optional[int] = None,
+    ) -> str:
+        """Создать обходного пользователя БЕЗ telegramId и вернуть его uuid.
+
+        КРИТИЧНО: obhod-юзер создается БЕЗ telegramId — иначе лукап
+        get_user_by_telegram_id/{id} станет неоднозначным и сломает основную
+        подписку. К obhod-юзеру обращаемся ТОЛЬКО по сохраненному uuid.
+
+        username должен быть уникальным (обычно tg_<id>_obhod, см.
+        build_remna_username + суффикс).
+        """
+        response = await self.create_user(
+            username=username,
+            password=password,
+            expire_at=expire_at,
+            telegram_id=None,  # НИКОГДА не задаем telegramId обходному юзеру
+            active_internal_squads=active_internal_squads,
+            display_name=display_name,
+            hwid_device_limit=hwid_device_limit,
+            traffic_limit_bytes=traffic_limit_bytes,
+            traffic_limit_strategy=traffic_limit_strategy,
+        )
+        user_data = response.get("response", response) if isinstance(response, dict) else response
+        uuid = user_data.get("uuid") or user_data.get("id") if isinstance(user_data, dict) else None
+        if not uuid:
+            raise ValueError(f"create_obhod_user: не удалось получить uuid из ответа: {response}")
+        logger.info(f"Создан obhod-юзер Remna: uuid={uuid}, username={username}")
+        return str(uuid)
+
+    async def get_user_traffic_info(self, user_id: str) -> Dict[str, Any]:
+        """Вернуть инфо о трафике/лимите обходного (или любого) юзера по uuid.
+
+        Returns dict с ключами (любой может быть None):
+          used_bytes  — usedTrafficBytes
+          limit_bytes — trafficLimitBytes (0 = безлимит)
+          strategy    — trafficLimitStrategy
+          expire_at   — expireAt (str как из API)
+          status      — status (ACTIVE/LIMITED/EXPIRED/...)
+        """
+        data = await self.get_user_by_id(user_id)
+        raw = data.get("response", data) if isinstance(data, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            # API отдает использованный трафик вложенно: userTraffic.usedTrafficBytes
+            # (топ-левел usedTrafficBytes нет — проверено на живой панели 2.8.0)
+            "used_bytes": (raw.get("userTraffic") or {}).get("usedTrafficBytes"),
+            "limit_bytes": raw.get("trafficLimitBytes"),
+            "strategy": raw.get("trafficLimitStrategy"),
+            "expire_at": raw.get("expireAt"),
+            "status": raw.get("status"),
+        }
 
     async def get_or_create_user(
         self,
@@ -400,7 +474,7 @@ class RemnaClient:
         Args:
             telegram_id:    Telegram ID пользователя
             name:           Устаревший параметр display-имени (для обратной совместимости)
-            expire_at:      Дата истечения (если не указано - создаётся без активной подписки)
+            expire_at:      Дата истечения (если не указано - создается без активной подписки)
             tg_username:    Telegram @username (без @)
             tg_first_name:  Имя из Telegram
             tg_last_name:   Фамилия из Telegram
@@ -437,8 +511,8 @@ class RemnaClient:
 
             return existing
 
-        # 2. Не найден — создаём без подписки.
-        # expire_at не выставляем — пользователь создаётся без активной подписки.
+        # 2. Не найден — создаем без подписки.
+        # expire_at не выставляем — пользователь создается без активной подписки.
         # Подписка появится только после оплаты (provision_tariff).
         password = secrets.token_urlsafe(16)
 
@@ -477,7 +551,7 @@ class RemnaClient:
                         uuid = found.get('uuid') or found.get('id')
                         if uuid:
                             await self.update_user(uuid, telegramId=telegram_id)
-                            logger.info(f"Обновлён telegramId для пользователя {uuid}")
+                            logger.info(f"Обновлен telegramId для пользователя {uuid}")
                             return RemnaUser(
                                 uuid=str(uuid),
                                 telegram_id=telegram_id,
@@ -488,10 +562,10 @@ class RemnaClient:
                 except Exception as find_err:
                     logger.debug(f"Не удалось найти по username: {find_err}")
 
-                # Пользователь не найден в API — создаём с альтернативным username
+                # Пользователь не найден в API — создаем с альтернативным username
                 import time
                 alt_username = f"tg_{telegram_id}_{int(time.time())}"
-                logger.info(f"Создаём пользователя с альтернативным username: {alt_username}")
+                logger.info(f"Создаем пользователя с альтернативным username: {alt_username}")
 
                 try:
                     alt_response = await self.create_user(
@@ -517,6 +591,16 @@ class RemnaClient:
 
             logger.error(f"Ошибка создания пользователя {telegram_id}: {e.response.status_code}")
             raise
+
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Публичный резолв пользователя Remnawave по username (или None).
+
+        Тонкая обертка над _find_user_by_username. Используется для recovery
+        обходного юзера (M1): username детерминирован (tg_<id>_obhod), и если
+        DB-строка не записалась (сбой commit после create), uuid восстанавливаем
+        отсюда вместо повторного create (который уперся бы в duplicate-username).
+        """
+        return await self._find_user_by_username(username)
 
     async def _find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """
@@ -551,6 +635,19 @@ class RemnaClient:
     async def delete_user(self, user_id: str) -> Dict[str, Any]:
         """Удалить пользователя"""
         return await self.request("DELETE", f"/api/users/{user_id}")
+
+    async def disable_user(self, user_id: str) -> Dict[str, Any]:
+        """Деактивировать пользователя (status=DISABLED).
+
+        Надежнее, чем expireAt в прошлом: Remnawave 2.8.0 отклоняет past expireAt
+        с 400 «Expiration date cannot be in the past». Disable отзывает доступ,
+        сохраняя юзера/счетчик трафика. Обратимо через enable_user.
+        """
+        return await self.request("POST", f"/api/users/{user_id}/actions/disable")
+
+    async def enable_user(self, user_id: str) -> Dict[str, Any]:
+        """Снова активировать пользователя (отмена disable_user)."""
+        return await self.request("POST", f"/api/users/{user_id}/actions/enable")
 
     async def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """Получить пользователя по ID"""
@@ -781,7 +878,7 @@ class RemnaClient:
                                 sub_base,
                                 1,
                             )
-                            logger.info(f"Применён SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
+                            logger.info(f"Применен SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
                     except Exception as url_err:
                         logger.warning(f"Не удалось применить SUBSCRIPTION_BASE_URL override: {url_err}")
                 logger.info(f"Найден subscriptionUrl для пользователя {user_id}: {subscription_url[:50]}...")
@@ -796,7 +893,7 @@ class RemnaClient:
                     return subscription_url
                 else:
                     logger.warning(
-                        f"SUBSCRIPTION_BASE_URL не задан — не удаётся построить URL из token для пользователя {user_id}. "
+                        f"SUBSCRIPTION_BASE_URL не задан — не удается построить URL из token для пользователя {user_id}. "
                         "Задайте SUBSCRIPTION_BASE_URL в .env"
                     )
             

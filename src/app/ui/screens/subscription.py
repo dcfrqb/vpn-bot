@@ -76,11 +76,111 @@ class SubscriptionPlansScreen(BaseScreen):
         message_or_callback: Union[types.Message, types.CallbackQuery, dict],
         user_id: Optional[int]
     ) -> bool:
-        """select - выбор нового тарифа из меню; extend - продление текущего."""
+        """select - выбор нового тарифа; extend - продление; obhod - пакеты обхода."""
         from app.ui.screen_manager import get_screen_manager
 
+        if action == "obhod":
+            # Категория «Обход +трафик» внутри экрана подписки (без новой кнопки в меню).
+            from app.ui.keyboards.subscription import build_obhod_packages_keyboard
+            from app.ui.renderers.subscription import render_obhod_packages
+
+            text = render_obhod_packages()
+            keyboard = build_obhod_packages_keyboard()
+            if isinstance(message_or_callback, types.CallbackQuery):
+                try:
+                    await message_or_callback.message.edit_text(
+                        text, reply_markup=keyboard, parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.debug(f"obhod packages render edit failed: {e}")
+                    await message_or_callback.answer()
+                return True
+            return False
+
+        if action == "buy_obhod":
+            # payload = код пакета. Доступно только при реальной цене (placeholder=0 → нет).
+            from app.core.plans import (
+                get_obhod_package,
+                is_obhod_package_purchasable,
+            )
+            from app.ui.keyboards.subscription import build_obhod_packages_keyboard
+
+            # callback уже отвечен в ui_callback_handler ДО хендлера, поэтому
+            # callback.answer(текст) здесь Telegram уже не покажет. Для обратной
+            # связи (отказ/ошибка) редактируем сообщение, а не шлем второй answer.
+            async def _obhod_notice(text: str) -> bool:
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    try:
+                        await message_or_callback.message.edit_text(
+                            text,
+                            reply_markup=build_obhod_packages_keyboard(),
+                            parse_mode="HTML",
+                        )
+                    except Exception as _e:
+                        logger.debug(f"buy_obhod notice edit failed: {_e}")
+                return True
+
+            package_code = payload
+            if not is_obhod_package_purchasable(package_code):
+                return await _obhod_notice("Этот пакет пока недоступен.")
+
+            # H1: пакет поднимает кап на обходном юзере и применим только при
+            # активном обходе (то есть активном Pro). Проверяем ДО создания платежа,
+            # иначе оплата пройдет, а кап не выдастся (apply_obhod_package вернет
+            # False) и деньги уйдут «в никуда». Pro мог истечь между показом кнопки
+            # и оплатой — поэтому проверка свежая, по БД.
+            has_active = False
+            if user_id is not None:
+                try:
+                    from app.services.obhod_service import has_active_obhod
+                    has_active = await has_active_obhod(int(user_id))
+                except Exception as e:
+                    logger.warning(
+                        f"buy_obhod: проверка активного обхода упала user_id={user_id} err={e}"
+                    )
+            if not has_active:
+                return await _obhod_notice(
+                    "🛡 <b>Пакет обхода</b>\n\n"
+                    "Пакеты доступны только при активном тарифе Pro. "
+                    "Оформите или продлите Pro, потом возьмите пакет."
+                )
+
+            meta = get_obhod_package(package_code)
+            amount = int(meta["price"])
+            period_months = int(meta.get("period_months", 1))
+            plan_name = meta["display"]
+
+            from app.services.payments.yookassa import create_payment
+            from app.keyboards import get_payment_keyboard
+
+            try:
+                payment_url, external_id = await create_payment(
+                    amount_rub=amount,
+                    description=f"CRS VPN - {plan_name}",
+                    user_id=int(user_id) if user_id else 0,
+                    plan_code=package_code,
+                    period_months=period_months,
+                )
+            except Exception as e:
+                logger.error(f"buy_obhod: create_payment failed package={package_code} err={e}")
+                return await _obhod_notice(
+                    "❌ Не удалось создать платеж. Попробуйте позже."
+                )
+
+            if isinstance(message_or_callback, types.CallbackQuery):
+                await message_or_callback.message.edit_text(
+                    f"💳 <b>{plan_name}</b>\n"
+                    f"💰 <b>Сумма:</b> {amount}₽\n\n"
+                    "🔗 <b>Для оплаты перейдите по ссылке:</b>\n"
+                    f"<a href='{payment_url}'>Оплатить пакет обхода</a>\n\n"
+                    "💡 После оплаты лимит обхода поднимется автоматически.",
+                    reply_markup=get_payment_keyboard(payment_url, external_id),
+                    parse_mode="HTML",
+                )
+            return True
+
         if action == "extend":
-            # Дёргаем live last_plan, чтобы на race-условия (юзер мог купить
+            # Дергаем live last_plan, чтобы на race-условия (юзер мог купить
             # что-то в другом окне) была свежая инфа.
             last_plan_code: Optional[str] = None
             if user_id is not None:

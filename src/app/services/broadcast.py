@@ -11,10 +11,10 @@ Broadcast worker — рассылки админа по сегментам по�
 - Прогресс пишется в broadcast.{delivered,failed,blocked} каждые 50 сообщений.
 - Resume на старте: broadcasts со started_at NOT NULL и finished_at NULL запускаются заново
   (recipient с status=sent пропускаются по UNIQUE-проверке + explicit `status!='sent'` фильтру).
-- Graceful shutdown: `shutdown_broadcast_worker()` ждёт завершения in-flight задач.
+- Graceful shutdown: `shutdown_broadcast_worker()` ждет завершения in-flight задач.
 
 НЕ делает:
-- Не шлёт сообщения напрямую без записи в broadcast_recipient (нет слепых шлёпов).
+- Не шлет сообщения напрямую без записи в broadcast_recipient (нет слепых шлепов).
 - Не читает Remnawave — сегменты считаются по локальной БД (`subscriptions`, `payments`).
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ from app.db.session import SessionLocal
 from app.logger import logger
 
 
-# Telegram API: ~30 msg/sec hard-limit для ботов; 25 даёт запас.
+# Telegram API: ~30 msg/sec hard-limit для ботов; 25 дает запас.
 GLOBAL_RATE_LIMIT_PER_SEC = 25
 SEND_INTERVAL = 1.0 / GLOBAL_RATE_LIMIT_PER_SEC  # ~0.04с
 
@@ -108,7 +108,7 @@ async def cancel_broadcast(broadcast_id: int) -> bool:
 
 
 async def shutdown_broadcast_worker() -> None:
-    """Graceful shutdown — ставит cancel-флаг, ждёт завершения всех активных worker'ов."""
+    """Graceful shutdown — ставит cancel-флаг, ждет завершения всех активных worker'ов."""
     async with _active_workers_lock:
         handles = list(_active_workers.values())
     for h in handles:
@@ -211,7 +211,7 @@ async def count_segment(segment: str) -> int:
 
 
 async def _iter_segment_user_ids(segment: str) -> list[list[int]]:
-    """Возвращает список чанков по CHUNK_SIZE telegram_id. Всё на старте — проще для resume."""
+    """Возвращает список чанков по CHUNK_SIZE telegram_id. Все на старте — проще для resume."""
     assert SessionLocal is not None
     async with SessionLocal() as session:
         stmt = (
@@ -234,7 +234,7 @@ async def _iter_segment_user_ids(segment: str) -> list[list[int]]:
 
 async def materialize_recipients(broadcast_id: int) -> int:
     """
-    Создаёт broadcast_recipient(status='pending') для сегмента.
+    Создает broadcast_recipient(status='pending') для сегмента.
     UNIQUE(broadcast_id, user_telegram_id) + ON CONFLICT DO NOTHING — идемпотентно при рестартах.
     Возвращает общее число получателей после операции (broadcast.total).
     """
@@ -359,13 +359,13 @@ async def _update_recipient(
 
 
 async def _run_worker(bot: Bot, broadcast_id: int, cancel_flag: asyncio.Event) -> None:
-    """Рабочий цикл рассылки. Читает pending recipient-ов и шлёт по SEND_INTERVAL."""
+    """Рабочий цикл рассылки. Читает pending recipient-ов и шлет по SEND_INTERVAL."""
     logger.info(f"broadcast worker start: id={broadcast_id}")
     if not SessionLocal:
         logger.error(f"broadcast worker: SessionLocal=None, abort id={broadcast_id}")
         return
 
-    # Снимаем снапшот broadcast и материализуем получателей, если ещё не.
+    # Снимаем снапшот broadcast и материализуем получателей, если еще не.
     async with SessionLocal() as session:
         bc = await session.get(Broadcast, broadcast_id)
         if not bc:

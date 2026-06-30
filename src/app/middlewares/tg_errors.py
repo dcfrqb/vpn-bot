@@ -2,7 +2,7 @@
 Global error handler для aiogram Dispatcher.
 
 Покрывает три класса Telegram ошибок:
-- `TelegramRetryAfter` — flood-control, ждём `retry_after` и отпускаем update
+- `TelegramRetryAfter` — flood-control, ждем `retry_after` и отпускаем update
   (без re-dispatch, т.к. Telegram сам повторит при polling/webhook).
 - `TelegramForbiddenError` — юзер заблокировал бота → помечаем
   `telegram_users.is_active=False`, чтобы broadcast/уведомления его пропускали.
@@ -37,7 +37,7 @@ async def global_errors_handler(event: ErrorEvent) -> bool:
 
     if isinstance(exc, TelegramRetryAfter):
         logger.warning(
-            f"TelegramRetryAfter: ждём {exc.retry_after}s перед следующим апдейтом "
+            f"TelegramRetryAfter: ждем {exc.retry_after}s перед следующим апдейтом "
             f"(update_id={getattr(update, 'update_id', None)})"
         )
         try:

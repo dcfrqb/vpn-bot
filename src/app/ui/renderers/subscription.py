@@ -7,8 +7,12 @@ Renderers для экранов подписки.
 """
 from app.core.plans import (
     MENU_PLAN_CODES,
+    OBHOD_BASE_LIMIT_GB,
+    OBHOD_PACKAGE_CODES,
+    get_obhod_package,
     get_plan_features,
     get_plan_name,
+    is_obhod_package_purchasable,
 )
 from app.ui.viewmodels.subscription import (
     SubscriptionPaymentViewModel,
@@ -26,6 +30,37 @@ _PLAN_EMOJI: dict[str, str] = {
     "standard": "🔵",
     "pro": "💎",
 }
+
+
+def render_obhod_packages() -> str:
+    """Экран категории «Обход +трафик» (внутри Подписки).
+
+    Если ни у одного пакета нет реальной цены (плейсхолдеры) — показываем,
+    что пакеты скоро. Иначе перечисляем доступные пакеты.
+    """
+    header = (
+        "🛡 <b>Обход блокировок — больше трафика</b>\n\n"
+        "<blockquote>"
+        f"В тарифе Pro обход включен с лимитом {OBHOD_BASE_LIMIT_GB} ГБ в месяц. "
+        "Если нужно больше — докупите пакет, и месячный лимит обхода поднимется "
+        "на вашей ссылке обхода."
+        "</blockquote>\n\n"
+    )
+
+    purchasable = [c for c in OBHOD_PACKAGE_CODES if is_obhod_package_purchasable(c)]
+    if not purchasable:
+        return header + (
+            "Пакеты скоро появятся. Базового лимита обычно хватает для "
+            "заблокированных сайтов."
+        )
+
+    lines = []
+    for code in purchasable:
+        meta = get_obhod_package(code)
+        lines.append(
+            f"• <b>{escape_html(meta['display'])}</b> — {int(meta['price'])}₽"
+        )
+    return header + "\n".join(lines)
 
 
 def _render_plan_block(plan_code: str) -> str:

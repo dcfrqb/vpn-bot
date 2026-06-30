@@ -154,7 +154,7 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
                     )
         except ProvisioningPendingError as ppe:
             # Phase B провалилась; уже помечено provisioning_state='failed'.
-            # Это ожидаемый transient — НЕ инкрементим errors, reconciler добьёт.
+            # Это ожидаемый transient — НЕ инкрементим errors, reconciler добьет.
             logger.warning(
                 f"recovery_provision_pending: payment_id={payment.id} "
                 f"tg_id={payment.telegram_user_id} reason={str(ppe)[:200]}"
@@ -226,7 +226,7 @@ async def recheck_single_payment(
         result["error"] = "api_error"
         return result
 
-    # YooKassa вернула "платёж не найден" — не меняем статус в БД, только информируем
+    # YooKassa вернула "платеж не найден" — не меняем статус в БД, только информируем
     if status_data.get("error") == "not_found":
         logger.warning(
             f"[{trace_id}] recheck_single: YooKassa not found external_id={external_id} "
