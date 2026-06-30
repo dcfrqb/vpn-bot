@@ -144,11 +144,14 @@ async def ensure_obhod_for_pro(
                             limit_bytes = pkg_limit
                 except Exception:
                     pass
-            # Снимаем возможный DISABLED (если обход гасили при истечении/даунгрейде Pro).
+            # Снимаем DISABLED, только если он реально стоит — иначе панель вернёт
+            # 400 «User already enabled» и в логах будет лишний ERROR на каждом продлении.
             try:
-                await client.enable_user(obhod_uuid)
+                _info = await client.get_user_traffic_info(obhod_uuid)
+                if (_info or {}).get("status") == "DISABLED":
+                    await client.enable_user(obhod_uuid)
             except Exception as _en_e:
-                logger.debug(f"[{trace_id}] obhod enable (мог быть уже активен): {_en_e}")
+                logger.debug(f"[{trace_id}] obhod enable check soft-fail: {_en_e}")
             await client.update_user(
                 obhod_uuid,
                 expire_at=expire_str,
