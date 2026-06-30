@@ -636,6 +636,19 @@ class RemnaClient:
         """Удалить пользователя"""
         return await self.request("DELETE", f"/api/users/{user_id}")
 
+    async def disable_user(self, user_id: str) -> Dict[str, Any]:
+        """Деактивировать пользователя (status=DISABLED).
+
+        Надёжнее, чем expireAt в прошлом: Remnawave 2.8.0 отклоняет past expireAt
+        с 400 «Expiration date cannot be in the past». Disable отзывает доступ,
+        сохраняя юзера/счётчик трафика. Обратимо через enable_user.
+        """
+        return await self.request("POST", f"/api/users/{user_id}/actions/disable")
+
+    async def enable_user(self, user_id: str) -> Dict[str, Any]:
+        """Снова активировать пользователя (отмена disable_user)."""
+        return await self.request("POST", f"/api/users/{user_id}/actions/enable")
+
     async def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """Получить пользователя по ID"""
         return await self.request("GET", f"/api/users/{user_id}")

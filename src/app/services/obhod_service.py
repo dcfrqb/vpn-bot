@@ -144,6 +144,11 @@ async def ensure_obhod_for_pro(
                             limit_bytes = pkg_limit
                 except Exception:
                     pass
+            # Снимаем возможный DISABLED (если обход гасили при истечении/даунгрейде Pro).
+            try:
+                await client.enable_user(obhod_uuid)
+            except Exception as _en_e:
+                logger.debug(f"[{trace_id}] obhod enable (мог быть уже активен): {_en_e}")
             await client.update_user(
                 obhod_uuid,
                 expire_at=expire_str,
@@ -319,14 +324,13 @@ async def deactivate_obhod(
     if obhod_sub.remna_user_id:
         client = RemnaClient()
         try:
-            # Ставим expireAt в прошлое → Remnawave переведёт юзера в EXPIRED.
-            past = (datetime.now(timezone.utc) - relativedelta(days=1)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
-            await client.update_user(obhod_sub.remna_user_id, expire_at=past)
+            # Disable-экшен Remnawave (status=DISABLED). НЕ ставим expireAt в прошлое:
+            # панель 2.8.0 отклоняет past expireAt с 400. Disable отзывает доступ,
+            # сохраняя uuid/счётчик; возобновление Pro делает enable в ensure_obhod_for_pro.
+            await client.disable_user(obhod_sub.remna_user_id)
         except Exception as e:
             logger.warning(
-                f"[{trace_id}] obhod deactivate: не смогли истечь uuid="
+                f"[{trace_id}] obhod deactivate: не смогли отключить uuid="
                 f"{obhod_sub.remna_user_id} err={e}"
             )
         finally:
