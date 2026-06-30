@@ -241,6 +241,40 @@ async def provision_tariff(
             f"tariff={tariff} expire_at={valid_until_str}"
         )
 
+        # ===== ОБХОД (две подписки): провижн obhod-юзера для Pro =====
+        # provision_tariff — legacy-путь (промокоды /sun718, админ/«друг»-выдачи).
+        # Обход интегрирован здесь так же, как в DB-backed handle_successful_payment,
+        # чтобы ЛЮБАЯ выдача Pro давала обход (модель «у каждого Pro есть обход»).
+        # Мягкий fail: ошибка обхода не должна ронять основную выдачу.
+        try:
+            # valid_until как naive-UTC datetime (как ждёт ensure_obhod_for_pro)
+            try:
+                obhod_valid_until = datetime.strptime(valid_until_str, "%Y-%m-%dT%H:%M:%SZ")
+            except Exception:
+                obhod_valid_until = datetime.utcnow() + timedelta(days=3650)  # lifetime fallback
+            from app.db.session import SessionLocal
+            if SessionLocal:
+                from app.core.plans import is_obhod_eligible_plan
+                async with SessionLocal() as obhod_session:
+                    if is_obhod_eligible_plan(plan_code):
+                        from app.services.obhod_service import ensure_obhod_for_pro
+                        await ensure_obhod_for_pro(
+                            session=obhod_session,
+                            telegram_user_id=telegram_id,
+                            plan_code=plan_code,
+                            valid_until=obhod_valid_until,
+                            trace_id=req_id,
+                        )
+                    else:
+                        # Не-Pro: если был обход (даунгрейд) — гасим.
+                        from app.services.obhod_service import deactivate_obhod
+                        await deactivate_obhod(obhod_session, telegram_id, trace_id=req_id)
+                    await obhod_session.commit()
+        except Exception as _obhod_e:
+            logger.warning(
+                f"obhod provision soft-fail (provision_tariff): tg_id={telegram_id} err={_obhod_e}"
+            )
+
         # Инвалидируем кэш, чтобы статус обновился сразу
         try:
             from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache
