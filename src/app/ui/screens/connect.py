@@ -8,13 +8,11 @@ from app.ui.screens import ScreenID
 from app.ui.viewmodels.connect import ConnectViewModel
 from app.ui.renderers.connect import (
     render_connect_loading,
-    render_connect_success,
     render_connect_success_with_obhod,
     render_connect_error,
     render_connect_no_subscription
 )
 from app.ui.keyboards.connect import (
-    build_connect_success_keyboard,
     build_connect_success_keyboard_with_obhod,
     build_connect_error_keyboard,
     build_connect_no_subscription_keyboard

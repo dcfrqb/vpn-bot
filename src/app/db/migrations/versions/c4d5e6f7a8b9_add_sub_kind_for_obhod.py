@@ -22,11 +22,11 @@ downgrade: восстанавливает старые ограничения и
 downgrade'ом в БД не должно быть >1 active-строки на юзера (иначе восстановление
 uq_active_subscription_per_user упадёт IntegrityError — ожидаемо, требует чистки).
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
 
 revision: str = "c4d5e6f7a8b9"
 down_revision: Union[str, Sequence[str], None] = "b2c3d4e5f6a7"

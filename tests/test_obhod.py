@@ -9,6 +9,7 @@
 
 Remnawave и БД — только моки.
 """
+
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,10 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from app.core import plans
 from app.db.models import Subscription, TelegramUser
 
-
 # ---------------------------------------------------------------------------
 # 1. Config обхода
 # ---------------------------------------------------------------------------
+
 
 def test_obhod_eligibility_only_pro():
     assert plans.is_obhod_eligible_plan("pro") is True
@@ -56,6 +57,7 @@ def test_obhod_package_purchasable_when_price_set():
 # ---------------------------------------------------------------------------
 # 2. Remnawave-клиент
 # ---------------------------------------------------------------------------
+
 
 def test_payload_builder_traffic_limit_fields():
     from app.remnawave.client import build_user_payload_from_kwargs
@@ -106,6 +108,7 @@ def test_build_obhod_username_suffix():
 # ---------------------------------------------------------------------------
 # 3. obhod_service
 # ---------------------------------------------------------------------------
+
 
 def _fake_session(existing_obhod=None, tg=None):
     """mock_session: telegram_users → tg, subscriptions(obhod) → existing_obhod."""
@@ -300,6 +303,7 @@ async def test_deactivate_obhod():
 # ---------------------------------------------------------------------------
 # 4. Connect VM/renderer — две ссылки у Pro, одна у не-Pro
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_connect_renderer_pro_two_links():

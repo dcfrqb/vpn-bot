@@ -14,6 +14,7 @@
 исключены из main-резолва (sub_kind='main') и из resync-пути (см. reconciler).
 Жизненный цикл обхода привязан к main: обновление/истечение Pro синкает обход.
 """
+
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -31,7 +32,6 @@ from app.db.models import RemnaUser, Subscription, TelegramUser
 from app.logger import logger
 from app.remnawave.client import RemnaClient, normalize_expire_at
 from app.utils.remna_username import build_remna_username
-
 
 OBHOD_PLAN_CODE = "obhod"  # plan_code строки sub_kind='obhod' (не из меню тарифов)
 
@@ -63,7 +63,9 @@ async def _get_obhod_squad_uuid(client: RemnaClient) -> Optional[str]:
     return squad.get("uuid")
 
 
-async def get_obhod_subscription(session, telegram_user_id: int) -> Optional[Subscription]:
+async def get_obhod_subscription(
+    session, telegram_user_id: int
+) -> Optional[Subscription]:
     """Строка подписки обхода (sub_kind='obhod') для юзера, или None."""
     res = await session.execute(
         select(Subscription).where(
@@ -128,7 +130,11 @@ async def ensure_obhod_for_pro(
             # оставляем поднятый; иначе ставим базовый.
             limit_bytes = base_limit
             pkg = (obhod_sub.config_data or {}).get("package") if obhod_sub else None
-            pkg_until_raw = (obhod_sub.config_data or {}).get("package_until") if obhod_sub else None
+            pkg_until_raw = (
+                (obhod_sub.config_data or {}).get("package_until")
+                if obhod_sub
+                else None
+            )
             if pkg and pkg_until_raw:
                 try:
                     pkg_until = datetime.fromisoformat(pkg_until_raw)
@@ -185,7 +191,9 @@ async def ensure_obhod_for_pro(
         if not ru_res.scalar_one_or_none():
             session.add(RemnaUser(remna_id=str(obhod_uuid), username=None))
 
-        cfg = dict(obhod_sub.config_data) if (obhod_sub and obhod_sub.config_data) else {}
+        cfg = (
+            dict(obhod_sub.config_data) if (obhod_sub and obhod_sub.config_data) else {}
+        )
         if subscription_url:
             cfg["subscription_url"] = subscription_url
 
@@ -241,7 +249,11 @@ async def deactivate_obhod(
     """
     obhod_sub = await get_obhod_subscription(session, telegram_user_id)
     # Защита: действуем строго на obhod-строке (sub_kind='obhod') и только если активна.
-    if not obhod_sub or getattr(obhod_sub, "sub_kind", None) != "obhod" or not obhod_sub.active:
+    if (
+        not obhod_sub
+        or getattr(obhod_sub, "sub_kind", None) != "obhod"
+        or not obhod_sub.active
+    ):
         return False
 
     if obhod_sub.remna_user_id:
