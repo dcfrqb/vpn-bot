@@ -275,6 +275,83 @@ async def test_apply_obhod_package_no_active_obhod():
 
 
 @pytest.mark.asyncio
+async def test_apply_obhod_package_idempotent_same_payment():
+    """C1: повтор того же payment_id НЕ поднимает кап/период второй раз."""
+    from app.services import obhod_service
+
+    existing = Subscription(
+        id=7,
+        telegram_user_id=555,
+        plan_code="obhod",
+        sub_kind="obhod",
+        active=True,
+        remna_user_id="obhod-existing-uuid",
+        config_data={},
+    )
+    session, _ = _fake_session(existing_obhod=existing)
+    mock_client = AsyncMock()
+    mock_client.update_user = AsyncMock(return_value={})
+    mock_client.close = AsyncMock()
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        # Первый вызов — кап поднят, payment_id зафиксирован.
+        ok1 = await obhod_service.apply_obhod_package(
+            session=session,
+            telegram_user_id=555,
+            package_code="obhod_250",
+            payment_id=42,
+        )
+        assert ok1 is True
+        assert existing.config_data["applied_payment_id"] == 42
+        first_until = existing.config_data["package_until"]
+        assert mock_client.update_user.await_count == 1
+
+        # Повторная доставка ТОГО ЖЕ платежа — no-op, без второго update_user.
+        ok2 = await obhod_service.apply_obhod_package(
+            session=session,
+            telegram_user_id=555,
+            package_code="obhod_250",
+            payment_id=42,
+        )
+        assert ok2 is True
+        # Remnawave НЕ дёрнут второй раз (кап не поднят повторно).
+        assert mock_client.update_user.await_count == 1
+        # package_until НЕ продлён повторно.
+        assert existing.config_data["package_until"] == first_until
+
+
+@pytest.mark.asyncio
+async def test_apply_obhod_package_different_payment_applies_again():
+    """C1: другой payment_id (легитимная докупка) применяется заново."""
+    from app.services import obhod_service
+
+    existing = Subscription(
+        id=7,
+        telegram_user_id=555,
+        plan_code="obhod",
+        sub_kind="obhod",
+        active=True,
+        remna_user_id="obhod-existing-uuid",
+        config_data={"applied_payment_id": 42},
+    )
+    session, _ = _fake_session(existing_obhod=existing)
+    mock_client = AsyncMock()
+    mock_client.update_user = AsyncMock(return_value={})
+    mock_client.close = AsyncMock()
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        ok = await obhod_service.apply_obhod_package(
+            session=session,
+            telegram_user_id=555,
+            package_code="obhod_250",
+            payment_id=99,
+        )
+    assert ok is True
+    assert mock_client.update_user.await_count == 1
+    assert existing.config_data["applied_payment_id"] == 99
+
+
+@pytest.mark.asyncio
 async def test_deactivate_obhod():
     from app.services import obhod_service
 

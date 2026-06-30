@@ -755,11 +755,25 @@ async def handle_successful_payment(
         from app.core.plans import is_obhod_package_code
         if is_obhod_package_code(plan_code):
             from app.services.obhod_service import apply_obhod_package
+
+            # C1: идемпотентность ветки платежа-за-пакет по САМОМУ платежу.
+            # Общий гейт already_synced тут не срабатывает (subscription_id
+            # зануляется ниже), а redis-дедуп best-effort — поэтому при дубль-
+            # доставке вебхука мы бы повторно подняли кап/период. Ранний выход,
+            # если этот платёж уже был успешно применён.
+            if isinstance(meta, dict) and meta.get("obhod_package_applied") is True:
+                logger.info(
+                    f"[{trace_id}] obhod package: платёж id={payment_id} уже применён "
+                    f"(идемпотентный повтор вебхука) — skip tg_id={telegram_user_id}"
+                )
+                return
+
             applied = await apply_obhod_package(
                 session=session,
                 telegram_user_id=telegram_user_id,
                 package_code=plan_code,
                 trace_id=trace_id,
+                payment_id=payment.id,
             )
             # Привязываем платёж к obhod-подписке (для аудита) и закрываем.
             payment.subscription_id = None

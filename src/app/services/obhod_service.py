@@ -283,6 +283,7 @@ async def apply_obhod_package(
     telegram_user_id: int,
     package_code: str,
     trace_id: Optional[str] = None,
+    payment_id: Optional[int] = None,
 ) -> bool:
     """Поднимает месячный кап обхода до уровня пакета на оплаченный период.
 
@@ -290,7 +291,13 @@ async def apply_obhod_package(
     на ТОМ ЖЕ obhod-юзере. Срок действия пакета пишем в config_data['package_until'];
     по истечении ensure_obhod_for_pro/синк откатит кап к базовому.
 
-    Возвращает True при успехе.
+    Идемпотентность по платежу (C1): если payment_id уже зафиксирован в
+    config_data['applied_payment_id'], повторный вызов — no-op (возвращает True),
+    кап/период НЕ поднимаются второй раз. Это защищает от дубль-доставки вебхука
+    payment.succeeded (ретраи ЮKassa при 5xx), т.к. на этой ветке нет общего гейта
+    already_synced (payment.subscription_id зануляется).
+
+    Возвращает True при успехе (в т.ч. при идемпотентном повторе).
     """
     limit_bytes = get_obhod_package_limit_bytes(package_code)
     if not limit_bytes:
@@ -309,6 +316,17 @@ async def apply_obhod_package(
             f"— пакет не применён (нужен активный Pro)"
         )
         return False
+
+    # C1: идемпотентность по конкретному платежу. Если этот payment_id уже применён —
+    # ничего не делаем (не дёргаем Remnawave, не двигаем package_until).
+    if payment_id is not None:
+        applied_id = (obhod_sub.config_data or {}).get("applied_payment_id")
+        if applied_id is not None and str(applied_id) == str(payment_id):
+            logger.info(
+                f"[{trace_id}] obhod package: payment_id={payment_id} уже применён "
+                f"(идемпотентный повтор) — no-op tg_id={telegram_user_id}"
+            )
+            return True
 
     package_until = datetime.utcnow() + relativedelta(months=period_months)
 
@@ -332,6 +350,8 @@ async def apply_obhod_package(
     cfg["package"] = package_code
     cfg["package_until"] = package_until.isoformat()
     cfg["package_limit_bytes"] = limit_bytes
+    if payment_id is not None:
+        cfg["applied_payment_id"] = payment_id
     obhod_sub.config_data = cfg
     await session.commit()
     logger.info(
