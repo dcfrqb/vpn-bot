@@ -815,9 +815,12 @@ async def handle_successful_payment(
         # т.е. одна подписка на юзера ВСЕГДА. Если предыдущая попытка остановилась в
         # Phase B (active=False, provisioning_state='pending'/'failed'), мы должны её
         # переиспользовать; новый INSERT упадёт IntegrityError.
+        # ВАЖНО (две подписки): фильтруем по sub_kind='main'. Иначе при наличии
+        # obhod-строки scalar_one_or_none() упадёт "more than one row".
         sub_result = await session.execute(
             select(Subscription).where(
-                Subscription.telegram_user_id == telegram_user_id
+                Subscription.telegram_user_id == telegram_user_id,
+                Subscription.sub_kind == "main",
             )
         )
         existing_sub = sub_result.scalar_one_or_none()
@@ -965,6 +968,28 @@ async def handle_successful_payment(
             _meta.pop("provisioning_error", None)
             payment.payment_metadata = _meta
         await session.commit()
+
+        # ===== ОБХОД (две подписки): провижн obhod-юзера для Pro =====
+        # Делаем ПОСЛЕ синка основной подписки. Не критично для основной выдачи:
+        # ensure_obhod_for_pro глушит свои ошибки и не бросает наружу. Идемпотентно
+        # переиспользует obhod-юзера при повторном webhook/recovery.
+        try:
+            from app.core.plans import is_obhod_eligible_plan
+            if is_obhod_eligible_plan(plan_code):
+                from app.services.obhod_service import ensure_obhod_for_pro
+                await ensure_obhod_for_pro(
+                    session=session,
+                    telegram_user_id=telegram_user_id,
+                    plan_code=plan_code,
+                    valid_until=valid_until,
+                    trace_id=trace_id,
+                )
+            else:
+                # Не-Pro: если у юзера был обход (был Pro, теперь даунгрейд) — гасим.
+                from app.services.obhod_service import deactivate_obhod
+                await deactivate_obhod(session, telegram_user_id, trace_id=trace_id)
+        except Exception as _obhod_e:
+            logger.warning(f"[{trace_id}] obhod provision soft-fail: {_obhod_e}")
 
         # Cache invalidation ПОСЛЕ commit — чтобы пользователь не увидел старый статус
         try:

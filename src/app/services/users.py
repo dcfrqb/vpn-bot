@@ -209,6 +209,8 @@ async def get_user_last_plan(telegram_id: int) -> Optional[str]:
                 .where(
                     Subscription.telegram_user_id == telegram_id,
                     Subscription.active.is_(True),
+                    # Только основная подписка — обход (sub_kind='obhod') не покупаемый план.
+                    Subscription.sub_kind == "main",
                 )
                 .order_by(desc(Subscription.updated_at))
                 .limit(1)

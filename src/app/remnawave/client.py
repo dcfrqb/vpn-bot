@@ -24,6 +24,10 @@ _USER_UPDATE_WHITELIST = {
     "activeInternalSquads": "activeInternalSquads",
     "hwid_device_limit": "hwidDeviceLimit",
     "hwidDeviceLimit": "hwidDeviceLimit",
+    "traffic_limit_bytes": "trafficLimitBytes",
+    "trafficLimitBytes": "trafficLimitBytes",
+    "traffic_limit_strategy": "trafficLimitStrategy",
+    "trafficLimitStrategy": "trafficLimitStrategy",
 }
 
 
@@ -89,6 +93,8 @@ def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
             result["telegramId"] = int(val)
         elif api_key == "activeInternalSquads":
             result["activeInternalSquads"] = val if isinstance(val, list) else [val]
+        elif api_key == "trafficLimitBytes":
+            result["trafficLimitBytes"] = int(val)
         else:
             result[api_key] = val
     return result
@@ -360,6 +366,8 @@ class RemnaClient:
         active_internal_squads: Optional[list] = None,
         display_name: Optional[str] = None,
         hwid_device_limit: Optional[int] = None,
+        traffic_limit_bytes: Optional[int] = None,
+        traffic_limit_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Создать нового пользователя через API"""
         # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
@@ -378,7 +386,71 @@ class RemnaClient:
             payload["name"] = display_name  # Человекочитаемое имя для админки
         if hwid_device_limit is not None:
             payload["hwidDeviceLimit"] = hwid_device_limit
+        if traffic_limit_bytes is not None:
+            payload["trafficLimitBytes"] = int(traffic_limit_bytes)
+        if traffic_limit_strategy is not None:
+            payload["trafficLimitStrategy"] = traffic_limit_strategy
         return await self.request("POST", "/api/users", json=payload)
+
+    async def create_obhod_user(
+        self,
+        username: str,
+        password: str,
+        expire_at: Optional[Union[str, datetime, date]],
+        active_internal_squads: list,
+        traffic_limit_bytes: int,
+        traffic_limit_strategy: str,
+        display_name: Optional[str] = None,
+        hwid_device_limit: Optional[int] = None,
+    ) -> str:
+        """Создать обходного пользователя БЕЗ telegramId и вернуть его uuid.
+
+        КРИТИЧНО: obhod-юзер создаётся БЕЗ telegramId — иначе лукап
+        get_user_by_telegram_id/{id} станет неоднозначным и сломает основную
+        подписку. К obhod-юзеру обращаемся ТОЛЬКО по сохранённому uuid.
+
+        username должен быть уникальным (обычно tg_<id>_obhod, см.
+        build_remna_username + суффикс).
+        """
+        response = await self.create_user(
+            username=username,
+            password=password,
+            expire_at=expire_at,
+            telegram_id=None,  # НИКОГДА не задаём telegramId обходному юзеру
+            active_internal_squads=active_internal_squads,
+            display_name=display_name,
+            hwid_device_limit=hwid_device_limit,
+            traffic_limit_bytes=traffic_limit_bytes,
+            traffic_limit_strategy=traffic_limit_strategy,
+        )
+        user_data = response.get("response", response) if isinstance(response, dict) else response
+        uuid = user_data.get("uuid") or user_data.get("id") if isinstance(user_data, dict) else None
+        if not uuid:
+            raise ValueError(f"create_obhod_user: не удалось получить uuid из ответа: {response}")
+        logger.info(f"Создан obhod-юзер Remna: uuid={uuid}, username={username}")
+        return str(uuid)
+
+    async def get_user_traffic_info(self, user_id: str) -> Dict[str, Any]:
+        """Вернуть инфо о трафике/лимите обходного (или любого) юзера по uuid.
+
+        Returns dict с ключами (любой может быть None):
+          used_bytes  — usedTrafficBytes
+          limit_bytes — trafficLimitBytes (0 = безлимит)
+          strategy    — trafficLimitStrategy
+          expire_at   — expireAt (str как из API)
+          status      — status (ACTIVE/LIMITED/EXPIRED/...)
+        """
+        data = await self.get_user_by_id(user_id)
+        raw = data.get("response", data) if isinstance(data, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "used_bytes": raw.get("usedTrafficBytes"),
+            "limit_bytes": raw.get("trafficLimitBytes"),
+            "strategy": raw.get("trafficLimitStrategy"),
+            "expire_at": raw.get("expireAt"),
+            "status": raw.get("status"),
+        }
 
     async def get_or_create_user(
         self,

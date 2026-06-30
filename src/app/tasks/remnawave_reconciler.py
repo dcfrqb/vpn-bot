@@ -138,6 +138,10 @@ class RemnawaveReconciler:
                 select(Subscription)
                 .where(
                     Subscription.active == True,
+                    # Только основные подписки. Обход (sub_kind='obhod') синкается
+                    # синхронно через obhod_service.ensure_obhod_for_pro и НЕ должен
+                    # лечиться main-путём resync (он клобберит сквад/лимит/телеграм-id).
+                    Subscription.sub_kind == "main",
                     Subscription.provisioning_state.in_(["pending", "failed"]),
                     or_(
                         Subscription.valid_until.is_(None),
@@ -191,6 +195,9 @@ class RemnawaveReconciler:
                 select(Subscription)
                 .where(
                     Subscription.active == True,
+                    # Только основные подписки (см. _shallow_scan): обход не сверяем
+                    # этим путём, его expireAt/лимит ведёт obhod_service.
+                    Subscription.sub_kind == "main",
                     Subscription.provisioning_state == "synced",
                     Subscription.remna_user_id.isnot(None),
                     Subscription.valid_until.isnot(None),
@@ -303,7 +310,19 @@ class RemnawaveReconciler:
                     sub.active = False
                     sub.provisioning_state = "expired"
                     sub.last_provisioning_error = None
+                    tg_id_for_obhod = sub.telegram_user_id
                     await session.commit()
+
+                    # Истечение Pro гасит обход (две подписки): деактивируем
+                    # obhod-юзера того же клиента. Soft-fail, не ломаем основной путь.
+                    try:
+                        from app.services.obhod_service import deactivate_obhod
+                        await deactivate_obhod(session, tg_id_for_obhod, trace_id="reconciler")
+                    except Exception as _oe:
+                        logger.warning(
+                            f"reconciler_mark_expired: obhod deactivate soft-fail "
+                            f"tg_id={tg_id_for_obhod} err={_oe}"
+                        )
         except Exception as e:
             logger.error(
                 f"reconciler_mark_expired: subscription_id={subscription_id} err={e}"
