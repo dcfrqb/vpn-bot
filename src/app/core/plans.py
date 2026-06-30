@@ -123,6 +123,108 @@ NEW_PLAN_CODES: tuple[str, ...] = ("lite", "standard", "pro")
 MENU_PLAN_CODES: tuple[str, ...] = NEW_PLAN_CODES
 VALID_PLAN_CODES: frozenset[str] = frozenset(PLAN_CATALOG.keys())
 
+
+# =============================================================================
+# Обход блокировок (вторая подписка с лимитом трафика)
+# =============================================================================
+# Архитектура «две подписки»: при оплате тарифа Pro клиенту выдаётся ДВА
+# Remnawave-юзера одной оплатой:
+#   main  — зарубежный выход, тарифный сквад (как сейчас), без лимита трафика;
+#   obhod — отдельный сквад OBHOD_SQUAD_NAME, базовый кап OBHOD_BASE_LIMIT_GB
+#           в месяц (trafficLimitStrategy=MONTH), срок = срок Pro.
+#
+# Обход доступен ТОЛЬКО в тарифе Pro. lite/standard/basic/premium его не получают.
+# Пакеты «Обход +трафик» поднимают месячный кап на ТОМ ЖЕ obhod-юзере
+# (не создают третью сущность / новую ссылку).
+
+# Тарифы, которым полагается обход. Сейчас только Pro.
+OBHOD_ELIGIBLE_PLAN_CODES: frozenset[str] = frozenset({"pro"})
+
+# Имя сквада обхода в Remnawave (см. get_squad_by_name).
+OBHOD_SQUAD_NAME: str = "obhod"
+
+# Базовый месячный кап трафика обхода для Pro, в гигабайтах.
+# TODO(заказчик): подтвердить итоговый размер базового капа (предв. 100 ГБ).
+OBHOD_BASE_LIMIT_GB: int = 100
+
+# Стратегия лимита трафика в Remnawave: помесячный сброс.
+OBHOD_TRAFFIC_LIMIT_STRATEGY: str = "MONTH"
+
+# 1 ГБ в байтах (Remnawave принимает trafficLimitBytes в байтах).
+GIB_IN_BYTES: int = 1024 * 1024 * 1024
+
+
+def obhod_base_limit_bytes() -> int:
+    """Базовый месячный кап обхода в байтах."""
+    return OBHOD_BASE_LIMIT_GB * GIB_IN_BYTES
+
+
+def is_obhod_eligible_plan(plan_code: Optional[str]) -> bool:
+    """True если тариф даёт обход (сейчас только Pro)."""
+    if not plan_code:
+        return False
+    return str(plan_code).lower().strip() in OBHOD_ELIGIBLE_PLAN_CODES
+
+
+# Каталог платных пакетов «Обход +трафик».
+# Покупаются только при активном Pro. Поднимают месячный кап obhod-юзера на
+# оплаченный период; по истечении пакета кап откатывается к базовым 100 ГБ.
+#
+# Поля пакета:
+#   limit_gb       — итоговый месячный кап (НЕ добавка к базовому, а целевой кап)
+#                    пока пакет активен;
+#   period_months  — на сколько месяцев продаётся пакет;
+#   price          — цена в RUB. TODO(заказчик): проставить финальные цены.
+#   display        — заголовок для UI.
+#
+# ВНИМАНИЕ: цены — плейсхолдеры (0). Продукт НЕ должен продаваться, пока
+# заказчик не проставит реальные цены (см. is_obhod_package_purchasable).
+OBHOD_PACKAGE_CATALOG: dict[str, dict] = {
+    "obhod_250": {
+        "limit_gb": 250,
+        "period_months": 1,
+        "price": 0,  # TODO(заказчик): цена пакета 250 ГБ
+        "display": "Обход 250 ГБ / мес",
+    },
+    "obhod_500": {
+        "limit_gb": 500,
+        "period_months": 1,
+        "price": 0,  # TODO(заказчик): цена пакета 500 ГБ
+        "display": "Обход 500 ГБ / мес",
+    },
+}
+
+OBHOD_PACKAGE_CODES: tuple[str, ...] = tuple(OBHOD_PACKAGE_CATALOG.keys())
+
+
+def get_obhod_package(package_code: Optional[str]) -> Optional[dict]:
+    """Метаданные пакета обхода по коду, или None."""
+    if not package_code:
+        return None
+    return OBHOD_PACKAGE_CATALOG.get(str(package_code).lower().strip())
+
+
+def is_obhod_package_code(code: Optional[str]) -> bool:
+    return get_obhod_package(code) is not None
+
+
+def is_obhod_package_purchasable(package_code: Optional[str]) -> bool:
+    """True если пакет существует И у него проставлена реальная (ненулевая) цена.
+
+    Защита от продажи пакета с плейсхолдер-ценой 0 — пока заказчик не заполнит
+    OBHOD_PACKAGE_CATALOG, кнопки покупки не показываются.
+    """
+    meta = get_obhod_package(package_code)
+    return bool(meta) and int(meta.get("price", 0)) > 0
+
+
+def get_obhod_package_limit_bytes(package_code: Optional[str]) -> Optional[int]:
+    """Целевой месячный кап пакета в байтах, или None для неизвестного пакета."""
+    meta = get_obhod_package(package_code)
+    if not meta:
+        return None
+    return int(meta["limit_gb"]) * GIB_IN_BYTES
+
 # Для обратной совместимости — старый PLAN_NAMES dict (используется helpers/get_plan_name).
 PLAN_NAMES: dict[str, str] = {code: meta["display"] for code, meta in PLAN_CATALOG.items()}
 PLAN_NAME_FALLBACK = "Тариф (обновите меню)"
