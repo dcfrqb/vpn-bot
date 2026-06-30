@@ -445,7 +445,9 @@ class RemnaClient:
         if not isinstance(raw, dict):
             raw = {}
         return {
-            "used_bytes": raw.get("usedTrafficBytes"),
+            # API отдаёт использованный трафик вложенно: userTraffic.usedTrafficBytes
+            # (топ-левел usedTrafficBytes нет — проверено на живой панели 2.8.0)
+            "used_bytes": (raw.get("userTraffic") or {}).get("usedTrafficBytes"),
             "limit_bytes": raw.get("trafficLimitBytes"),
             "strategy": raw.get("trafficLimitStrategy"),
             "expire_at": raw.get("expireAt"),
