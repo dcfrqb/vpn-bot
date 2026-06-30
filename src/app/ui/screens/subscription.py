@@ -103,14 +103,26 @@ class SubscriptionPlansScreen(BaseScreen):
                 get_obhod_package,
                 is_obhod_package_purchasable,
             )
+            from app.ui.keyboards.subscription import build_obhod_packages_keyboard
+
+            # callback уже отвечен в ui_callback_handler ДО хендлера, поэтому
+            # callback.answer(текст) здесь Telegram уже не покажет. Для обратной
+            # связи (отказ/ошибка) редактируем сообщение, а не шлём второй answer.
+            async def _obhod_notice(text: str) -> bool:
+                if isinstance(message_or_callback, types.CallbackQuery):
+                    try:
+                        await message_or_callback.message.edit_text(
+                            text,
+                            reply_markup=build_obhod_packages_keyboard(),
+                            parse_mode="HTML",
+                        )
+                    except Exception as _e:
+                        logger.debug(f"buy_obhod notice edit failed: {_e}")
+                return True
 
             package_code = payload
             if not is_obhod_package_purchasable(package_code):
-                if isinstance(message_or_callback, types.CallbackQuery):
-                    await message_or_callback.answer(
-                        "Пакет пока недоступен", show_alert=True
-                    )
-                return False
+                return await _obhod_notice("Этот пакет пока недоступен.")
 
             # H1: пакет поднимает кап на обходном юзере и применим только при
             # активном обходе (то есть активном Pro). Проверяем ДО создания платежа,
@@ -127,13 +139,11 @@ class SubscriptionPlansScreen(BaseScreen):
                         f"buy_obhod: проверка активного обхода упала user_id={user_id} err={e}"
                     )
             if not has_active:
-                if isinstance(message_or_callback, types.CallbackQuery):
-                    await message_or_callback.answer(
-                        "Пакеты обхода доступны только при активном тарифе Pro. "
-                        "Оформите или продлите Pro, потом возьмите пакет.",
-                        show_alert=True,
-                    )
-                return False
+                return await _obhod_notice(
+                    "🛡 <b>Пакет обхода</b>\n\n"
+                    "Пакеты доступны только при активном тарифе Pro. "
+                    "Оформите или продлите Pro, потом возьмите пакет."
+                )
 
             meta = get_obhod_package(package_code)
             amount = int(meta["price"])
@@ -153,11 +163,9 @@ class SubscriptionPlansScreen(BaseScreen):
                 )
             except Exception as e:
                 logger.error(f"buy_obhod: create_payment failed package={package_code} err={e}")
-                if isinstance(message_or_callback, types.CallbackQuery):
-                    await message_or_callback.answer(
-                        "Не удалось создать платёж, попробуйте позже", show_alert=True
-                    )
-                return False
+                return await _obhod_notice(
+                    "❌ Не удалось создать платёж. Попробуйте позже."
+                )
 
             if isinstance(message_or_callback, types.CallbackQuery):
                 await message_or_callback.message.edit_text(
