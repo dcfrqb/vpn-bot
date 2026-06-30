@@ -61,6 +61,17 @@ async def build_subscription_plans_keyboard(
             )
         ])
 
+    # Вход в категорию пакетов «Обход +трафик» — только если есть покупаемый пакет
+    # (цена>0). При плейсхолдер-ценах (0) категория скрыта.
+    from app.core.plans import OBHOD_PACKAGE_CODES
+    if any(is_obhod_package_purchasable(c) for c in OBHOD_PACKAGE_CODES):
+        keyboard.append([
+            types.InlineKeyboardButton(
+                text="🛡 Обход +трафик",
+                callback_data=build_cb(ScreenID.SUBSCRIPTION_PLANS, "obhod"),
+            )
+        ])
+
     keyboard.append([
         types.InlineKeyboardButton(
             text="⬅️ Назад",
