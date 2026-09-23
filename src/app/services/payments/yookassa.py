@@ -16,6 +16,7 @@ from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.remnawave.client import RemnaClient, normalize_expire_at
 from app.services.payments.errors import ProvisioningPendingError, WebhookRetryableError
+from app.services.remna_tariff import RemnaUserDisabledError
 
 # Допуск при сравнении ожидаемого vs фактического expireAt в Remnawave.
 # 60s покрывает дрифт между моментом APIcall и моментом, когда Remnawave записал значение.
@@ -781,6 +782,29 @@ async def resync_subscription_to_remnawave(
 
 _PROVISION_ALERT_TTL_SECONDS = 6 * 3600
 
+DISABLED_USER_REVIEW_REASON = (
+    "пользователь отключен вручную в панели (DISABLED), оплата получена, реши вручную: "
+    "«Одобрить и выдать» включит юзера и выдаст оплаченный срок"
+)
+
+
+async def _remna_user_is_disabled(remna_user_id: str, trace_id: str) -> bool:
+    """True, если юзер в панели DISABLED. Ошибка чтения -> False (дальше выдача
+    сама проверит статус и откажет, см. RemnaUserDisabledError)."""
+    client = RemnaClient()
+    try:
+        data = await client.get_user_by_id(str(remna_user_id))
+    except Exception as e:
+        logger.debug(f"[{trace_id}] disabled check for {remna_user_id} failed: {e}")
+        return False
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+    raw = data.get("response", data) if isinstance(data, dict) else {}
+    return isinstance(raw, dict) and str(raw.get("status") or "").upper() == "DISABLED"
+
 
 async def _alert_paid_not_provisioned(
     bot, payment_id: int, telegram_user_id: int, error: str, trace_id: str
@@ -1190,6 +1214,17 @@ async def handle_successful_payment(
             logger.error(f"[{trace_id}] subscription_provisioning_failed: tg_id={telegram_user_id} not found in DB")
             return
 
+        # Ревью N2: юзера, отключенного в панели вручную, оплата сама не включает.
+        # Платеж уходит на ручную проверку; «Одобрить» (review_approved) включит
+        # юзера и выдаст срок, «Отклонить» оставит как есть.
+        review_approved = bool(isinstance(meta, dict) and meta.get("review_approved"))
+        if telegram_user.remna_user_id and not review_approved:
+            if await _remna_user_is_disabled(str(telegram_user.remna_user_id), trace_id):
+                await _hold_payment_for_review(
+                    session, payment, telegram_user_id, DISABLED_USER_REVIEW_REASON, bot, trace_id
+                )
+                return "review"
+
         # Ищем ЛЮБУЮ подписку юзера, не только active=True. Причина:
         # `uq_subscriptions_telegram_user_id` — UNIQUE на telegram_user_id (без partial),
         # т.е. одна подписка на юзера ВСЕГДА. Если предыдущая попытка остановилась в
@@ -1305,7 +1340,18 @@ async def handle_successful_payment(
                 telegram_user_id=telegram_user_id,
                 subscription_id=subscription.id,
                 period_months=period_months,
+                enable_if_disabled=review_approved,
             )
+        except RemnaUserDisabledError as e:
+            # Проверка выше не сработала (панель не ответила на чтение или юзера
+            # отключили прямо сейчас): панель не тронута, решает админ.
+            await _mark_provisioning_failed(
+                session, subscription.id, f"remna_user_disabled: {e}", trace_id
+            )
+            await _hold_payment_for_review(
+                session, payment, telegram_user_id, DISABLED_USER_REVIEW_REASON, bot, trace_id
+            )
+            return "review"
         except Exception as e:
             await _mark_provisioning_failed(
                 session, subscription.id, f"remna_sync_exception: {e}", trace_id
@@ -1726,10 +1772,15 @@ async def get_or_create_remna_user_and_get_subscription_url(
     telegram_user_id: int,
     subscription_id: int,
     period_months: Optional[int] = None,
+    enable_if_disabled: bool = False,
 ) -> Optional[str]:
     """
     period_months: если передан — продлевает expireAt в Remna от текущего
     expireAt (как provision_tariff). Если None — fallback на subscription.valid_until.
+    Ревью N2: выдача по оплате (period_months передан) для юзера, отключенного
+    в панели вручную, бросает RemnaUserDisabledError и ничего не пишет;
+    enable_if_disabled=True (оплата одобрена админом) включает такого юзера.
+    Resync (period_months=None) статус не трогает, как и раньше.
     """
     """Получает или создает пользователя в Remna API и возвращает subscription URL"""
     try:
@@ -1813,7 +1864,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     await apply_tariff_to_remna_user(
                         client, remna_user_id, subscription.plan_code, expire_at=new_expire_str,
                         user_data=stored_user_data,
-                        enable_if_disabled=period_months is not None,
+                        enable_if_disabled=enable_if_disabled,
+                        refuse_if_disabled=period_months is not None,
                     )
 
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
@@ -1862,7 +1914,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     from app.services.remna_tariff import apply_tariff_to_remna_user
                     await apply_tariff_to_remna_user(
                         client, remna_user_id, subscription.plan_code, expire_at=_new_expire,
-                        enable_if_disabled=period_months is not None,
+                        enable_if_disabled=enable_if_disabled,
+                        refuse_if_disabled=period_months is not None,
                     )
                     # Получаем subscription URL и сохраняем
                     subscription_url = await client.get_user_subscription_url(remna_user_id)
@@ -2062,7 +2115,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     client, str(remna_user_id), subscription.plan_code,
                     # свой юзер после сбоя: create не выполнялся, дату ставим здесь
                     expire_at=normalize_expire_at(expire_at) if adopted else None,
-                    enable_if_disabled=period_months is not None,
+                    enable_if_disabled=enable_if_disabled,
+                    refuse_if_disabled=period_months is not None,
                 )
 
                 return subscription_url
@@ -2070,6 +2124,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
             finally:
                 await client.close()
                 
+    except RemnaUserDisabledError:
+        raise  # ревью N2: решение за админом, вызывающий ставит платеж на ревью
     except Exception as e:
         logger.error(f"Ошибка при получении subscription URL: {e}")
         import traceback

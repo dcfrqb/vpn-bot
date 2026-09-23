@@ -19,6 +19,10 @@ from app.services.jsonl_logger import log_payment_event, EVENT_REMNAWAVE_PROVISI
 # При превышении — asyncio.TimeoutError, caller помечает payment.needs_provisioning=True,
 # recovery task дожмет асинхронно.
 REMNAWAVE_CALL_TIMEOUT = 20.0
+# Ревью N6: после таймаута PATCH может дойти до панели чуть позже. Перед
+# проверкой «выдача состоялась?» ждем немного, чтобы поздний PATCH успел лечь.
+GRANT_RECHECK_DELAY_SECONDS = 3.0
+_DISABLED_GRANT_ALERT_TTL = 6 * 3600
 
 
 # Маппинг тарифов на plan_code и период (в месяцах).
@@ -150,6 +154,39 @@ async def _grant_landed(client, remna_user_id: str, valid_until_str: str, plan_c
         return False
 
 
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Таймаут где-то в цепочке причин (asyncio / httpx)."""
+    seen = 0
+    while exc is not None and seen < 5:
+        if isinstance(exc, asyncio.TimeoutError) or type(exc).__name__.endswith("Timeout") \
+                or type(exc).__name__.endswith("TimeoutException"):
+            return True
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return False
+
+
+async def _alert_grant_to_disabled_user(telegram_id: int, tariff: str, req_id: Optional[str]) -> None:
+    """Один алерт админам (Redis SET NX, 6 ч): выдача юзеру, отключенному вручную (ревью N2)."""
+    from app.services.redis_flags import set_once
+
+    first = await set_once(f"alert:grant_disabled_user:{int(telegram_id)}", str(req_id or "1"),
+                           ttl=_DISABLED_GRANT_ALERT_TTL)
+    if first is False:
+        return
+    from html import escape as _he
+    from app.services.blocklist import notify_admins
+
+    await notify_admins(
+        "⚠️ <b>Выдача не выполнена: пользователь отключен вручную</b>\n\n"
+        f"Telegram ID: <code>{int(telegram_id)}</code>\n"
+        f"Тариф: {_he(str(tariff))}\n"
+        f"Источник: <code>{_he(str(req_id or '—'))}</code>\n\n"
+        "Юзер в статусе DISABLED в панели, бот его сам не включает. "
+        "Если отключение больше не нужно, включите юзера в панели и повторите выдачу."
+    )
+
+
 async def provision_tariff(
     telegram_id: int,
     tariff: str,
@@ -238,7 +275,7 @@ async def provision_tariff(
         # ручных сквадов и поднятых лимитов (services/remna_tariff). Сквад не
         # найден / PATCH упал -> RemnaTariffError -> выдача не удалась (False).
         from app.core.plans import get_plan_squad
-        from app.services.remna_tariff import apply_tariff_to_remna_user
+        from app.services.remna_tariff import RemnaUserDisabledError, apply_tariff_to_remna_user
 
         if not get_plan_squad(plan_code):
             plan_code = "basic"  # бывший дефолт, не ломает legacy
@@ -246,15 +283,34 @@ async def provision_tariff(
             await asyncio.wait_for(
                 apply_tariff_to_remna_user(
                     client, remna_user_id, plan_code, expire_at=valid_until_str, trace_id=req_id,
-                    enable_if_disabled=True,
+                    # Ревью N2: промо и админ-гранты не включают юзера,
+                    # отключенного в панели вручную.
+                    refuse_if_disabled=True,
                 ),
                 timeout=REMNAWAVE_CALL_TIMEOUT * 2,
             )
+        except RemnaUserDisabledError as disabled_err:
+            logger.warning(
+                f"subscription_provisioning_refused: tg_id={telegram_id} tariff={tariff} "
+                f"req_id={req_id} err={disabled_err}"
+            )
+            log_payment_event(
+                EVENT_REMNAWAVE_PROVISION_FAILED,
+                req_id=req_id,
+                tg_id=telegram_id,
+                payload={"error": "remna_user_disabled", "tariff": tariff},
+            )
+            await _alert_grant_to_disabled_user(telegram_id, tariff, req_id)
+            return False
         except Exception as apply_err:
             # Ревью m3/m-3: PATCH мог дойти до панели, а ответ — нет (таймаут).
             # Тогда промо-запись удалялась, и /trial можно было взять еще раз
             # поверх уже продленного срока. Перечитываем юзера: если срок уже
-            # стоит, выдача состоялась.
+            # стоит, выдача состоялась. Ревью N6: при таймауте сначала ждем,
+            # чтобы запоздавший PATCH успел лечь (окно сужено, не закрыто:
+            # PATCH, пришедший позже задержки, все еще дает повторный /trial).
+            if _is_timeout_error(apply_err) and GRANT_RECHECK_DELAY_SECONDS > 0:
+                await asyncio.sleep(GRANT_RECHECK_DELAY_SECONDS)
             if not await _grant_landed(client, remna_user_id, valid_until_str, plan_code):
                 raise
             logger.warning(

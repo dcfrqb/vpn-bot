@@ -33,7 +33,7 @@ class _Res:
         return self.obj
 
 
-async def _repay(fake, months=1, plan="lite"):
+async def _repay(fake, months=1, plan="lite", approved=False):
     """Путь оплаты: выдача в Remnawave + верификация, как в handle_successful_payment."""
     from app.services.payments import yookassa as yk
 
@@ -51,6 +51,7 @@ async def _repay(fake, months=1, plan="lite"):
          patch.object(yk, "RemnaClient", return_value=fake):
         url = await yk.get_or_create_remna_user_and_get_subscription_url(
             telegram_user_id=TG_ID, subscription_id=7, period_months=months,
+            enable_if_disabled=approved,
         )
         ok, _actual, err = await yk._verify_remnawave_synced("9", target, "t", plan_code=plan)
     return url, ok, err
@@ -66,10 +67,12 @@ async def test_refund_then_repay_gives_working_access():
 
 
 @pytest.mark.asyncio
-async def test_disabled_user_is_reenabled_by_payment_and_verify_rejects_disabled():
-    """Юзер, отключенный старой версией возврата или руками: оплата его включает,
-    а верификация не считает DISABLED выданным."""
+async def test_disabled_user_payment_refused_until_admin_approves():
+    """Фикс-раунд 2 (N2): юзера, отключенного в панели руками, оплата сама не
+    включает и ничего в панель не пишет. После «Одобрить» (enable_if_disabled)
+    выдача включает его. Верификация по-прежнему не считает DISABLED выданным."""
     from app.services.payments import yookassa as yk
+    from app.services.remna_tariff import RemnaUserDisabledError
 
     fake = FakeRemna()
     fake.add_user(9, "tg_test_user", telegram_id=TG_ID, squads=["lite"], status="DISABLED",
@@ -81,7 +84,12 @@ async def test_disabled_user_is_reenabled_by_payment_and_verify_rejects_disabled
             "9", None, "t", plan_code="lite", allow_disabled=True)
         assert ok_resync  # реконсилер ручное отключение не оспаривает
 
-    url, ok, err = await _repay(fake)
+    with pytest.raises(RemnaUserDisabledError):
+        await _repay(fake)
+    assert fake.patches == [] and fake.enabled == []
+    assert fake.users[9]["status"] == "DISABLED"
+
+    url, ok, err = await _repay(fake, approved=True)
     assert ok, err
     assert fake.enabled == [9]
     assert fake.users[9]["status"] == "ACTIVE"
@@ -90,17 +98,19 @@ async def test_disabled_user_is_reenabled_by_payment_and_verify_rejects_disabled
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tariff", ["trial_standard_5d", "premium_1"])
 async def test_refund_then_trial_or_admin_grant_gives_access(tariff):
-    """/trial (trial_standard_5d) и выдача админом (premium_1) идут через provision_tariff."""
+    """/trial (trial_standard_5d) и выдача админом (premium_1) идут через provision_tariff.
+    После возврата юзер EXPIRED, выдача его оживляет."""
     from app.services import remna_service
 
     fake, _ = await _refund_first_purchase()
-    fake.users[9]["status"] = "DISABLED"  # худший случай: юзер отключен
+    assert fake.users[9]["status"] == "EXPIRED"
     with patch.object(remna_service, "RemnaClient", return_value=fake), \
          patch.object(remna_service, "ensure_user_in_remnawave", AsyncMock(return_value="9")), \
          patch("app.db.session.SessionLocal", None):
         ok = await remna_service.provision_tariff(TG_ID, tariff, req_id="t")
     assert ok is True
     assert fake.users[9]["status"] == "ACTIVE"
+    assert fake.enabled == []
     exp = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
     assert exp > datetime.now(timezone.utc) + timedelta(days=4)
 

@@ -11,6 +11,13 @@ from tests.fakes.remnawave import FakeRemna
 TG_ID = 900000071
 
 
+@pytest.fixture(autouse=True)
+def _no_recheck_delay(monkeypatch):
+    from app.services import remna_service
+
+    monkeypatch.setattr(remna_service, "GRANT_RECHECK_DELAY_SECONDS", 0)
+
+
 class _SlowReplyRemna(FakeRemna):
     """PATCH применяется, но ответ «теряется» (таймаут)."""
 
