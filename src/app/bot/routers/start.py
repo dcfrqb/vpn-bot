@@ -46,6 +46,14 @@ async def set_my_commands(bot: Any) -> None:
         logger.warning(f"set_my_commands failed: {type(e).__name__}: {e}")
 
 
+async def ensure_user(user: types.User) -> None:
+    """Upsert the telegram_users row (username/first_name) so the panel username
+    is built from it (``tg_<username>``) instead of falling back to ``tg_<id>``.
+    Every entry point that can provision a brand-new user without going through
+    /start first (deep-link promo/gift redemptions) must call this too (O4)."""
+    await _ensure_user(user)
+
+
 async def _ensure_user(user: types.User) -> None:
     from app.services.users import get_or_create_telegram_user
 

@@ -19,6 +19,7 @@ from aiogram import Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import Message
 
+from app.bot.routers.start import ensure_user
 from app.bot.routers.trial_promo import redeem_and_reply
 from app.services.promo import get_promo
 
@@ -35,4 +36,7 @@ async def is_promo_link(message: Message, command: CommandObject, container: Any
 
 @router.message(CommandStart(deep_link=True), is_promo_link)
 async def start_with_code(message: Message, command: CommandObject, container: Any) -> None:
+    # O4: a brand-new user redeeming a deep link never goes through r3_start,
+    # so without this upsert the panel gets username tg_<id> instead of tg_<username>.
+    await ensure_user(message.from_user)
     await redeem_and_reply(message, command.args.strip(), container, source="deeplink")

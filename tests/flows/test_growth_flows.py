@@ -64,6 +64,37 @@ async def test_start_gift_deep_link(g):
     assert any("Подарок активирован" in t for t in _texts(g))
 
 
+async def test_o4_deeplink_upserts_the_user_like_start_does(g, monkeypatch):
+    """O4: a brand-new user who never sent a plain /start still gets the same
+    telegram_users upsert (username/first_name) before a deep-link redemption,
+    so the panel username is built as tg_<username>, not tg_<id>."""
+    calls = []
+
+    async def fake_upsert(**kw):
+        calls.append(kw)
+
+    monkeypatch.setattr("app.services.users.get_or_create_telegram_user", fake_upsert)
+    code = await g.engine.create_gift(777, "pro", 1, payment_id=2)
+    await g.send(f"/start {code}", u=user(uid=USER, username="brandnew", first_name="Nova"))
+    assert calls and calls[0]["telegram_id"] == USER
+    assert calls[0]["username"] == "brandnew" and calls[0]["first_name"] == "Nova"
+
+
+async def test_o4_deeplink_upsert_for_promo_code_too(g, monkeypatch):
+    from app.services.promo import PromoCodeSpec
+
+    calls = []
+
+    async def fake_upsert(**kw):
+        calls.append(kw)
+
+    monkeypatch.setattr("app.services.users.get_or_create_telegram_user", fake_upsert)
+    spec = PromoCodeSpec(code="spring", days=7, plan_code="lite")
+    await g.engine.create_code(spec, created_by=1)
+    await g.send("/start spring", u=user(uid=USER, username="brandnew2"))
+    assert calls and calls[0]["telegram_id"] == USER and calls[0]["username"] == "brandnew2"
+
+
 async def test_login_deep_link_never_reaches_promo(g, monkeypatch):
     from app.routers import site_login
 
