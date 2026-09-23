@@ -286,14 +286,23 @@ async def yookassa_webhook(request: Request):
             return JSONResponse(status_code=200, content={"status": "ok", "event": "canceled"})
 
         elif event == "refund.succeeded":
-            logger.info(f"Webhook {payment_id}: refund succeeded")
+            # payment_id выше = id возврата (object.id). Возврат сверяется через API
+            # YooKassa, записывается в платеж, полный возврат отзывает оплаченный период.
+            logger.info(f"Webhook refund {payment_id}: refund succeeded")
             from app.services.jsonl_logger import log_payment_event
             log_payment_event(
                 event="yookassa_refund",
                 req_id=f"yookassa_{payment_id}",
                 payload=data.get("object", {}),
             )
-            return JSONResponse(status_code=200, content={"status": "ok", "event": "refund"})
+            from app.services.payments.errors import ProvisioningError
+            from app.services.payments.refunds import handle_refund_webhook
+            try:
+                processed = await handle_refund_webhook(data, bot_instance)
+            except ProvisioningError as rre:
+                logger.error(f"Webhook refund {payment_id}: retryable failure, returning 503. err={rre}")
+                return JSONResponse(status_code=503, content={"status": "retry", "reason": "refund_pending"})
+            return JSONResponse(status_code=200, content={"status": "ok", "event": "refund", "processed": processed})
 
         else:
             # waiting_for_capture и другие — просто ACK

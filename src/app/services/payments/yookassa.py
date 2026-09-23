@@ -1610,6 +1610,17 @@ async def handle_successful_payment(
             logger.error(f"[{trace_id}] failed to set needs_provisioning: {e2}")
 
 
+def _refunded_amount(payment) -> float:
+    """Сумма возвратов по платежу из ответа YooKassa (0.0 если нет/не читается)."""
+    try:
+        ra = getattr(payment, "refunded_amount", None)
+        if ra is None:
+            return 0.0
+        return float(ra.value)
+    except Exception:
+        return 0.0
+
+
 async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
     """
     Проверяет статус платежа в YooKassa.
@@ -1635,6 +1646,7 @@ async def check_payment_status(payment_id: str) -> Optional[Dict[str, Any]]:
             "description": payment.description,
             "metadata": payment.metadata or {},
             "paid": payment.paid,
+            "refunded_amount": _refunded_amount(payment),
             "created_at": payment.created_at.isoformat() if hasattr(payment, 'created_at') and payment.created_at and hasattr(payment.created_at, 'isoformat') else (str(payment.created_at) if hasattr(payment, 'created_at') and payment.created_at else None),
             "captured_at": payment.captured_at.isoformat() if hasattr(payment, 'captured_at') and payment.captured_at and hasattr(payment.captured_at, 'isoformat') else (str(payment.captured_at) if hasattr(payment, 'captured_at') and payment.captured_at else None),
         }
