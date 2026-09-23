@@ -34,7 +34,8 @@ NEW_LAYER = [
     SRC / "container.py", SRC / "services" / "ports.py", SRC / "services" / "shims.py",
     SRC / "services" / "notifications.py",
     # stream B
-    *(SRC / "services" / f"{m}.py" for m in ("accounts", "provisioning", "status", "devices", "obhod", "panel_sync")),
+    *(SRC / "services" / f"{m}.py" for m in ("accounts", "provisioning", "provisioning_rules", "credits", "status",
+                                                    "devices", "obhod", "panel_sync")),
     ROOT / "tests" / "panel",
 ]
 MANUAL = ["pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "premium-friend", "arcadia"]

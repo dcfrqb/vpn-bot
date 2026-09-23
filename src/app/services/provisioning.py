@@ -45,147 +45,38 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Protocol, Sequence
+from datetime import datetime
+from typing import Any, Callable, Optional
 
-from dateutil.relativedelta import relativedelta
-
-from app.domain.models import AdminTopic, Entitlement, EntitlementSource, PanelUser, SubKind, SubscriptionState
-from app.domain.plans import get_plan_device_limit, get_plan_name, get_plan_squad, is_obhod_eligible_plan
+from app.domain.models import AdminTopic, Entitlement, PanelUser, SubKind, SubscriptionState
+from app.domain.plans import get_plan_device_limit, get_plan_name, get_plan_squad
 from app.logger import logger
-from app.services.accounts import AccountsRepo, PanelAccounts, SqlAccountsRepo, SubRow, numeric_panel_id
+from app.services.accounts import AccountsRepo, PanelAccounts, SqlAccountsRepo, SubRow
+from app.services.credits import CreditsMixin, RevokeMixin
+from app.services.provisioning_rules import (  # noqa: F401 (re-exported)
+    CREDIT_MARKER_TTL_S,
+    DISABLED_ALERT_TTL_S,
+    GRACE_STATES,
+    LATE_PATCH_DELAY_S,
+    LIFETIME,
+    MAX_GRANT_RECORDS,
+    REVOKE_GRACE,
+    VERIFY_TOLERANCE,
+    GrantRefused,
+    LegacyObhodSync,
+    ObhodSync,
+    ProvisioningBusy,
+    ProvisioningError,
+    _now,
+    compute_target,
+    grant_key,
+    target_squads,
+)
 from app.services.remna_tariff import is_manual_squad_name, managed_tariff_squad_names, resolve_device_limit
 
-LIFETIME = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
-GRACE_STATES = ("active", "ended")  # subscriptions.grace_state written by stream C
-VERIFY_TOLERANCE = timedelta(minutes=5)
-REVOKE_GRACE = timedelta(minutes=5)
 LOCK_TTL_S = 120
 LOCK_WAIT_S = 30.0
 LOCK_POLL_S = 0.5
-MAX_GRANT_RECORDS = 30
-LATE_PATCH_DELAY_S = 3.0  # review N6: a timed-out PATCH may land a bit later
-DISABLED_ALERT_TTL_S = 6 * 3600
-CREDIT_MARKER_TTL_S = 90 * 24 * 3600
-
-
-class ProvisioningError(Exception):
-    """Access was not applied (panel/DB failure). Retryable."""
-
-
-class ProvisioningBusy(ProvisioningError):
-    """Another grant for this user holds the lock longer than LOCK_WAIT_S."""
-
-
-class GrantRefused(Exception):
-    """Expected refusal: nothing was written. ``reason``: disabled | bad_plan."""
-
-    def __init__(self, reason: str, message: str = ""):
-        super().__init__(message or reason)
-        self.reason = reason
-
-
-class ObhodSync(Protocol):
-    """How the obhod account follows the main one (2.x obhod_service in prod)."""
-
-    async def on_main_granted(self, telegram_id: int, plan_code: str, valid_until: datetime, trace_id: str) -> None: ...
-
-    async def on_main_revoked(self, telegram_id: int, trace_id: str) -> None: ...
-
-
-class LegacyObhodSync:
-    """ObhodSync over services.obhod_service (one DB session per call).
-    Soft-fail: an obhod problem never breaks the main grant."""
-
-    async def _session(self):
-        from app.db import session as db_session
-
-        if db_session.SessionLocal is None:
-            return None
-        return db_session.SessionLocal()
-
-    async def on_main_granted(self, telegram_id: int, plan_code: str, valid_until: datetime, trace_id: str) -> None:
-        from app.services import obhod_service
-
-        factory = await self._session()
-        if factory is None:
-            return
-        naive = valid_until.astimezone(timezone.utc).replace(tzinfo=None)
-        try:
-            async with factory as session:
-                if is_obhod_eligible_plan(plan_code):
-                    await obhod_service.ensure_obhod_for_pro(
-                        session=session, telegram_user_id=int(telegram_id), plan_code=plan_code,
-                        valid_until=naive, trace_id=trace_id,
-                    )
-                else:
-                    await obhod_service.deactivate_obhod(session, int(telegram_id), trace_id=trace_id)
-                await session.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[{trace_id}] obhod sync soft-fail tg={telegram_id} ({type(e).__name__})")
-
-    async def on_main_revoked(self, telegram_id: int, trace_id: str) -> None:
-        from app.services import obhod_service
-
-        factory = await self._session()
-        if factory is None:
-            return
-        try:
-            async with factory as session:
-                await obhod_service.deactivate_obhod(session, int(telegram_id), trace_id=trace_id)
-                await session.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[{trace_id}] obhod revoke soft-fail tg={telegram_id} ({type(e).__name__})")
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def grant_key(entitlement: Entitlement, trace_id: str) -> str:
-    return f"pay:{entitlement.payment_id}" if entitlement.payment_id else f"trace:{trace_id}"
-
-
-def compute_target(entitlement: Entitlement, current: Optional[datetime], now: datetime,
-                   months: Optional[int] = None) -> datetime:
-    """New expiry from max(now, current): ``months`` (calendar months, as 2.x
-    payments) or ``days``; or an exact ``until``; or lifetime. Never earlier
-    than ``current`` (the panel date is not shortened)."""
-    if entitlement.is_lifetime or (current is not None and current.year >= LIFETIME.year):
-        return max(LIFETIME, current) if current is not None else LIFETIME
-    base = current if (current is not None and current > now) else now
-    if months:
-        target = base + relativedelta(months=int(months))
-    elif entitlement.until is not None:
-        until = entitlement.until if entitlement.until.tzinfo else entitlement.until.replace(tzinfo=timezone.utc)
-        target = until.astimezone(timezone.utc)
-    elif entitlement.days is not None:
-        target = base + timedelta(days=int(entitlement.days))
-    else:
-        raise GrantRefused("bad_entitlement", "entitlement needs months, days, until or is_lifetime")
-    if current is not None and current > target:
-        return current  # never shorten (a manual extension is already ahead)
-    return min(target, LIFETIME)
-
-
-def target_squads(current_names: Sequence[str], plan_squad: str, *, grace_squad: Optional[str] = None,
-                  clear_grace: bool = True) -> list[str]:
-    """Full target list of NON-manual squad names for RemnaGateway.update_user:
-    drop the bot's tariff squads (and the grace squad), add the plan squad,
-    keep the rest (us-2, esp, full, obhod, ...). Manual squads are kept by the
-    gateway itself and never appear here."""
-    managed = managed_tariff_squad_names()
-    out: list[str] = []
-    for n in current_names:
-        if is_manual_squad_name(n) or n in managed:
-            continue
-        if clear_grace and grace_squad and n == grace_squad:
-            continue
-        if n not in out:
-            out.append(n)
-    if plan_squad not in out:
-        out.append(plan_squad)
-    return out
 
 
 @dataclass
@@ -194,7 +85,7 @@ class _Lock:
     token: Optional[str]
 
 
-class PanelProvisioningService:
+class PanelProvisioningService(RevokeMixin, CreditsMixin):
     """ProvisioningService port (app.services.ports)."""
 
     def __init__(
@@ -590,126 +481,3 @@ class PanelProvisioningService:
         if plan_squad not in names:
             raise ProvisioningError(f"plan squad {plan_squad!r} missing after grant")
         return user
-
-    # -------------------------------------------------------------- revoke
-
-    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str,
-                     trace_id: str) -> bool:
-        tg = int(telegram_id)
-        if SubKind(sub_kind) is SubKind.OBHOD:
-            await self.obhod.on_main_revoked(tg, trace_id)
-            await self._invalidate(tg)
-            return True
-        lock = await self._lock(tg)
-        try:
-            user = await self.accounts.find_main(tg)
-            row = await self.repo.get_subscription(tg, SubKind.MAIN)
-            if user is None:
-                return False
-            names = await self._squad_names(user)
-            manual = [n for n in names if is_manual_squad_name(n)]
-            is_lifetime = bool(user.expire_at and user.expire_at.year >= 2099)
-            if is_lifetime or manual:
-                await self._alert(
-                    "Отзыв доступа пропущен: подписка навсегда или ручной сквад.\n"
-                    f"Telegram ID: {tg}\nПричина: {reason}\nРешите вручную в панели.",
-                    dedup_key=f"revoke_skipped:{tg}:{trace_id}",
-                )
-                return False
-            now = self.clock()
-            new_expire = now + REVOKE_GRACE
-            if user.expire_at is None or user.expire_at > new_expire:
-                await self.remna.update_user(user.id, expire_at=new_expire, current=user)
-            if row is not None:
-                cfg = dict(row.config_data or {})
-                cfg["revoked"] = {"at": now.isoformat(), "reason": reason[:200], "trace": trace_id}
-                await self.repo.save_subscription(replace(
-                    row, active=False, provisioning_state="expired", valid_until=new_expire, config_data=cfg,
-                ))
-            await self.obhod.on_main_revoked(tg, trace_id)
-            await self._invalidate(tg)
-            logger.info(f"[{trace_id}] provisioning: revoked tg={tg} reason={reason[:80]!r}")
-            return True
-        finally:
-            await self._unlock(lock)
-
-    # ------------------------------------------------------------- credits
-
-    async def _credit_once(self, trace_id: str) -> bool:
-        from app.infra.redis.flags import set_once
-
-        got = await set_once(f"credit:{trace_id}", "1", ttl=CREDIT_MARKER_TTL_S)
-        if got is False:
-            logger.info(f"[{trace_id}] provisioning: credit already applied")
-            return False
-        return True
-
-    async def add_days(self, telegram_id: int, days: int, *, trace_id: str, reason: str = "") -> Optional[datetime]:
-        """Extend an EXISTING main account by ``days`` from max(now, expiry).
-        Returns the new expiry, the unchanged one for lifetime, None when there
-        is no account / not applied. Squads and limits are not touched."""
-        if int(days) <= 0:
-            raise ValueError("days must be positive")
-        tg = int(telegram_id)
-        user = await self.accounts.find_main(tg)
-        if user is None:
-            return None
-        if user.expire_at and user.expire_at.year >= 2099:
-            return user.expire_at
-        if (user.status or "").upper() == "DISABLED":
-            return None
-        if not await self._credit_once(trace_id):
-            return user.expire_at
-        now = self.clock()
-        current = user.expire_at if (user.expire_at and user.expire_at.year >= 2020) else None
-        target = compute_target(Entitlement(plan_code="-", source=EntitlementSource.ADMIN, days=int(days)),
-                                current, now)
-        updated = await self.remna.update_user(user.id, expire_at=target, current=user)
-        row = await self.repo.get_subscription(tg, SubKind.MAIN)
-        if row is not None and row.active:
-            await self.repo.save_subscription(replace(row, valid_until=updated.expire_at or target,
-                                                      remnawave_expected_expire_at=updated.expire_at or target))
-        await self._invalidate(tg)
-        logger.info(f"[{trace_id}] provisioning: +{days}d tg={tg} reason={reason[:80]!r}")
-        return updated.expire_at or target
-
-    async def add_traffic(self, telegram_id: int, extra_bytes: int, *, trace_id: str,
-                          sub_kind: SubKind = SubKind.OBHOD) -> Optional[int]:
-        """Raise the traffic cap of the obhod (default) or main account by
-        ``extra_bytes``. 0 (unlimited) stays unlimited. Returns the new cap."""
-        if int(extra_bytes) <= 0:
-            raise ValueError("extra_bytes must be positive")
-        tg = int(telegram_id)
-        if SubKind(sub_kind) is SubKind.OBHOD:
-            row = await self.repo.get_subscription(tg, SubKind.OBHOD)
-            pid = numeric_panel_id(row.remna_user_id) if row and row.active else None
-            user = await self.remna.get_user(pid) if pid else None
-        else:
-            user = await self.accounts.find_main(tg)
-        if user is None:
-            return None
-        cur = int(user.traffic_limit_bytes or 0)
-        if cur == 0:
-            return 0
-        if not await self._credit_once(trace_id):
-            return cur
-        new = cur + int(extra_bytes)
-        await self.remna.update_user(user.id, traffic_limit_bytes=new, current=user)
-        await self._invalidate(tg)
-        return new
-
-    async def add_devices(self, telegram_id: int, extra: int, *, trace_id: str) -> Optional[int]:
-        """Raise the HWID limit of the main account by ``extra``. 0 (unlimited)
-        and NULL (panel fallback) are left alone. Returns the new limit."""
-        if int(extra) <= 0:
-            raise ValueError("extra must be positive")
-        tg = int(telegram_id)
-        user = await self.accounts.find_main(tg)
-        if user is None or user.device_limit in (None, 0):
-            return user.device_limit if user else None
-        if not await self._credit_once(trace_id):
-            return user.device_limit
-        new = int(user.device_limit) + int(extra)
-        await self.remna.update_user(user.id, device_limit=new, current=user)
-        await self._invalidate(tg)
-        return new
