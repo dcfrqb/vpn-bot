@@ -2,7 +2,7 @@
 Таблица переходов между экранами с enforce правил
 Определяет, какие переходы разрешены и какие параметры требуются
 """
-from typing import Dict, Set, Optional, Literal
+from typing import Dict, Set, Literal
 from app.ui.screens import ScreenID
 from app.logger import logger
 

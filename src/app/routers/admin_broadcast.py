@@ -16,10 +16,9 @@ Admin-broadcast FSM wizard + команды управления рассылк�
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
-from aiogram import Bot, F, Router, types
+from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -32,9 +31,6 @@ from app.logger import logger
 from app.services.broadcast import (
     CLOSE_CALLBACK_DATA,
     SEGMENT_ACTIVE,
-    SEGMENT_ALL,
-    SEGMENT_EXPIRED,
-    SEGMENT_NEVER,
     UNSUB_CALLBACK_DATA,
     VALID_SEGMENTS,
     cancel_broadcast,

@@ -4,14 +4,12 @@
 from typing import Optional, Union
 from aiogram import types
 from app.ui.screens.base import BaseScreen
-from app.ui.viewmodels.base import BaseViewModel
 from app.ui.screens import ScreenID
 from app.ui.viewmodels.main_menu import MainMenuViewModel
 from app.ui.renderers.main_menu import render_main_menu
 from app.ui.keyboards.main_menu import build_main_menu_keyboard
 from app.routers.subscription_view import SubscriptionViewModel
 from app.config import is_admin
-from app.logger import logger
 
 
 class MainMenuScreen(BaseScreen):

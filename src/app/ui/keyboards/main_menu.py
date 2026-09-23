@@ -5,7 +5,6 @@ from aiogram import types
 from app.ui.viewmodels.main_menu import MainMenuViewModel
 from app.ui.screens import ScreenID
 from app.ui.callbacks import build_cb
-from app.config import is_admin
 
 
 async def build_main_menu_keyboard(viewmodel: MainMenuViewModel) -> types.InlineKeyboardMarkup:

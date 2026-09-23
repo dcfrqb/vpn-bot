@@ -4,7 +4,7 @@
 
 TODO: Удалить после полной миграции всех callbacks
 """
-from aiogram import Router, types, F
+from aiogram import Router, types
 from app.logger import logger
 from app.ui.screen_manager import get_screen_manager
 from app.ui.screens import ScreenID

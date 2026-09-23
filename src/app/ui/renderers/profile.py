@@ -3,7 +3,6 @@ Renderer для экрана профиля
 """
 from app.ui.viewmodels.profile import ProfileViewModel
 from app.utils.html import escape_html
-from datetime import datetime
 
 
 async def render_profile(viewmodel: ProfileViewModel) -> str:

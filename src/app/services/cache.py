@@ -1,8 +1,6 @@
 """Сервис кэширования данных пользователей и подписок"""
-import json
 import pickle
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
 from app.config import settings
 from app.logger import logger
 

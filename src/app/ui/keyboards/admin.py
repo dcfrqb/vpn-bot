@@ -2,7 +2,6 @@
 Keyboard builders для админских экранов
 """
 from aiogram import types
-from typing import Optional
 from app.ui.viewmodels.admin import (
     AdminPanelViewModel,
     AdminStatsViewModel,
@@ -102,7 +101,6 @@ async def build_admin_users_keyboard(viewmodel: AdminUsersViewModel) -> types.In
 async def build_admin_payments_keyboard(viewmodel: AdminPaymentsViewModel) -> types.InlineKeyboardMarkup:
     """Строит клавиатуру экрана списка платежей с использованием Pagination"""
     from app.core.pagination import Pagination
-    import json
     
     keyboard = []
     

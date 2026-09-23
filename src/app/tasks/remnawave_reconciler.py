@@ -20,9 +20,9 @@
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, or_
 
 from app.config import settings
 from app.db.session import SessionLocal

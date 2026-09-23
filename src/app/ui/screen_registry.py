@@ -7,7 +7,6 @@ ScreenManager использует этот реестр для получени
 from typing import Dict, Type, Callable, Optional
 from app.ui.screens import ScreenID
 from app.ui.screens.base import BaseScreen
-from app.ui.viewmodels.base import BaseViewModel
 from app.logger import logger
 
 

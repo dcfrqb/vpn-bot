@@ -2,7 +2,7 @@
 Навигационные правила и проверки
 Переименовано из ui/navigation.py для лучшей организации
 """
-from typing import Dict, Set, Optional, Literal
+from typing import Dict, Set, Literal
 from app.ui.screens import ScreenID
 from app.logger import logger
 

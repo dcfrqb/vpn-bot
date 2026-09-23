@@ -17,7 +17,7 @@ Both sides of the comparison use UTC calendar dates extracted from timezone-awar
 datetimes — no hour/minute drift, no naive/aware mixing.
 """
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from aiogram import Bot

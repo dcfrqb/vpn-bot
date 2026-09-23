@@ -15,9 +15,7 @@ from app.navigation.navigator import get_navigator
 # UI EXCEPTION: импорт AdminPanelScreen для передачи в ScreenManager
 from app.ui.screens.admin import (
     AdminPanelScreen,
-    AdminStatsScreen,
-    AdminUsersScreen,
-    AdminPaymentsScreen
+    AdminUsersScreen
 )
 
 router = Router(name="admin")

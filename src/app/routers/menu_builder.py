@@ -15,7 +15,6 @@ This module will be removed in a future version.
 """
 import warnings
 from typing import Optional
-from datetime import datetime
 from app.utils.html import escape_html, safe_format_user_name
 from app.routers.subscription_view import SubscriptionViewModel, render_subscription_block
 

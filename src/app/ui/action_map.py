@@ -1,9 +1,8 @@
 """
 Таблица действий для экранов - явное определение ACTION → EFFECT
 """
-from typing import Dict, Set, Optional, Literal, Tuple
+from typing import Dict, Optional, Literal, Tuple
 from app.ui.screens import ScreenID
-from app.ui.action_types import ActionType
 
 # Тип эффекта действия
 ActionEffect = Literal["NAVIGATION", "STATE", "FLOW"]

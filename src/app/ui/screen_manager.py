@@ -5,7 +5,7 @@ import time
 import uuid
 import hashlib
 import asyncio
-from typing import Optional, Dict, Type, List, Tuple, Union
+from typing import Optional, Dict, List, Tuple, Union
 from aiogram import types
 from aiogram.exceptions import TelegramBadRequest
 from app.logger import logger
@@ -13,11 +13,11 @@ from app.ui.screens import ScreenID
 from app.ui.screens.base import BaseScreen
 from app.ui.viewmodels.base import BaseViewModel
 from app.ui.navigation import can_navigate, UserRole
-from app.navigation.navigator import get_navigator, NavigationResult, RenderMode
-from app.navigation.callback_schema import CallbackAction, CallbackSchema
+from app.navigation.navigator import get_navigator, RenderMode
+from app.navigation.callback_schema import CallbackAction
 from app.ui.screen_registry import get_screen_registry
-from app.ui.action_types import ActionType, get_action_type
-from app.ui.action_map import ACTION_MAP, get_action_effect, is_action_allowed
+from app.ui.action_types import ActionType
+from app.ui.action_map import get_action_effect
 from app.config import is_admin
 
 # Экраны, любые действия на которых доступны только админам (05 S-7).

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass
 
-from app.remnawave.client import RemnaClient, RemnaUser, RemnaSubscription
+from app.remnawave.client import RemnaClient
 from app.services.remna_service import ensure_user_in_remnawave
 from app.logger import logger
 

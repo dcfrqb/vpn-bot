@@ -5,8 +5,7 @@
 from aiogram import Router, types, F
 from app.logger import logger
 from app.ui.screen_manager import get_screen_manager
-from app.ui.callbacks import parse_cb, is_ui_callback, CallbackParseError
-from app.ui.screens import ScreenID
+from app.ui.callbacks import parse_cb, CallbackParseError
 
 router = Router(name="ui")
 

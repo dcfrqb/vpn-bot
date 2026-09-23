@@ -15,7 +15,7 @@
 Жизненный цикл обхода привязан к main: обновление/истечение Pro синкает обход.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta

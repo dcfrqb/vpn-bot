@@ -127,7 +127,7 @@ async def test_cmd_start_calls_get_or_create_telegram_user(mock_promo_message):
          patch("app.routers.start.get_main_menu_viewmodel", new=AsyncMock()), \
          patch("app.routers.start.get_or_create_telegram_user", new=AsyncMock()) as mock_upsert, \
          patch("app.routers.start.invalidate_sync_cache", new=AsyncMock()), \
-         patch("app.routers.start.get_cached_sync_result", new=AsyncMock(return_value=None)):
+         patch("app.services.cache.get_cached_sync_result", new=AsyncMock(return_value=None)):
 
         mock_get_nav.return_value = MagicMock()
         mock_get_nav.return_value.get_current_screen = MagicMock(return_value=None)

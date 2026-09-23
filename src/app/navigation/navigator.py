@@ -10,7 +10,6 @@ from app.ui.screens import ScreenID
 from app.navigation.callback_schema import CallbackAction
 from app.navigation.rules import can_navigate, UserRole
 from app.logger import logger
-from app.core.errors import ValidationError
 
 
 class RenderMode(Enum):

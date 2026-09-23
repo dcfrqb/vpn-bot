@@ -5,10 +5,9 @@ from typing import Optional, TYPE_CHECKING
 from datetime import datetime
 from app.services.sync_service import SyncService, RemnaUnavailableError
 from app.services.cache import get_cached_sync_result
-from app.routers.subscription_view import SubscriptionViewModel, create_subscription_view_model
+from app.routers.subscription_view import create_subscription_view_model
 from app.ui.screens.main_menu import MainMenuScreen
 from app.ui.screens.profile import ProfileScreen
-from app.ui.screens import ScreenID
 from app.logger import logger
 
 if TYPE_CHECKING:  # только для аннотаций, без рантайм-импорта (избегаем циклов)

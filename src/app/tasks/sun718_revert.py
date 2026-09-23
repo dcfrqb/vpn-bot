@@ -114,7 +114,6 @@ class Sun718RevertTask:
         from app.db.models import Payment as PaymentModel, TelegramUser
         from app.remnawave.client import RemnaClient
         from app.core.plans import get_plan_squad
-        from app.config import settings
         from app.routers.start import _get_last_paid_plan_code
         from sqlalchemy import select
 

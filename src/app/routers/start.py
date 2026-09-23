@@ -8,21 +8,12 @@ import uuid
 import traceback
 from app.logger import logger
 from app.services.users import get_user_active_subscription, get_or_create_telegram_user
-from app.services.sync_service import SyncService, RemnaUnavailableError, SyncResult
-from app.services.connection import can_user_connect
-from app.services.cache import get_cached_sync_result, invalidate_sync_cache
-from app.routers.menu_builder import build_main_menu_text, MenuData
-from app.routers.subscription_view import SubscriptionViewModel, create_subscription_view_model
+from app.services.sync_service import SyncService, RemnaUnavailableError
+from app.services.cache import invalidate_sync_cache
 from app.keyboards import (
     get_main_menu_keyboard,
-    get_plans_keyboard,
-    get_payment_keyboard,
     get_back_to_plans_keyboard,
-    get_help_keyboard,
-    get_subscription_info_keyboard,
-    get_payment_method_keyboard,
-    get_period_keyboard,
-    get_inactive_subscription_keyboard
+    get_subscription_info_keyboard
 )
 # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
 from app.ui.screens import ScreenID
@@ -563,7 +554,6 @@ async def _legacy_plan_amount_or_refuse(callback: types.CallbackQuery, plan_code
     """Цена legacy-тарифа для этого юзера или None (тариф ему не продается,
     вместо экрана с кнопкой «Оплатить» показан отказ)."""
     from app.services.checkout import resolve_purchase_amount
-    from app.keyboards import get_back_to_plans_keyboard
 
     amount = await resolve_purchase_amount(plan_code, months, callback.from_user.id)
     # UI EXCEPTION: прямой вызов UI метода

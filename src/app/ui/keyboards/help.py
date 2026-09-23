@@ -3,7 +3,6 @@ Keyboard builder для экрана помощи
 """
 from aiogram import types
 from app.ui.viewmodels.base import BaseViewModel
-from app.ui.screens import ScreenID
 from app.ui.callbacks import build_cb
 
 

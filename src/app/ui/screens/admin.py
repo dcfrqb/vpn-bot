@@ -78,7 +78,6 @@ class AdminStatsScreen(BaseScreen):
         if not (user_id and is_admin(user_id)):
             logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
             return False
-        from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_statistics
         
         if action == "refresh":
@@ -147,7 +146,6 @@ class AdminUsersScreen(BaseScreen):
         if not (user_id and is_admin(user_id)):
             logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
             return False
-        from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_users_list
         from app.core.pagination import Pagination
         import json
@@ -259,7 +257,6 @@ class AdminPaymentsScreen(BaseScreen):
         if not (user_id and is_admin(user_id)):
             logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
             return False
-        from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_payments_list
         from app.core.pagination import Pagination
         import json

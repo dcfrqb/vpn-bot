@@ -5,7 +5,6 @@ Renderers для payment UI
 Все тексты платежей должны формироваться здесь, не в handlers.
 """
 from typing import Optional
-from datetime import datetime
 from app.utils.html import escape_html
 
 
