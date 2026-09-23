@@ -58,7 +58,7 @@ def _pager(section: str, page: int, total_pages: int, suffix: str = "") -> list:
 
 def users(data: dict) -> View:
     lines = [f"👥 <b>Пользователи</b> (всего {data.get('total', 0)}, стр. {data.get('page', 1)}"
-             f" из {data.get('total_pages', 1)})", ""]
+             f" из {max(1, int(data.get('total_pages') or 1))})", ""]
     for u in data.get("users") or []:
         name = u.get("username") or u.get("first_name") or "—"
         plan = u.get("subscription_plan") or "—"
@@ -77,10 +77,12 @@ _STATUS_ICON = {"succeeded": "✅", "pending": "⏳", "canceled": "❌", "failed
 def payments(data: dict, flt: str) -> View:
     flt = flt if flt in PAYMENT_FILTERS else "all"
     lines = [f"💳 <b>Платежи</b> · {PAYMENT_FILTERS[flt]}",
-             f"Всего: {data.get('total', 0)}, стр. {data.get('page', 1)} из {data.get('total_pages', 1)}", ""]
+             f"Всего: {data.get('total', 0)}, стр. {data.get('page', 1)} из {max(1, int(data.get('total_pages') or 1))}",
+             ""]
     for i, p in enumerate(data.get("payments") or [], 1):
         icon = _STATUS_ICON.get(p.get("status"), "❓")
-        lines.append(f"{i}. {icon} {fmt_rub(p.get('amount'))} · @{h(p.get('username'))} · {h(p.get('provider'))}")
+        who = f"@{h(p.get('username'))}" if p.get("username") else f"<code>{h(p.get('telegram_id') or '—')}</code>"
+        lines.append(f"{i}. {icon} {fmt_rub(p.get('amount'))} · {who} · {h(p.get('provider'))}")
     if not data.get("payments"):
         lines.append("Платежей не найдено.")
     rows = [

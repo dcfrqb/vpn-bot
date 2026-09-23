@@ -58,14 +58,17 @@ def _device_line(dev: DeviceInfo) -> str:
     return f"{icon} {h(name)}, последний раз онлайн: {_last_seen(dev.updated_at)}"
 
 
-def list_text(devices: Sequence[DeviceInfo], used: int, limit: Optional[int]) -> str:
+def list_text(devices: Sequence[DeviceInfo], used: int, limit: Optional[int], *,
+              unlink_enabled: bool = False) -> str:
     if not devices:
         return EMPTY
     limit_str = h(limit) if limit else "без лимита"
     lines = [f"📱 <b>Твои устройства</b> ({h(used)} из {limit_str})", ""]
     lines.extend(_device_line(d) for d in devices)
     lines.append("")
-    lines.append("Лишнее можно отвязать, освободится место под новое устройство.")
+    # Review UX M3: promise unlinking only when the buttons are there.
+    lines.append("Лишнее можно отвязать, освободится место под новое устройство." if unlink_enabled
+                 else "Чтобы освободить место под новое устройство, напиши в поддержку.")
     return "\n".join(lines)
 
 

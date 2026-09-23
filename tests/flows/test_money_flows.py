@@ -59,7 +59,7 @@ async def test_period_shows_one_url_button_and_no_autorenew_when_flag_off(money_
     await f.press(Period(c="standard", m=3).pack())
     screen = _last_screen(f)
     urls = [b for b in _buttons(screen) if b["url"]]
-    assert len(urls) == 1 and urls[0]["text"] == f"Оплатить {fmt_rub(get_plan_price('standard', 3))}"
+    assert len(urls) == 1 and urls[0]["text"] == f"💳 Оплатить {fmt_rub(get_plan_price('standard', 3))}"
     assert "Автопродление" not in screen.text
     assert not [b for b in _buttons(screen) if (b["data"] or "").startswith(("ps:", "ap:"))]
     rec = next(iter(f.store.payments.values()))

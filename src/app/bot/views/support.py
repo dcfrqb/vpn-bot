@@ -7,12 +7,13 @@ from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.views import kb, url_btn
 from app.bot.views.common import back_to_main_row
-from app.domain.texts.common import BTN_OFFER, BTN_PRIVACY, BTN_SUPPORT, HELP_TEXT, OFFER_URL, support_url
+from app.domain.texts.common import BTN_OFFER, BTN_PRIVACY, BTN_SUPPORT, OFFER_URL, help_text, support_url
 
 
-def render(*, support_handle: Optional[str] = None, privacy_url: Optional[str] = None) -> tuple[str, InlineKeyboardMarkup]:
+def render(*, support_handle: Optional[str] = None, privacy_url: Optional[str] = None,
+           unlink_enabled: bool = False) -> tuple[str, InlineKeyboardMarkup]:
     rows: list[list] = [[url_btn(BTN_SUPPORT, support_url(support_handle))], [url_btn(BTN_OFFER, OFFER_URL)]]
     if privacy_url:
         rows.append([url_btn(BTN_PRIVACY, privacy_url)])
     rows.append(back_to_main_row())
-    return HELP_TEXT, kb(rows)
+    return help_text(unlink_enabled), kb(rows)

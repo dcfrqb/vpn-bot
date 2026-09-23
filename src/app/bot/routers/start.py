@@ -25,11 +25,23 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
 )
 
 
+def commands_for(settings: Any = None) -> list[BotCommand]:
+    """The command menu without commands that are switched off (review UX m12)."""
+    if settings is None:
+        from app.config import settings
+    off = set()
+    if not getattr(settings, "PROMO_TRIAL_ENABLED", True):
+        off.add("trial")
+    if not getattr(settings, "PROMO_CODES_ENABLED", False):
+        off.add("promo")
+    return [c for c in BOT_COMMANDS if c.command not in off]
+
+
 async def set_my_commands(bot: Any) -> None:
     """Registers the bot command list shown in the Telegram UI. Called once
     from app.main.setup_dispatcher after the dispatcher is built."""
     try:
-        await bot.set_my_commands(list(BOT_COMMANDS))
+        await bot.set_my_commands(commands_for())
     except Exception as e:  # noqa: BLE001 - never block startup on this
         logger.warning(f"set_my_commands failed: {type(e).__name__}: {e}")
 
@@ -65,7 +77,21 @@ async def cmd_start(message: types.Message, **data) -> None:
 
     await _ensure_user(message.from_user)
     await _reset_broadcast_opt_out(message.from_user.id)
+    await _drop_promo_input(data.get("state"))
     await show_main_screen(message, force=True, **data)
+
+
+async def _drop_promo_input(state: Any) -> None:
+    """/start while the bot waits for a promo code ends that wait (review UX M7)."""
+    if state is None:
+        return
+    try:
+        from app.bot.routers.trial_promo import PromoInput
+
+        if await state.get_state() == PromoInput.code.state:
+            await state.clear()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"r3_start: promo state reset failed ({type(e).__name__})")
 
 
 @router.message(Command("help"))

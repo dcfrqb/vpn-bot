@@ -31,7 +31,9 @@ class PlanOption:
 
 
 def support_url(settings: Any) -> Optional[str]:
-    handle = getattr(settings, "SUPPORT_HANDLE", None) or getattr(settings, "ADMIN_SUPPORT_USERNAME", None)
+    from app.domain.texts.common import support_handle
+
+    handle = support_handle(settings)
     if not handle:
         return None
     return f"https://t.me/{str(handle).strip().lstrip('@')}"
@@ -48,7 +50,7 @@ def plans_view(plans: Sequence[PlanOption], *, gifts: bool, gift: bool = False) 
         rows.append([(T.btn_plan(p.name, p.from_rub), cb)])
     if gifts and not gift:
         rows.append([(T.BTN_GIFT, Gift(a="buy"))])
-    rows.append([(T.BTN_BACK, Nav(s="plans") if gift else Nav(s="main"))])
+    rows.append([(T.BTN_BACK, Nav(s="plans")) if gift else (T.BTN_BACK_MAIN, Nav(s="main"))])
     return text, kb(rows)
 
 
@@ -100,7 +102,7 @@ def message_view(text: str, *, back_to_plans: bool = True, support: Optional[str
         rows.append([url_btn(T.BTN_SUPPORT, support)])
     if back_to_plans:
         rows.append([(T.BTN_PLANS, Nav(s="plans"))])
-    rows.append([(T.BTN_BACK, Nav(s="main"))])
+    rows.append([(T.BTN_BACK_MAIN, Nav(s="main"))])
     return text, kb(rows)
 
 
@@ -132,7 +134,7 @@ class TelegramMoneyUi:
         return paid_kb(payment_id, refund_button=refund_button)
 
     def gift_paid(self) -> Any:
-        return kb([[(T.BTN_BACK, Nav(s="main"))]])
+        return kb([[(T.BTN_BACK_MAIN, Nav(s="main"))]])
 
     def review_admin(self, payment_id: int) -> Any:
         return kb([[(T.BTN_REVIEW_OK, AdmReview(a="ok", pid=payment_id)),

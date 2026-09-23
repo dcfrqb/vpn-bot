@@ -12,6 +12,7 @@ from app.bot.views import devices as devices_view
 from app.bot.views import render
 from app.config import settings
 from app.domain.texts import devices as t
+from app.domain.texts.common import support_handle
 
 router = Router(name="r3_devices")
 
@@ -23,11 +24,13 @@ async def show_devices_screen(event, *, answer_callback: bool = True, **data) ->
 
     unlink_enabled = bool(settings.DEVICES_UNLINK_ENABLED)
     devices = await devices_service.list_devices(user.id)
-    device_limit = None
+    device_limit, active = None, True
     if status_service is not None:
         state = await status_service.get_state(user.id)
         device_limit = state.device_limit
-    text, markup = devices_view.list_screen(devices, device_limit=device_limit, unlink_enabled=unlink_enabled)
+        active = bool(state.active or state.stale)
+    text, markup = devices_view.list_screen(devices, device_limit=device_limit, unlink_enabled=unlink_enabled,
+                                            support_handle=support_handle(settings), active=active)
     await render(event, text, markup, answer_callback=answer_callback)
 
 

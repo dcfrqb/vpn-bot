@@ -103,7 +103,8 @@ class AutopayService:
             await self._turn_off(sub, reason="plan is not sold any more")
             return False
         return await self.d.notifier.notify_user(
-            sub.telegram_id, T.autopay_notice(get_plan_name(quote.plan_code), quote.months, quote.amount_rub),
+            sub.telegram_id, T.autopay_notice(get_plan_name(quote.plan_code), quote.months, quote.amount_rub,
+                                              charge_on=sub.valid_until - CHARGE_BEFORE),
             html=True, reply_markup=self.d.ui.autopay_notice(),
             dedup_key=f"autopay:notice:{period_key(sub)}", dedup_ttl=5 * 86400,
         )

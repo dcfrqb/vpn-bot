@@ -11,14 +11,16 @@ from __future__ import annotations
 from typing import Optional
 
 from app.domain.texts import days_ru, devices_ru, fmt_date_msk, fmt_gb
+from app.domain.texts import common as _c
 
 # --------------------------------------------------------------- buttons
 
-BTN_RENEW = "Продлить подписку"
-BTN_DEVICES = "Мои устройства"
-BTN_CONNECT = "Как подключиться"
-BTN_ARTICLE = "Инструкция"
-BTN_OBHOD_PACKAGES = "Докупить трафик обхода"
+BTN_RENEW = "💳 Продлить подписку"
+BTN_OBHOD_PACKAGES = "➕ Докупить трафик обхода"
+# Shared vocabulary (review UX M4)
+BTN_CONNECT = _c.BTN_CONNECT
+BTN_DEVICES = _c.BTN_DEVICES
+BTN_ARTICLE = _c.BTN_ARTICLE
 
 # --------------------------------------------------------------- reminders
 
@@ -82,7 +84,7 @@ def device_added(model: Optional[str], used: Optional[int], limit: Optional[int]
 
 NOT_CONNECTED = (
     "Похоже, VPN еще ни разу не подключался. Это делается за пару минут: "
-    "поставь приложение и добавь в него свою ссылку. Нажми кнопку ниже, там пошаговая инструкция."
+    "поставь приложение и добавь в него свою ссылку. Нажми кнопку ниже, там ссылка и шаги."
 )
 
 

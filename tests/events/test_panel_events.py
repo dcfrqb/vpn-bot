@@ -198,7 +198,7 @@ async def test_obhod_limited_upsells_packages_once_a_month(env):
     assert await p.process(parse_event(event("user.limited", u, ts=NOW))) == "deduped"
     msg = user_sent(env)[0]
     assert msg.target == 700001 and "100 ГБ" in plain(msg.text) and "докупить" in msg.text
-    assert buttons(msg) == ["ui:subscription_plans:obhod:-"]
+    assert buttons(msg) == ["n:plans:obhod"]  # the 3.0 packages screen (review UX m24)
 
 
 async def test_obhod_owner_found_by_username_when_row_is_missing(env):

@@ -241,3 +241,36 @@ async def test_admin_panel_opens_for_admin(g):
     assert any("Админ-панель" in t for t in _texts(g))
     await g.send("/admin", u=user(ADMIN))
     assert sum("Админ-панель" in t for t in _texts(g)) == 2
+
+
+# ----------------------------------------------------------------- review UX M7 / m12
+
+
+async def test_commands_are_not_taken_as_a_promo_code(g):
+    await g.send("/promo")
+    await g.send("/start")
+    texts = _texts(g)
+    assert not any("/start" in t and "не найден" in t for t in texts)
+    assert "Профиль" in texts[-1]
+    await g.send("spring")  # the wait ended with /start: plain text is not a code now
+    assert not any("spring" in t for t in _texts(g))
+
+
+async def test_trial_command_answers_when_trial_is_off(g, monkeypatch):
+    from app.domain.texts.connect import TRIAL_UNAVAILABLE
+
+    monkeypatch.setattr("app.config.settings.PROMO_TRIAL_ENABLED", False)
+    await g.send("/trial")
+    assert _texts(g)[-1] == TRIAL_UNAVAILABLE
+    assert not g.prov.calls
+
+
+def test_command_menu_follows_the_flags():
+    from types import SimpleNamespace
+
+    from app.bot.routers.start import commands_for
+
+    names = [c.command for c in commands_for(SimpleNamespace(PROMO_TRIAL_ENABLED=False, PROMO_CODES_ENABLED=False))]
+    assert "trial" not in names and "promo" not in names and "start" in names
+    names = [c.command for c in commands_for(SimpleNamespace(PROMO_TRIAL_ENABLED=True, PROMO_CODES_ENABLED=True))]
+    assert "trial" in names and "promo" in names

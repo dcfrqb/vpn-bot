@@ -34,6 +34,7 @@ TRIAL_STARTED = "Пробный период включен на 5 дней. О�
 TRIAL_ALREADY_USED = "Пробный период уже был использован на этом аккаунте."
 TRIAL_NOT_ELIGIBLE = "Пробный период сейчас недоступен для этого аккаунта."
 TRIAL_UNAVAILABLE = "Пробный период временно недоступен, попробуй чуть позже."
+TRIAL_BUSY = "Уже включаем, секунду."
 
 SUCCESS_HOWTO = (
     "\n\n💡 <b>Как подключить:</b>\n"
@@ -44,11 +45,16 @@ SUCCESS_HOWTO = (
     "</blockquote>"
 )
 
+# One description of the obhod link everywhere (review UX M8, ТЕКСТЫ_3.0 §1).
+OBHOD_ABOUT = (
+    "Отдельная ссылка для мобильного интернета, когда оператор пускает только "
+    "в белый список сайтов. 100 ГБ в месяц."
+)
+
 OBHOD_PRO_ONLY = (
     "\n\n———\n"
     "🛡 <b>Обход блокировок</b>\n"
-    "Доступен в тарифе Pro: отдельная ссылка для сайтов и сервисов, "
-    "которые заблокированы."
+    f"Есть в тарифе Pro. {OBHOD_ABOUT}"
 )
 
 OBHOD_PREPARING = (
@@ -66,11 +72,21 @@ def obhod_ready(url: str, used_bytes: Optional[int], limit_bytes: Optional[int])
         "🛡 <b>Обход блокировок</b>"
         f"{quota}\n"
         "<blockquote>"
-        "Отдельная ссылка, добавляется так же, как и основная. "
+        f"{OBHOD_ABOUT} Добавляется так же, как основная. "
         "Включай обход, когда сайт заблокирован по мобильному интернету, "
         "и выключай, когда все работает штатно."
         "</blockquote>\n\n"
         f"<code>{h(url)}</code>"
+    )
+
+
+def grace_note(grace_until) -> str:
+    from app.domain.texts import fmt_date_msk
+
+    return (
+        "\n\n🟡 <b>Льготный период</b>\n"
+        f"Оплаченный срок закончился, ссылка работает до {h(fmt_date_msk(grace_until, with_time=True))} "
+        "(МСК) на части серверов. Продли, чтобы не потерять доступ."
     )
 
 

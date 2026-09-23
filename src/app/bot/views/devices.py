@@ -7,9 +7,11 @@ from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.callbacks import Dev
 from app.bot.views import btn, kb
-from app.bot.views.common import back_to_main_row
+from app.bot.callbacks import Nav
+from app.bot.views.common import back_to_main_row, support_row
 from app.domain.models import DeviceInfo
 from app.domain.texts import devices as t
+from app.domain.texts.common import BTN_SUBSCRIPTION
 
 
 def list_screen(
@@ -17,15 +19,22 @@ def list_screen(
     *,
     device_limit: Optional[int],
     unlink_enabled: bool,
+    support_handle: Optional[str] = None,
+    active: bool = True,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Always shows the list (N of M); the unlink button per device is
-    behind DEVICES_UNLINK_ENABLED."""
-    text = t.list_text(devices, len(devices), device_limit)
+    behind DEVICES_UNLINK_ENABLED, otherwise the support button (review UX M3).
+    No subscription: a way to the plans (m8)."""
+    text = t.list_text(devices, len(devices), device_limit, unlink_enabled=unlink_enabled)
     rows: list[list] = []
     if unlink_enabled:
         for dev in devices:
             name = (dev.device_model or dev.platform or dev.short_id)[:24]
             rows.append([btn(f"❌ Отвязать: {name}", Dev(a="ask", id=dev.short_id))])
+    elif devices:
+        rows.append(support_row(support_handle))
+    if not active:
+        rows.append([btn(BTN_SUBSCRIPTION, Nav(s="plans"))])
     rows.append(back_to_main_row())
     return text, kb(rows)
 

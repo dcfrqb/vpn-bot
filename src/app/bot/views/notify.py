@@ -12,12 +12,8 @@ from app.bot.callbacks import Adm, Dev, Nav, Period
 from app.bot.views import kb, url_btn
 from app.domain.texts import notify as T
 
-# Obhod traffic packages live only on the 2.x plans screen so far. The 2.x
-# string is used on purpose: bot.legacy_aliases rewrites it to
-# Nav(s="subscription_plans", p=...) once a 3.0 handler accepts that, and
-# until then the 2.x ui router opens the packages screen. A packed Nav with
-# no 3.0 handler would land in the 2.x catch-all instead.
-OBHOD_PACKAGES_CB = "ui:subscription_plans:obhod:-"
+# The 3.0 packages screen (review UX m24: no legacy hit per press).
+OBHOD_PACKAGES_CB = Nav(s="plans", p="obhod")
 
 
 def renew_kb(plan_code: Optional[str], months: Optional[int]) -> InlineKeyboardMarkup:

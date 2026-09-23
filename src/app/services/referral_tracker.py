@@ -1,20 +1,20 @@
 """
 Реферальный трекер /sun718.
 
-Учёт:
-  - earned  — Pro-месяцев заработано пулом приглашённых (lifetime, как раньше)
+Учет:
+  - earned  — Pro-месяцев заработано пулом приглашенных (lifetime, как раньше)
   - paid_out — сумма ручных выплат через /referral_payout (lifetime)
   - available = earned // 5  −  paid_out_bonus_months
 
 Алерты:
-  - АДМИНУ (settings.ADMINS) — детальные на каждый Pro-платёж приглашённого:
+  - АДМИНУ (settings.ADMINS) — детальные на каждый Pro-платеж приглашенного:
     B: «+N мес, пул X, бонус Y, доступно Z»
     C: «+M бонусн. месяцев заработано» при пересечении порога / 5
-  - ВЛАДЕЛЬЦУ (settings.PROMO_SUN718_OWNER_TG_ID) — упрощённые те же события:
-    B: «спасибо, новая оплата приглашённого — пул X, доступно Y»
+  - ВЛАДЕЛЬЦУ (settings.PROMO_SUN718_OWNER_TG_ID) — упрощенные те же события:
+    B: «спасибо, новая оплата приглашенного — пул X, доступно Y»
     C: «🎁 заработан N бонусн. месяц(ев) — доступно X»
     Payout: «✅ вам выдано N мес, осталось доступно X»
-  Если admin_id == owner_id — шлём ТОЛЬКО админскую (она информативнее).
+  Если admin_id == owner_id — шлем ТОЛЬКО админскую (она информативнее).
 
 Вызывается из:
   - yookassa.handle_successful_payment → notify_referral_payment_if_applicable
@@ -27,6 +27,7 @@ from sqlalchemy import select, func
 
 from app.config import settings
 from app.db.models import Payment, ReferralPayout, TelegramUser
+from app.domain.texts import h, months_ru, plural_ru
 from app.logger import logger
 
 
@@ -122,9 +123,9 @@ async def compute_sun718_breakdown(session) -> dict:
 # === Notify: payment of invited user ===
 
 async def notify_referral_payment_if_applicable(bot, session, payment: Payment) -> None:
-    """Алерты B и C при Pro-платеже приглашённого. Soft-fail внутри.
+    """Алерты B и C при Pro-платеже приглашенного. Soft-fail внутри.
 
-    Шлёт админу полную версию + владельцу упрощённую (если задан owner_id и
+    Шлет админу полную версию + владельцу упрощенную (если задан owner_id и
     он отличается от admin'а).
     """
     try:
@@ -156,7 +157,6 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
         earned_before = max(0, earned_after - period_months)
         paid_out = await compute_sun718_paid_out(session)
         available_after = max(0, earned_after // 5 - paid_out)
-        available_before = max(0, earned_before // 5 - paid_out)
         bonus_after = earned_after / 5.0
 
         # Юзер-данные
@@ -187,10 +187,10 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
         # === OWNER B (если задан и не совпадает с админом) ===
         if owner_id and owner_id not in _admin_ids():
             owner_b = (
-                f"💰 <b>Новая оплата приглашённого!</b>\n\n"
-                f"Один из приглашённых вами юзеров оплатил Pro на "
-                f"<b>{period_months} мес</b>.\n\n"
-                f"📊 <b>Ваш прогресс:</b>\n"
+                f"💰 <b>Новая оплата приглашенного!</b>\n\n"
+                f"Один из приглашенных тобой пользователей оплатил Pro на "
+                f"<b>{months_ru(int(period_months or 0))}</b>.\n\n"
+                f"📊 <b>Твой прогресс:</b>\n"
                 f"  • Заработано Pro-месяцев: <b>{earned_after}</b>\n"
                 f"  • Бонусных месяцев: <b>{bonus_after:.2f}</b>\n"
                 f"  • <b>Доступно к выдаче: {available_after} мес</b>"
@@ -202,7 +202,7 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
         full_after = earned_after // 5
         if full_after > full_before:
             delta = full_after - full_before
-            word = "месяц" if delta == 1 else ("месяца" if delta < 5 else "месяцев")
+            word = plural_ru(delta, "месяц", "месяца", "месяцев")
             admin_c = (
                 f"🎁 <b>SUN718: +{delta} бонусн. {word} заработано!</b>\n\n"
                 f"Целых бонусов всего: <b>{full_after}</b>\n"
@@ -214,11 +214,11 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
             await _send_to(bot, _admin_ids(), admin_c)
             if owner_id and owner_id not in _admin_ids():
                 owner_c = (
-                    f"🎁 <b>Поздравляем! +{delta} бонусн. {word}!</b>\n\n"
-                    f"Вы заработали ещё один целый бонусный месяц подписки.\n\n"
+                    f"🎁 <b>Поздравляем!</b>\n\n"
+                    f"Ты заработал еще {delta} {plural_ru(delta, 'бонусный месяц', 'бонусных месяца', 'бонусных месяцев')} подписки.\n\n"
                     f"📊 <b>Всего заработано бонусов:</b> {full_after} мес\n"
                     f"✅ <b>Доступно к выдаче:</b> {available_after} мес\n\n"
-                    f"Свяжитесь с админом для выдачи."
+                    f"Напиши админу, чтобы получить."
                 )
                 await _send_to(bot, [owner_id], owner_c)
 
@@ -236,8 +236,8 @@ async def record_payout(
 ) -> ReferralPayout:
     """Записывает выплату бонуса в леджер referral_payouts.
 
-    Это НЕ платёж — реальное продление получателю делается руками в панели,
-    запись здесь только для учёта (вычитается из «доступно» в /referral_stats).
+    Это НЕ платеж — реальное продление получателю делается руками в панели,
+    запись здесь только для учета (вычитается из «доступно» в /referral_stats).
     Возвращает созданный ReferralPayout. Идемпотентность не гарантируется —
     каждый вызов = новая запись (админ должен сам не дублировать).
     """
@@ -265,7 +265,7 @@ async def notify_payout(bot, session, payout: ReferralPayout) -> None:
     admin_text = (
         f"✅ <b>SUN718 PAYOUT записана</b>\n\n"
         f"💸 Выплачено: <b>{months} мес</b>\n"
-        f"📝 Note: {note or '<i>—</i>'}\n\n"
+        f"📝 Note: {h(note) if note else '<i>—</i>'}\n\n"
         f"📊 <b>Состояние:</b>\n"
         f"  • Заработано: {earned // 5} целых бонусов ({earned} Pro-мес)\n"
         f"  • Выплачено всего: <b>{paid_out}</b>\n"
@@ -275,13 +275,13 @@ async def notify_payout(bot, session, payout: ReferralPayout) -> None:
 
     owner_id = _owner_id()
     if owner_id and owner_id not in _admin_ids():
-        word = "месяц" if months == 1 else ("месяца" if months < 5 else "месяцев")
+        word = plural_ru(months, "бонусный месяц", "бонусных месяца", "бонусных месяцев")
         owner_text = (
-            f"✅ <b>Вам выдано {months} бонусн. {word}!</b>\n\n"
-            f"Админ продлил вашу подписку.\n"
-            + (f"📝 Комментарий: {note}\n\n" if note else "\n")
+            f"✅ <b>Тебе выдано {months} {word}!</b>\n\n"
+            f"Админ продлил твою подписку.\n"
+            + (f"📝 Комментарий: {h(note)}\n\n" if note else "\n")
             + f"📊 <b>Осталось доступно:</b> {available} мес\n"
-            f"Спасибо за приглашённых!"
+            f"Спасибо за приглашенных!"
         )
         await _send_to(bot, [owner_id], owner_text)
 

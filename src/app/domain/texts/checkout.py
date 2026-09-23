@@ -12,20 +12,24 @@ from decimal import Decimal
 from typing import Iterable, Optional, Sequence, Union
 
 from app.domain.texts import fmt_date_msk, fmt_rub, h, months_ru
+from app.domain.texts import common as _c
 
 Money = Union[int, float, Decimal]
 
 # --- buttons -------------------------------------------------------------------------------
 
-BTN_BACK = "« Назад"
-BTN_CHECK = "Проверить оплату"
-BTN_CONNECT = "Подключиться"
-BTN_PLANS = "Тарифы"
-BTN_SUPPORT = "Поддержка"
+# Shared vocabulary (review UX M4): BTN_BACK goes to the parent screen,
+# BTN_BACK_MAIN to the main menu.
+BTN_BACK = _c.BTN_BACK
+BTN_BACK_MAIN = _c.BTN_BACK_MAIN
+BTN_CHECK = _c.BTN_CHECK_PAYMENT
+BTN_CONNECT = _c.BTN_CONNECT
+BTN_PLANS = _c.BTN_SUBSCRIPTION
+BTN_SUPPORT = _c.BTN_SUPPORT
 BTN_AUTOPAY_ON = "Включить автопродление"
 BTN_AUTOPAY_OFF = "Без автопродления"
 BTN_AUTOPAY_STOP = "Отключить автопродление"
-BTN_RENEW = "Продлить подписку"
+BTN_RENEW = "💳 Продлить подписку"
 BTN_REFUND = "Не смог подключиться"
 BTN_REFUND_OK = "Вернуть"
 BTN_REFUND_NO = "Отклонить"
@@ -35,7 +39,7 @@ BTN_GIFT = "Подарить подписку"
 
 
 def btn_pay(amount: Money) -> str:
-    return f"Оплатить {fmt_rub(amount)}"
+    return f"{_c.BTN_PAY_PREFIX} {fmt_rub(amount)}"
 
 
 def btn_pay_stars(stars: int) -> str:
@@ -80,7 +84,7 @@ def obhod_packages_screen(base_gb: int, packages: Sequence[tuple[str, Money]]) -
             f"В тарифе Pro обход включен с лимитом {int(base_gb)} ГБ в месяц. Если нужно больше, "
             "возьми пакет: месячный лимит обхода поднимется на твоей ссылке обхода.")
     if not packages:
-        return head + "\n\nПакеты скоро появятся. Базового лимита обычно хватает для заблокированных сайтов."
+        return head + "\n\nПакеты скоро появятся."
     return head + "\n\n" + "\n".join(f"· <b>{h(name)}</b>: {fmt_rub(price)}" for name, price in packages)
 
 
@@ -110,10 +114,12 @@ def checkout_screen(name: str, months: int, amount: Money, *, autorenew: Optiona
                  f"спишем {fmt_rub(amount)}. Отключить можно в любой момент.")
     elif autorenew is False:
         text += "\n\nАвтопродление: выключено."
-    text += ("\n\nНажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: "
-             "доступ включится сам, обычно за минуту.")
     if gift:
-        text += " Ссылку для друга пришлем сюда же."
+        text += ("\n\nНажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: "
+                 "ссылку для друга пришлем в этот чат.")
+    else:
+        text += ("\n\nНажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: "
+                 "доступ включится сам, обычно за минуту.")
     return text
 
 
@@ -300,8 +306,10 @@ AUTOPAY_INFO = ("<b>Автопродление</b>\n\nКарта сохраня�
 AUTOPAY_UNAVAILABLE = "Автопродление сейчас недоступно."
 
 
-def autopay_notice(name: str, months: int, amount: Money) -> str:
-    return (f"Через 3 дня спишем {fmt_rub(amount)} за продление подписки {h(name)} на {months_ru(months)}, "
+def autopay_notice(name: str, months: int, amount: Money, charge_on: Optional[datetime] = None) -> str:
+    """``charge_on``: the day of the charge (a day before the end), review UX M6."""
+    when = fmt_date_msk(charge_on) if charge_on is not None else "За день до конца срока"
+    return (f"{when} спишем {fmt_rub(amount)} за продление подписки {h(name)} на {months_ru(months)}, "
             "карта уже сохранена. Если не нужно, отключи автопродление.")
 
 

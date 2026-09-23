@@ -34,7 +34,7 @@ async def test_notice_three_days_before_is_sent_once():
     await m.autopay.run_once()
     await m.autopay.run_once()
     notices = [s for s in deps.notifier.sent if s.kind == "user"]
-    assert len(notices) == 1 and "Через 3 дня спишем" in notices[0].text
+    assert len(notices) == 1 and "25.09.2026 спишем" in notices[0].text  # the charge day, not "in 3 days" (UX M6)
     assert not deps.payments.charges
 
 

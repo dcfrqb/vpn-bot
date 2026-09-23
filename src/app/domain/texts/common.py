@@ -20,17 +20,27 @@ BTN_DEVICES = "📱 Мои устройства"
 BTN_ADMIN_PANEL = "👑 Админ-панель"
 BTN_BACK_MAIN = "⬅️ В главное меню"
 BTN_BACK = "⬅️ Назад"
-BTN_SUPPORT = "✍️ Написать администратору"
+BTN_SUPPORT = "✍️ Поддержка"
 BTN_OFFER = "📄 Оферта"
 BTN_PRIVACY = "🔒 Политика конфиденциальности"
-BTN_ARTICLE = "📖 Как подключиться"
+BTN_ARTICLE = "📖 Инструкция"  # the article URL; "🚀 Подключиться" opens the connect screen
 BTN_TRIAL = "🎁 Попробовать 5 дней бесплатно"
+# One vocabulary for every screen and push (review UX M4): money, promo and
+# notify texts import these instead of their own wording.
+BTN_PAY_PREFIX = "💳 Оплатить"
+BTN_CHECK_PAYMENT = "🔄 Проверить оплату"
 
 REFRESHED = "Обновлено"
 
 OFFER_URL = "https://telegra.ph/Publichnaya-oferta--CRS-VPN-04-08"
 
 DEFAULT_SUPPORT_HANDLE = "dcfrq"
+
+
+def support_handle(settings) -> "str | None":
+    """Support contact: SUPPORT_HANDLE, else ADMIN_SUPPORT_USERNAME (review UX m14)."""
+    handle = getattr(settings, "SUPPORT_HANDLE", None) or getattr(settings, "ADMIN_SUPPORT_USERNAME", None)
+    return str(handle).strip() if handle else None
 
 
 def support_url(handle: "str | None" = None) -> str:
@@ -40,23 +50,35 @@ def support_url(handle: "str | None" = None) -> str:
 
 
 # --- Help screen (no dedicated text module in the plan; D owns support.py) ---
-HELP_TEXT = (
-    "ℹ️ <b>Справка по CRS VPN</b>\n\n"
-    "🔐 <b>Что такое VPN?</b>\n"
-    "<blockquote>"
-    "VPN создает защищенное соединение между твоим устройством и интернетом."
-    "</blockquote>\n\n"
-    "❓ <b>Частые вопросы</b>\n"
-    "<blockquote>"
-    "<b>VPN не подключается:</b> обнови подписку (кнопка «Обновить» в меню) "
-    "и проверь, что импортирована свежая ссылка.\n\n"
-    "<b>Сколько устройств можно подключить:</b> смотри в разделе «Мои устройства», "
-    "лимит зависит от тарифа.\n\n"
-    "<b>Как сменить устройство:</b> отвяжи старое в «Мои устройства» и "
-    "подключи новое той же ссылкой."
-    "</blockquote>\n\n"
-    "Не нашел ответ? Напиши в поддержку."
-)
+def help_text(unlink_enabled: bool = False) -> str:
+    """FAQ. Unlinking is promised only when DEVICES_UNLINK_ENABLED is on
+    (review UX M3); the refresh tip points at the VPN app, not the bot."""
+    change_device = (
+        "<b>Как сменить устройство:</b> отвяжи старое в «Мои устройства» и "
+        "подключи новое той же ссылкой."
+        if unlink_enabled else
+        "<b>Как сменить устройство:</b> напиши в поддержку, освободим место под новое, "
+        "и подключи его той же ссылкой."
+    )
+    return (
+        "ℹ️ <b>Справка по CRS VPN</b>\n\n"
+        "🔐 <b>Что такое VPN?</b>\n"
+        "<blockquote>"
+        "VPN создает защищенное соединение между твоим устройством и интернетом."
+        "</blockquote>\n\n"
+        "❓ <b>Частые вопросы</b>\n"
+        "<blockquote>"
+        "<b>VPN не подключается:</b> обнови подписку в самом приложении (кнопка обновления "
+        "или свайп вниз по списку серверов) и проверь, что добавлена ссылка из «Подключиться».\n\n"
+        "<b>Сколько устройств можно подключить:</b> смотри в разделе «Мои устройства», "
+        "лимит зависит от тарифа.\n\n"
+        f"{change_device}"
+        "</blockquote>\n\n"
+        "Не нашел ответ? Напиши в поддержку."
+    )
+
+
+HELP_TEXT = help_text(False)
 
 
 # --- fallback router (unknown or retired buttons) and small commands ---

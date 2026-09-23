@@ -61,6 +61,9 @@ async def redeem_and_reply(event: Any, code: str, container: Any, *, source: str
 @router.message(Command("trial"))
 async def cmd_trial(message: Message, container: Any) -> None:
     if not getattr(container.settings, "PROMO_TRIAL_ENABLED", True):
+        from app.domain.texts.connect import TRIAL_UNAVAILABLE
+
+        await render(message, TRIAL_UNAVAILABLE)  # review UX m12: never a silent command
         return
     await redeem_and_reply(message, "trial", container, source="trial")
 
@@ -114,7 +117,9 @@ async def cancel_input(message: Message, state: FSMContext) -> None:
     await render(message, T.ENTER_CANCELLED, kb([[(T.BTN_MENU, Nav(s="main"))]]))
 
 
-@router.message(StateFilter(PromoInput.code), F.text)
+# Commands are never taken as a code (review UX M7): /start, /help etc. go to
+# their own handlers; /start also drops this state (routers/start.py).
+@router.message(StateFilter(PromoInput.code), F.text, ~F.text.startswith("/"))
 async def got_code(message: Message, state: FSMContext, container: Any) -> None:
     await state.clear()
     await redeem_and_reply(message, (message.text or "").split()[0] if message.text.strip() else "",

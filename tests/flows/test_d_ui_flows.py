@@ -163,3 +163,27 @@ async def test_start_clears_broadcast_opt_out(flow, monkeypatch):
     monkeypatch.setattr("app.services.broadcast.set_opt_out", fake_set_opt_out)
     await flow.send("/start")
     assert calls and calls[-1][1] is False
+
+
+# ----------------------------------------------------------------- review UX M1 / M2
+
+
+async def test_paying_user_with_panel_down_never_sees_buy_screen(flow):
+    flow.status.states[flow.user.id] = SubscriptionState(
+        telegram_id=flow.user.id, active=True, plan_code="pro", stale=True, subscription_url=None,
+    )
+    await flow.press(Nav(s="connect").pack())
+    text = _last_text(flow)
+    assert "Подписка не активна" not in text and "Не удалось получить ссылку" in text
+    kb = flow.session.calls_of("EditMessageText")[-1].keyboard
+    labels = [b["text"] for row in kb for b in row]
+    assert "💳 Подписка" not in labels and "🔄 Обновить" in labels
+
+
+async def test_connect_refresh_button_forces_a_panel_read(flow):
+    flow.status.states[flow.user.id] = SubscriptionState(
+        telegram_id=flow.user.id, active=True, plan_code="lite", subscription_url="https://sub.example/tok",
+    )
+    await flow.press(Nav(s="connect", p="refresh").pack())
+    assert flow.status.calls[-1] == (flow.user.id, True)
+    assert "<code>https://sub.example/tok</code>" in _last_text(flow)

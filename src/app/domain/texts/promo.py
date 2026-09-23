@@ -11,11 +11,12 @@ from typing import Optional
 
 from app.domain.models import PromoOutcome, PromoReward
 from app.domain.texts import days_ru, fmt_date_msk, h
+from app.domain.texts import common as _c
 
 # ----------------------------------------------------------------- buttons
 
-BTN_CONNECT = "🔌 Подключить VPN"
-BTN_MENU = "🏠 Главное меню"
+BTN_CONNECT = _c.BTN_CONNECT  # shared vocabulary (review UX M4)
+BTN_MENU = _c.BTN_BACK_MAIN
 BTN_ENTER_CODE = "🎟 Ввести промокод"
 BTN_TRIAL = "🎁 Попробовать 5 дней"
 BTN_WRITE_USER = "📩 Написать пользователю"
@@ -34,7 +35,7 @@ REQUEST_SENT = "⏳ Запрос отправлен администратору
 REQUEST_ALREADY_ACTIVE = "У тебя уже есть активная подписка."
 REQUEST_CHECK_FAILED = "Не получилось проверить подписку. Попробуй чуть позже."
 REQUEST_DUPLICATE = "Запрос уже отправлен, администратор скоро ответит."
-ACCESS_GRANTED = "✅ <b>Тебе выдан доступ</b>\n\n{what}. Нажми «Подключить VPN», чтобы настроить приложение."
+ACCESS_GRANTED = "✅ <b>Тебе выдан доступ</b>\n\n{what}. Нажми «Подключиться», чтобы настроить приложение."
 ACCESS_REJECTED = "Запрос на доступ отклонен. Если есть вопросы, напиши администратору."
 
 

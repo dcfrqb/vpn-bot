@@ -17,7 +17,7 @@ from app.bot.callbacks import Adm, Nav
 from app.bot.middlewares.admin_guard import guard_router
 from app.bot.views import kb, render, url_btn
 from app.domain.texts import admin as T
-from app.domain.texts import h
+from app.domain.texts import days_ru, h
 from app.domain.texts import promo as TP
 from app.logger import logger
 from app.services.grants import GRANT_KEYS, GrantsService
@@ -109,7 +109,7 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
 
         await render(message, f"✅ <code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(res.state.expires_at)}")
         await container.notifier.notify_user(
-            tg, TP.ACCESS_GRANTED.format(what=f"Подписка продлена: +{days} дн."), html=True,
+            tg, TP.ACCESS_GRANTED.format(what=f"Подписка продлена на {days_ru(int(days))}"), html=True,
             reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
     elif res.status == "skipped":
         await render(message, T.NOTHING_TO_EXTEND)
