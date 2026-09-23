@@ -349,7 +349,11 @@ async def release_provision_lock(external_id: str) -> None:
 
 
 async def invalidate_sync_cache(telegram_id: int):
-    """Инвалидирует кэш синхронизации для пользователя"""
+    """Инвалидирует кэш синхронизации для пользователя.
+
+    Зовется после успешной оплаты, выдачи, возврата и ручных правок админа,
+    поэтому заодно сбрасывает профиль для сайта (invalidate_site_profile_cache).
+    """
     client = get_redis_client()
     if not client:
         return
@@ -360,6 +364,19 @@ async def invalidate_sync_cache(telegram_id: int):
         logger.debug(f"Кэш синхронизации инвалидирован для пользователя {telegram_id}")
     except Exception as e:
         logger.debug(f"Ошибка инвалидации кэша синхронизации для {telegram_id}: {e}")
+    await invalidate_site_profile_cache(telegram_id)
+
+
+async def invalidate_site_profile_cache(telegram_id: int):
+    """Сбросить профиль для сайта (/internal/site/users/{id}/profile, TTL 60 с)."""
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        from app.services.site_profile import PROFILE_CACHE_PREFIX
+        await client.delete(f"{PROFILE_CACHE_PREFIX}{int(telegram_id)}")
+    except Exception as e:
+        logger.debug(f"Ошибка сброса профиля сайта для {telegram_id}: {e}")
 
 
 async def get_cache_stats() -> Dict[str, Any]:

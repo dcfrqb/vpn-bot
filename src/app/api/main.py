@@ -173,6 +173,16 @@ app = FastAPI(
     openapi_url=None,
 )
 
+# Внутренний API для сайта: /internal/site/* (только docker-сеть, см. internal_site.py).
+from app.api.internal_site import (  # noqa: E402
+    InternalApiError,
+    internal_api_error_handler,
+    router as internal_site_router,
+)
+
+app.add_exception_handler(InternalApiError, internal_api_error_handler)
+app.include_router(internal_site_router)
+
 
 @app.get("/")
 async def root():

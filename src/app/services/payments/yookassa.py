@@ -1090,6 +1090,13 @@ async def handle_successful_payment(
             _pmeta["obhod_package_applied"] = bool(applied)
             payment.payment_metadata = _pmeta
             await session.commit()
+            # Ветка пакета не доходит до общего сброса кэшей ниже: профиль для
+            # сайта (платежи, пакет обхода) сбрасываем здесь.
+            try:
+                from app.services.cache import invalidate_site_profile_cache
+                await invalidate_site_profile_cache(telegram_user_id)
+            except Exception as _e:
+                logger.debug(f"[{trace_id}] invalidate_site_profile_cache soft-fail: {_e}")
             if applied:
                 try:
                     await bot.send_message(

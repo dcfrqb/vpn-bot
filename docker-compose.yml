@@ -104,6 +104,12 @@ services:
       - ./logs:/app/logs
     ports:
       - "127.0.0.1:${WEBHOOK_API_PORT:-8001}:8001"
+    # Сайт (vpn-site-api в сети vpn-bot_default) ходит во внутренний API
+    # /internal/site/* по имени bot-internal-api, а не по имени контейнера.
+    networks:
+      default:
+        aliases:
+          - bot-internal-api
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
       interval: 15s

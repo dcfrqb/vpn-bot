@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     # фича выключена, site_login отвечает заглушкой и на сайт не ходит.
     SITE_INTERNAL_URL: str = "http://vpn-site-api:8000"
     SITE_INTERNAL_TOKEN: Union[str, None] = None
+    # Обратное направление: сайт -> бот, /internal/site/* в webhook-api.
+    # Отдельный секрет (у сайта это BOT_API_TOKEN). Пустой = маршруты отвечают 503.
+    BOT_INTERNAL_TOKEN: Union[str, None] = None
 
     # Путь к .env файлу
     _base_path = Path("/opt/crs-vpn-bot/.env")

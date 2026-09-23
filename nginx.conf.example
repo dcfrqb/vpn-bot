@@ -54,6 +54,15 @@ server {
         proxy_set_header CF-Connecting-IP "";
     }
 
+    # Внутренний API для сайта (/internal/site/*) наружу не отдаем никогда.
+    # Сайт ходит в него по docker-сети: http://bot-internal-api:8001.
+    # Этот блок нужен в КАЖДОМ server, который проксирует на 127.0.0.1:8001
+    # (pay.crs-projects.com, bot.crs-projects.com), и особенно там, где
+    # location / проксирует все подряд.
+    location /internal/ {
+        return 404;
+    }
+
     location / {
         return 404;
     }
