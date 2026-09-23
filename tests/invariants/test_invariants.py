@@ -38,6 +38,8 @@ NEW_LAYER = [
     SRC / "services" / "money.py", SRC / "services" / "payments" / "store.py",
     SRC / "services" / "payments" / "pricing.py", SRC / "services" / "payments" / "webhook.py",
     SRC / "services" / "payments" / "refund_requests.py", SRC / "services" / "payments" / "ui.py",
+    SRC / "services" / "payments" / "notices.py", SRC / "services" / "payments" / "sql_store.py",
+    SRC / "services" / "payments" / "sql_store_refunds.py",
     SRC / "services" / "payments" / "yookassa.py",
     # stream B
     *(SRC / "services" / f"{m}.py" for m in ("accounts", "provisioning", "provisioning_rules", "credits", "status",

@@ -52,7 +52,7 @@ async def test_paid_payment_stacks_on_trial_once_through_fulfillment():
     from app.services.accounts import SqlAccountsRepo
     from app.services.fulfillment import Outcome
     from app.services.money import MoneyDeps, build_money
-    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.sql_store import SqlPaymentStore
     from app.services.payments.ui import NullUi
     from app.services.provisioning import PanelProvisioningService
     from tests.fakes.notifier import RecordingNotifier
@@ -119,7 +119,7 @@ async def test_sql_store_state_changes_are_compare_and_set():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.db.models import Subscription, TelegramUser
-    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.sql_store import SqlPaymentStore
 
     engine = create_async_engine(PG_URL)
     Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -185,7 +185,7 @@ async def test_sql_store_state_changes_are_compare_and_set():
 async def test_refunded_status_can_be_recorded():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.sql_store import SqlPaymentStore
 
     engine = create_async_engine(PG_URL)
     Session = async_sessionmaker(engine, expire_on_commit=False)

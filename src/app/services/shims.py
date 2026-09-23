@@ -159,7 +159,7 @@ def _standalone_checkout(payments: Any):
     from app.config import settings
     from app.infra.telegram_stars import TelegramStarsGateway
     from app.services.money import LegacyHooks, MoneyDeps, build_money
-    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.sql_store import SqlPaymentStore
     from app.services.payments.ui import NullUi
 
     deps = MoneyDeps(payments=payments, stars=TelegramStarsGateway(), provisioning=LegacyProvisioningService(),

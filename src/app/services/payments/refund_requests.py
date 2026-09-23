@@ -65,7 +65,7 @@ class RefundRequests:
         if not created:
             return "already"
         first, last, username = await store.user_names(rec.telegram_id)
-        from app.services.fulfillment import plan_label
+        from app.services.payments.notices import plan_label
 
         await self.d.notifier.notify_admins(
             AdminTopic.REFUNDS,

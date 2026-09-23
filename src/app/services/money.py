@@ -154,7 +154,7 @@ def build_money(deps: MoneyDeps) -> MoneyServices:
 def money_deps(container: Any, *, store: Optional[PaymentStore] = None, ui: Optional[MoneyUi] = None,
                hooks: Optional[LegacyHooks] = None, clock: Optional[Callable[[], datetime]] = None) -> MoneyDeps:
     from app.infra.telegram_stars import TelegramStarsGateway
-    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.sql_store import SqlPaymentStore
     from app.services.payments.ui import default_ui
     from app.services.shims import DisabledStarsGateway
 
