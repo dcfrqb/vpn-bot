@@ -1701,10 +1701,17 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 
                 # remna_user_id не сохранен в БД — ищем по telegram_id в Remnawave
                 # (пользователь мог быть создан ранее без привязки UUID к telegram_users)
+                # strict: ошибка панели != «юзера нет». Раньше любая ошибка
+                # превращалась в None и мы создавали второго юзера с тем же
+                # telegramId. Теперь выдача падает и ретраится.
                 try:
-                    found_remna = await client.get_user_by_telegram_id(telegram_user_id)
-                except Exception:
-                    found_remna = None
+                    found_remna = await client.get_user_by_telegram_id(telegram_user_id, strict=True)
+                except Exception as lookup_e:
+                    logger.error(
+                        f"remna lookup by telegram_id failed, not creating a duplicate: "
+                        f"tg_id={telegram_user_id} err={lookup_e}"
+                    )
+                    return None
 
                 if found_remna:
                     remna_user_id = found_remna.uuid

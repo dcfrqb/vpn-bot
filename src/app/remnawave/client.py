@@ -137,6 +137,25 @@ def is_own_remna_user(
     return uid is not None and str(uid) == str(known_remna_id)
 
 
+def pick_primary_remna_user(users: list) -> Optional[Dict[str, Any]]:
+    """Из нескольких юзеров с одним telegramId выбирает основной:
+    ACTIVE впереди, затем самая поздняя expireAt, затем меньший id."""
+    candidates = [u for u in users if isinstance(u, dict)]
+    if not candidates:
+        return None
+
+    def _key(u: Dict[str, Any]):
+        active = 1 if u.get("status") == "ACTIVE" else 0
+        expire = str(u.get("expireAt") or "")
+        try:
+            uid = -int(u.get("id") or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        return (active, expire, uid)
+
+    return max(candidates, key=_key)
+
+
 @dataclass
 class RemnaUser:
     """DTO для пользователя Remna"""
@@ -595,8 +614,9 @@ class RemnaClient:
             last_name=tg_last_name,
         ) if (tg_username or tg_first_name or tg_last_name) else self._sanitize_display_name(name or f"User {telegram_id}", telegram_id)
 
-        # 1. Сначала ищем по telegram_id
-        existing = await self.get_user_by_telegram_id(telegram_id)
+        # 1. Сначала ищем по telegram_id. strict: ошибка панели != «юзера нет»,
+        # иначе при сбое панели создавался дубль с тем же telegramId.
+        existing = await self.get_user_by_telegram_id(telegram_id, strict=True)
         if existing:
             logger.info(f"Найден существующий пользователь: uuid={existing.uuid}, telegram_id={telegram_id}")
 
@@ -697,19 +717,27 @@ class RemnaClient:
         """Получить пользователя по ID"""
         return await self.request("GET", f"/api/users/{user_id}")
 
-    async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[RemnaUser]:
+    async def get_user_by_telegram_id(self, telegram_id: int, strict: bool = False) -> Optional[RemnaUser]:
         """
         Получить пользователя Remna по telegram_id.
 
         В Remnawave 3.0.0 эндпоинт GET /users/by-telegram-id/{telegramId} удалён,
         вместо него курсорный GET /users/stream с фильтром telegramId.
 
+        strict=False (UI-чтение): любая ошибка -> None, как раньше.
+        strict=True (перед созданием юзера): None ТОЛЬКО если юзера точно нет
+        (404 / пустой список). Ошибка панели (5xx, таймаут) пробрасывается, чтобы
+        вызывающий не принял «панель лежит» за «юзера нет» и не создал дубль.
+
+        Если найдено несколько юзеров с этим telegramId, берем ACTIVE с самой
+        поздней датой expireAt (порядок выдачи панели не гарантирован).
+
         Returns:
             RemnaUser если найден, None если не найден
         """
         try:
             response = await self.request(
-                "GET", f"/api/users/stream?telegramId={telegram_id}&size=1000"
+                "GET", f"/api/users/stream?telegramId={telegram_id}&size=25"
             )
 
             # Обрабатываем ответ
@@ -724,7 +752,14 @@ class RemnaClient:
                 if not user_data:
                     logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
                     return None
-                user_data = user_data[0]
+                if len(user_data) > 1:
+                    logger.warning(
+                        f"Несколько юзеров Remnawave с telegramId={telegram_id}: "
+                        f"{[u.get('id') for u in user_data if isinstance(u, dict)]} — берем ACTIVE с поздним expireAt"
+                    )
+                    user_data = pick_primary_remna_user(user_data)
+                else:
+                    user_data = user_data[0]
 
             if not user_data or not isinstance(user_data, dict):
                 logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
@@ -748,9 +783,13 @@ class RemnaClient:
                 logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna (404)")
                 return None
             logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
+            if strict:
+                raise
             return None
         except Exception as e:
             logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
+            if strict:
+                raise
             return None
 
     async def get_user_with_subscription_by_telegram_id(self, telegram_id: int) -> Optional[tuple[RemnaUser, Optional[RemnaSubscription]]]:

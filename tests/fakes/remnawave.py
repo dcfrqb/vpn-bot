@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from app.remnawave.client import RemnaUser, build_user_payload_from_kwargs
+from app.remnawave.client import RemnaClient, RemnaUser, build_user_payload_from_kwargs
 
 
 DEFAULT_SQUADS = {
@@ -27,6 +27,9 @@ def _exists_error(username: str) -> httpx.HTTPStatusError:
 
 
 class FakeRemna:
+    # Логика выбора username при коллизии — настоящая, из RemnaClient.
+    create_user_unique = RemnaClient.create_user_unique
+
     def __init__(self, squads: Optional[Dict[str, str]] = None):
         self.squads = dict(DEFAULT_SQUADS if squads is None else squads)
         self.users: Dict[int, Dict[str, Any]] = {}
