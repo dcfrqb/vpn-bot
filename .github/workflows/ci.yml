@@ -84,7 +84,10 @@ jobs:
           src/app/bot src/app/domain src/app/infra src/app/worker src/app/api/routes src/app/api/app.py
           src/app/container.py src/app/services/ports.py src/app/services/shims.py
           src/app/services/notifications.py
-          tests/flows tests/invariants tests/contracts tests/fakes tests/data
+          src/app/services/promo.py src/app/services/promo_types.py src/app/services/promo_repo.py
+          src/app/services/referral.py src/app/services/grants.py src/app/services/broadcast.py
+          src/app/services/broadcast_segments.py src/app/services/broadcast_drafts.py src/app/services/admin_stats.py
+          tests/flows tests/invariants tests/contracts tests/fakes tests/growth tests/data
 
   alembic:
     runs-on: ubuntu-latest
