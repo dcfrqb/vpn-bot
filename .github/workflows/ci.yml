@@ -28,11 +28,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest-cov
 
-      - name: Run unit tests
+      - name: Run unit tests (incl. 3.0 flows, callback matrix, invariants, contracts)
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           pytest tests/ -m "not integration" -v
+
+      - name: 3.0 seams (explicit, fail fast on a broken seam)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          pytest -q tests/flows tests/invariants tests/contracts tests/test_r3_callbacks.py
 
   lint:
     runs-on: ubuntu-latest
@@ -51,6 +57,14 @@ jobs:
 
       - name: Ruff check (undefined names, unused imports, redefinitions)
         run: ruff check --select F821,F401,F811 src
+
+      - name: Ruff full F on 3.0 layers and tests
+        run: >
+          ruff check --select F
+          src/app/bot src/app/domain src/app/infra src/app/worker src/app/api/routes src/app/api/app.py
+          src/app/container.py src/app/services/ports.py src/app/services/shims.py
+          src/app/services/notifications.py
+          tests/flows tests/invariants tests/contracts tests/fakes
 
   alembic:
     runs-on: ubuntu-latest
@@ -83,6 +97,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Single alembic head
+        run: |
+          python - <<'EOF'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          heads = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
+          print("heads:", heads)
+          assert len(heads) == 1, f"expected exactly one alembic head, got {heads}"
+          EOF
+
       - name: Run migrations against an empty database
         env:
           # app/db/migrations/env.py reads settings.DATABASE_URL (app.config.Settings,
@@ -97,3 +121,19 @@ jobs:
           DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
         run: |
           alembic check
+
+      - name: Downgrade/upgrade the 3.0 revision (idempotent, additive)
+        env:
+          DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
+        run: |
+          alembic downgrade 7b1c2d3e4f50
+          alembic upgrade head
+          alembic check
+
+      - name: Integration tests on real Postgres
+        env:
+          DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
+          HOTFIX_PG_URL: postgresql+asyncpg://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          pytest tests/integration -m integration -v
