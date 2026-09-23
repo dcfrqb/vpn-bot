@@ -120,6 +120,36 @@ async def ensure_user_in_remnawave(
         await client.close()
 
 
+async def _grant_landed(client, remna_user_id: str, valid_until_str: str, plan_code: str) -> bool:
+    """True, если в Remnawave уже стоит expireAt не раньше цели (минус 5 минут),
+    сквад тарифа на месте и юзер не DISABLED. Любая ошибка чтения -> False."""
+    try:
+        target = datetime.fromisoformat(valid_until_str.replace("Z", "+00:00"))
+        data = await asyncio.wait_for(client.get_user_by_id(str(remna_user_id)), timeout=REMNAWAVE_CALL_TIMEOUT)
+        raw = data.get("response", data) if isinstance(data, dict) else {}
+        if not isinstance(raw, dict) or str(raw.get("status") or "").upper() == "DISABLED":
+            return False
+        actual_raw = raw.get("expireAt")
+        if not actual_raw:
+            return False
+        actual = datetime.fromisoformat(str(actual_raw).replace("Z", "+00:00"))
+        if actual.tzinfo is None:
+            actual = actual.replace(tzinfo=timezone.utc)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        if actual < target - timedelta(minutes=5):
+            return False
+        from app.core.plans import get_plan_squad
+        from app.services.remna_tariff import extract_squad_uuids
+        squad_name = get_plan_squad(plan_code)
+        squads = await asyncio.wait_for(client.list_internal_squads(), timeout=REMNAWAVE_CALL_TIMEOUT)
+        target_uuid = next((sq.get("uuid") for sq in squads if isinstance(sq, dict) and sq.get("name") == squad_name), None)
+        return bool(target_uuid) and target_uuid in extract_squad_uuids(raw)
+    except Exception as e:
+        logger.debug(f"_grant_landed check failed for {remna_user_id}: {e}")
+        return False
+
+
 async def provision_tariff(
     telegram_id: int,
     tariff: str,
@@ -212,13 +242,25 @@ async def provision_tariff(
 
         if not get_plan_squad(plan_code):
             plan_code = "basic"  # бывший дефолт, не ломает legacy
-        await asyncio.wait_for(
-            apply_tariff_to_remna_user(
-                client, remna_user_id, plan_code, expire_at=valid_until_str, trace_id=req_id,
-                enable_if_disabled=True,
-            ),
-            timeout=REMNAWAVE_CALL_TIMEOUT * 2,
-        )
+        try:
+            await asyncio.wait_for(
+                apply_tariff_to_remna_user(
+                    client, remna_user_id, plan_code, expire_at=valid_until_str, trace_id=req_id,
+                    enable_if_disabled=True,
+                ),
+                timeout=REMNAWAVE_CALL_TIMEOUT * 2,
+            )
+        except Exception as apply_err:
+            # Ревью m3/m-3: PATCH мог дойти до панели, а ответ — нет (таймаут).
+            # Тогда промо-запись удалялась, и /trial можно было взять еще раз
+            # поверх уже продленного срока. Перечитываем юзера: если срок уже
+            # стоит, выдача состоялась.
+            if not await _grant_landed(client, remna_user_id, valid_until_str, plan_code):
+                raise
+            logger.warning(
+                f"provision_tariff: apply reported {type(apply_err).__name__} but grant landed "
+                f"in Remnawave, treating as success tg_id={telegram_id} tariff={tariff}"
+            )
 
         log_payment_event(
             EVENT_REMNAWAVE_PROVISION_SUCCESS,
