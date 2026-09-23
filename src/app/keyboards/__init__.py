@@ -125,7 +125,7 @@ def get_subscription_info_keyboard(has_subscription: bool = False) -> types.Inli
     """Клавиатура для информации о подписке"""
     if has_subscription:
         return types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🔗 Получить ссылку", callback_data="get_subscription_link")],
+            [types.InlineKeyboardButton(text="🔗 Получить ссылку", callback_data="connect_vpn")],
             [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_main")]
         ])
     else:
@@ -220,7 +220,7 @@ def get_payments_pagination_keyboard(page: int, total_pages: int, status: Option
 def get_subscription_link_keyboard() -> types.InlineKeyboardMarkup:
     """Клавиатура для получения ссылки подписки"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🔗 Получить ссылку", callback_data="get_subscription_link")],
+        [types.InlineKeyboardButton(text="🔗 Получить ссылку", callback_data="connect_vpn")],
         [types.InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_to_main")]
     ])
 

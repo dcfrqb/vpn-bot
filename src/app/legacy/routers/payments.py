@@ -12,14 +12,11 @@ from app.services.payments.yookassa import create_payment, process_payment_webho
 from app.services.payments.recovery import recheck_single_payment
 from app.services.cache import check_payment_rate_limit, try_schedule_autorecheck, get_redis_client
 from app.keyboards import (
-    get_subscription_link_keyboard,
     get_subscription_info_keyboard,
-    get_main_menu_keyboard,
     get_back_to_plans_keyboard,
     get_payment_keyboard,
     get_new_payment_keyboard,
 )
-from app.services.users import get_user_active_subscription
 from app.db.session import SessionLocal
 from app.db.models import Payment as PaymentModel
 from sqlalchemy import select
@@ -341,204 +338,27 @@ async def handle_check_payment(callback: types.CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "get_subscription_link")
 async def get_subscription_link(callback: types.CallbackQuery):
-    """Обработчик кнопки получения ссылки подписки"""
-    logger.info(f"Пользователь {callback.from_user.id} запросил ссылку подписки")
-    # Даем мгновенный фидбек через callback.answer()
+    """Алиас старой кнопки «🔗 Получить ссылку» (хотфикс 2.1).
+
+    Раньше здесь был отдельный legacy-экран: только основная ссылка (Pro не
+    видел ссылку обхода) и полный перебор юзеров Remnawave. Теперь ведет на тот
+    же экран «Подключиться», что и connect_vpn. Новые сообщения уже используют
+    callback connect_vpn; алиас нужен для кнопок в старых сообщениях.
+    """
+    logger.info(f"Пользователь {callback.from_user.id} запросил ссылку подписки (алиас → connect)")
     # UI EXCEPTION: прямой вызов UI метода
     await callback.answer("⏳ Получаем ссылку подписки...")
-    
-    try:
-        # Используем кэш для быстрого ответа
-        subscription = await get_user_active_subscription(callback.from_user.id, use_cache=True)
-        
-        if not subscription:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(
-                "❌ <b>Подписка не найдена</b>\n\n"
-                "У вас нет активной подписки. Пожалуйста, приобретите подписку.",
-                reply_markup=get_main_menu_keyboard(user_id=callback.from_user.id)
-            )
-            return
-        
-        subscription_url = None
-        
-        # Сначала проверяем сохраненную ссылку
-        if subscription.config_data and "subscription_url" in subscription.config_data:
-            subscription_url = subscription.config_data["subscription_url"]
-            # Проверяем, что ссылка не пустая
-            if subscription_url and subscription_url.strip():
-                logger.info(f"✅ Использована сохраненная ссылка подписки для пользователя {callback.from_user.id}: {subscription_url[:50]}...")
-            else:
-                logger.warning(f"⚠️ Сохраненная ссылка пустая для пользователя {callback.from_user.id}")
-                subscription_url = None
-        
-        # Если ссылки нет, пытаемся получить ее из Remna API
-        if not subscription_url:
-            remna_user_id = subscription.remna_user_id
-            if not remna_user_id:
-                # Пробуем найти пользователя в Remna API по telegram_id
-                logger.info(f"📥 remna_user_id не найден, поиск пользователя в Remna API по telegram_id={callback.from_user.id}...")
-                from app.remnawave.client import RemnaClient
-                client = RemnaClient()
-                try:
-                    # Ищем пользователя по telegramId
-                    users_response = await client.get_users(size=100, start=1)
-                    response_data = users_response.get('response', {})
-                    users = response_data.get('users', [])
-                    
-                    found_user = None
-                    for remna_user in users:
-                        if remna_user.get('telegramId') == callback.from_user.id:
-                            found_user = remna_user
-                            break
-                    
-                    # Если не нашли на первой странице, ищем дальше
-                    if not found_user:
-                        page_size = 50
-                        start = 51
-                        while True:
-                            users_response = await client.get_users(size=page_size, start=start)
-                            response_data = users_response.get('response', {})
-                            users = response_data.get('users', [])
-                            
-                            if not users:
-                                break
-                            
-                            for remna_user in users:
-                                if remna_user.get('telegramId') == callback.from_user.id:
-                                    found_user = remna_user
-                                    break
-                            
-                            if found_user or len(users) < page_size:
-                                break
-                            
-                            start += page_size
-                    
-                    if found_user:
-                        remna_user_id = found_user.get('uuid')
-                        logger.info(f"✅ Найден пользователь в Remna API: uuid={remna_user_id}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при поиске пользователя в Remna API: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
-                finally:
-                    await client.close()
-            
-            if remna_user_id:
-                logger.info(f"📥 Получение ссылки подписки из Remna API для remna_user_id={remna_user_id}")
-                from app.remnawave.client import RemnaClient
-                client = RemnaClient()
-                try:
-                    subscription_url = await client.get_user_subscription_url(str(remna_user_id))
-                    logger.info(f"📋 Результат получения ссылки: {subscription_url if subscription_url else 'None'}")
-                    
-                    if subscription_url and subscription_url.strip():
-                        subscription_url = subscription_url.strip()
-                        logger.info(f"✅ Subscription URL получен из Remna API: {subscription_url[:50]}...")
-                    else:
-                        logger.warning(f"⚠️ Не удалось получить ссылку подписки для remna_user_id={remna_user_id} (получено: {repr(subscription_url)})")
-                        subscription_url = None  # Явно устанавливаем None
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при получении ссылки подписки из Remna API: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
-                finally:
-                    await client.close()
-            else:
-                # Если remna_user_id нет, пытаемся создать пользователя в Remna
-                logger.info(f"📝 remna_user_id отсутствует, создание пользователя в Remna API для subscription_id={subscription.id}")
-                from app.services.payments.yookassa import get_or_create_remna_user_and_get_subscription_url
-                try:
-                    subscription_url = await get_or_create_remna_user_and_get_subscription_url(
-                        telegram_user_id=callback.from_user.id,
-                        subscription_id=subscription.id
-                    )
-                    logger.info(f"📋 Результат создания пользователя и получения ссылки: {subscription_url if subscription_url else 'None'}")
-                    if subscription_url and subscription_url.strip():
-                        subscription_url = subscription_url.strip()
-                        logger.info(f"✅ Пользователь создан в Remna и ссылка получена для пользователя {callback.from_user.id}: {subscription_url[:50]}...")
-                    else:
-                        logger.warning(f"⚠️ Ссылка не получена после создания пользователя: {repr(subscription_url)}")
-                        subscription_url = None  # Явно устанавливаем None
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при создании пользователя в Remna API: {e}")
-                    import traceback
-                    logger.debug(traceback.format_exc())
-        
-        # Финальная проверка и очистка subscription_url
-        if subscription_url:
-            subscription_url = subscription_url.strip()
-        
-        # Финальная проверка subscription_url перед отправкой
-        logger.info(f"🔍 ФИНАЛЬНАЯ ПРОВЕРКА перед отправкой сообщения:")
-        logger.info(f"   subscription_url: {repr(subscription_url)}")
-        logger.info(f"   subscription_url is not None: {subscription_url is not None}")
-        logger.info(f"   subscription_url.strip() if exists: {subscription_url.strip() if subscription_url else 'N/A'}")
-        
-        if subscription_url and subscription_url.strip():
-            logger.info(f"✅ Финальная проверка: subscription_url валидна для пользователя {callback.from_user.id}: {subscription_url[:50]}...")
-            logger.info(f"📤 Отправка сообщения со ссылкой подписки...")
-        else:
-            logger.error(f"❌ Финальная проверка: subscription_url невалидна для пользователя {callback.from_user.id} (значение: {repr(subscription_url)})")
-            logger.error(f"   subscription.remna_user_id: {subscription.remna_user_id}")
-            logger.error(f"   subscription.config_data: {subscription.config_data}")
-        
-        if subscription_url and subscription_url.strip():
-            from app.utils.html import escape_html
-            message_text = (
-                "🚀 <b>Ссылка для подключения VPN</b>\n\n"
-                "Используйте эту ссылку для настройки VPN на вашем устройстве:\n\n"
-                f"<code>{escape_html(subscription_url)}</code>\n\n"
-                "💡 <b>Как использовать:</b>\n\n"
-                "<b>Вариант 1:</b>\n"
-                "<blockquote>\n"
-                "1. Откройте ссылку\n"
-                "2. Скачайте подходящий VPN клиент\n"
-                "3. Импортируйте подписку\n"
-                "</blockquote>\n\n"
-                "<b>Вариант 2:</b>\n"
-                "<blockquote>\n"
-                "1. Скопируйте ссылку подписки\n"
-                "2. Вставьте ее в VPN клиент\n"
-                "</blockquote>"
-            )
-            
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            from app.ui.callbacks import build_cb
-            # UI EXCEPTION: импорт ScreenID для передачи в ScreenManager
-            from app.ui.screens import ScreenID
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Открыть ссылку", url=subscription_url)],
-                [InlineKeyboardButton(
-                    text="⬅️ В главное меню",
-                    callback_data=build_cb(ScreenID.CONNECT, "back")
-                )]
-            ])
-            
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(
-                message_text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        else:
-            # UI EXCEPTION: прямой вызов UI метода
-            await callback.message.edit_text(
-                "⚠️ <b>Ссылка недоступна</b>\n\n"
-                "Не удалось получить ссылку подписки. Пожалуйста, попробуйте позже или обратитесь в поддержку.",
-                reply_markup=get_main_menu_keyboard(user_id=callback.from_user.id)
-            )
-            
-    except Exception as e:
-        logger.error(f"Ошибка при получении ссылки подписки: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-        # UI EXCEPTION: прямой вызов UI метода
-        await callback.message.edit_text(
-            "❌ <b>Ошибка</b>\n\n"
-            "Произошла ошибка при получении ссылки. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard(user_id=callback.from_user.id)
-        )
+
+    from app.ui.screen_manager import get_screen_manager
+    from app.ui.screens import ScreenID
+
+    await get_screen_manager().handle_action(
+        screen_id=ScreenID.CONNECT,
+        action="open",
+        payload="-",
+        message_or_callback=callback,
+        user_id=callback.from_user.id,
+    )
 
 
 async def yookassa_webhook_handler(request: web.Request) -> web.Response:
