@@ -2,6 +2,7 @@ aiogram==3.31.0
 pydantic==2.13.5
 pydantic-settings==2.15.0
 SQLAlchemy==2.0.52
+greenlet==3.5.5
 asyncpg==0.29.0
 alembic==1.19.1
 redis==5.3.1
