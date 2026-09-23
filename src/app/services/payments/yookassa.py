@@ -2092,6 +2092,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                             _sub_base2 = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else "https://sub.crs-projects.com"
                             subscription_url = f"{_sub_base2}/{token}"
                 
+                from app.services.remna_service import safe_remna_raw
+
                 # Создаем запись в remna_users перед обновлением telegram_users (для Foreign Key)
                 remna_user_result = await session.execute(
                     select(RemnaUser).where(RemnaUser.remna_id == str(remna_user_id))
@@ -2104,14 +2106,14 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         remna_id=str(remna_user_id),
                         username=username,
                         email=user_response_data.get("email") if user_response_data else None,
-                        raw_data=user_response_data if user_response_data else remna_user_data
+                        raw_data=safe_remna_raw(user_response_data if user_response_data else remna_user_data)
                     )
                     session.add(remna_user)
                     logger.info(f"Создана запись в remna_users для remna_id={remna_user_id}")
                 else:
                     # Обновляем существующую запись
                     remna_user.username = username
-                    remna_user.raw_data = user_response_data if user_response_data else remna_user_data
+                    remna_user.raw_data = safe_remna_raw(user_response_data if user_response_data else remna_user_data)
                     remna_user.last_synced_at = datetime.utcnow()
                     logger.info(f"Обновлена запись в remna_users для remna_id={remna_user_id}")
                 
