@@ -61,7 +61,12 @@ class SubscriptionChecker:
         else:
             logger.debug(f"{prefix}: recovery disabled by config")
         if task_enabled("EXPIRY_NOTIFIER"):
-            await self._run_expiry(prefix)
+            if task_enabled("REMINDERS"):
+                # 3.0: напоминания шлет задача reminders (worker/jobs/reminders.py)
+                # с теми же dedup-ключами; старый нотификатор молчит, чтобы не было дублей.
+                logger.debug(f"{prefix}: expiry notifier replaced by 3.0 reminders")
+            else:
+                await self._run_expiry(prefix)
         if task_enabled("RECONCILER"):
             await self._run_reconciler(prefix)
 
