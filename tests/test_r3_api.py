@@ -32,8 +32,10 @@ def test_routes_present():
     assert app.docs_url is None and app.openapi_url is None
 
 
-def test_remnawave_webhook_is_501_stub():
+def test_remnawave_webhook_is_off_without_secret(monkeypatch):
+    # Stream C: the route is live; with no PANEL_WEBHOOK_SECRET it refuses everything.
     from app.api.main import app
 
+    monkeypatch.setattr("app.config.settings.PANEL_WEBHOOK_SECRET", None)
     r = TestClient(app).post("/webhook/remnawave", json={"event": "user.expired"})
-    assert r.status_code == 501 and r.json() == {"status": "not_implemented"}
+    assert r.status_code == 503 and r.json() == {"status": "disabled"}

@@ -33,6 +33,8 @@ NEW_LAYER = [
     SRC / "bot", SRC / "domain", SRC / "worker", SRC / "infra", SRC / "api" / "routes",
     SRC / "container.py", SRC / "services" / "ports.py", SRC / "services" / "shims.py",
     SRC / "services" / "notifications.py",
+    # stream C
+    SRC / "services" / "events_repo.py", SRC / "services" / "grace.py", SRC / "services" / "maintenance.py",
 ]
 MANUAL = ["pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "premium-friend", "arcadia"]
 
