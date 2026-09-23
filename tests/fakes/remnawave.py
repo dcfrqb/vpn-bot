@@ -145,6 +145,40 @@ class FakeRemna:
         return RemnaUser(uuid=str(u["id"]), telegram_id=telegram_id, username=u["username"],
                          name=u["username"], raw_data=dict(u))
 
+    async def find_users_by_telegram_id(self, telegram_id):
+        """All users with this telegramId (strict, like the real client)."""
+        if self.fail_lookup_tg:
+            raise httpx.ConnectError("panel down")
+        return [dict(u) for u in self.users.values() if u.get("telegramId") == int(telegram_id)]
+
+    # ---- HWID devices (3.4.3 /api/hwid/devices*) ----
+    def add_device(self, uid: int, hwid: str, *, platform: str = "iOS", model: str = "iPhone",
+                   updated: str = "2026-09-20T10:00:00Z", created: str = "2026-06-01T10:00:00Z") -> Dict[str, Any]:
+        dev = {"hwid": hwid, "userId": uid, "platform": platform, "osVersion": "18", "deviceModel": model,
+               "userAgent": "Happ/3", "requestIp": "203.0.113.5", "createdAt": created, "updatedAt": updated}
+        self.devices.setdefault(int(uid), []).append(dev)
+        return dev
+
+    def _devices_body(self, uid: int) -> Dict[str, Any]:
+        devs = self.devices.get(int(uid), [])
+        return {"response": {"total": len(devs), "devices": [dict(d) for d in devs]}}
+
+    async def get_hwid_devices(self, user_id):
+        if self.fail_get_user:
+            raise httpx.ConnectError("panel down")
+        return self._devices_body(int(user_id))
+
+    async def delete_hwid_device(self, user_id, hwid):
+        uid = int(user_id)
+        before = self.devices.get(uid, [])
+        self.devices[uid] = [d for d in before if d["hwid"] != hwid]
+        self.deleted_devices.append((uid, hwid))
+        return self._devices_body(uid)
+
+    async def list_all_hwid_devices(self, size: int = 500, start: int = 0):
+        allv = [dict(d) for uid in sorted(self.devices) for d in self.devices[uid]]
+        return {"response": {"devices": allv[start:start + size], "total": len(allv)}}
+
     async def get_user_subscription_url(self, user_id):
         u = self.users.get(int(user_id))
         return u["subscriptionUrl"] if u else None
@@ -159,9 +193,10 @@ class FakeRemna:
         self.users[int(user_id)]["status"] = "ACTIVE"
         return {}
 
-    async def get_users(self, size: int = 50, start: int = 1):
+    async def get_users(self, size: int = 50, start: int = 0):
+        # 3.4.3: start is an offset from 0 (06 L2)
         users = list(self.users.values())
-        page = users[start - 1:start - 1 + size]
+        page = users[start:start + size]
         return {"response": {"users": [dict(u) for u in page], "total": len(users)}}
 
     async def health_check(self):
@@ -171,28 +206,14 @@ class FakeRemna:
 
 
 class FakeRemnaGateway:
-    """Порт RemnaGateway 3.0 для тестов: настоящий шим LegacyRemnaGateway
-    поверх FakeRemna (инварианты сквадов и лимита проверяются тем же кодом)
-    плюс устройства в памяти (в шиме их нет, это поток B)."""
+    """Порт RemnaGateway 3.0 для тестов: настоящий HttpRemnaGateway (поток B)
+    поверх FakeRemna, так что инварианты сквадов и лимита, устройства и
+    пагинация проверяются тем же кодом, что работает с панелью."""
 
     def __new__(cls, fake: Optional[FakeRemna] = None):
-        from app.domain.models import DeviceInfo
-        from app.services.shims import LegacyRemnaGateway
+        from app.infra.remnawave.gateway import HttpRemnaGateway
 
         fake = fake or FakeRemna()
-
-        class _Gateway(LegacyRemnaGateway):
-            async def list_devices(self, panel_id: int):
-                return [DeviceInfo(hwid=d["hwid"], platform=d.get("platform"), device_model=d.get("deviceModel"))
-                        for d in fake.devices.get(int(panel_id), [])]
-
-            async def delete_device(self, panel_id: int, hwid: str) -> bool:
-                before = fake.devices.get(int(panel_id), [])
-                after = [d for d in before if d["hwid"] != hwid]
-                fake.devices[int(panel_id)] = after
-                fake.deleted_devices.append((int(panel_id), hwid))
-                return len(after) != len(before)
-
-        gw = _Gateway(client_factory=lambda: fake)
+        gw = HttpRemnaGateway(client_factory=lambda: fake)
         gw.fake = fake
         return gw

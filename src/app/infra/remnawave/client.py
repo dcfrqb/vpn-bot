@@ -1,21 +1,57 @@
+"""Remnawave 3.4.3 HTTP client (own httpx, no SDK). Owner: stream B.
+
+Moved from app.remnawave.client in 3.0 (the old path is an alias of this
+module). New code talks to the panel through app.infra.remnawave.gateway
+(RemnaGateway port); this class stays the transport underneath and keeps the
+2.x surface the old code still calls until the cutover.
+
+Fixes from review 06 applied here:
+- M3: a panel error is not "user not found". ``_find_user_by_username``
+  re-raises everything except 404, so ``create_user_unique`` never treats an
+  outage as "the name belongs to someone else" and never creates a duplicate.
+  ``get_user_by_telegram_id(strict=True)`` and ``find_users_by_telegram_id``
+  return None/[] only for 404 or an empty list.
+- L1: 3.x has no ``name``/``password``/``permissions``; the display name goes
+  to ``description``. The no-op "update name" PATCH on every lookup is gone.
+- L2: ``/api/users`` ``start`` is an OFFSET starting at 0.
+- L3: panel ids are validated as positive integers before any request.
+- L4: 404 is logged at DEBUG (it is an expected answer); UI reads use
+  ``RemnaClient.for_ui()`` (8 s, 1 retry); default timeout 15 s / connect 5 s.
+- L6: "active" = status ACTIVE/LIMITED and expireAt in the future;
+  ``subRevokedAt`` only rotates the link in 3.x. The plan comes from squads.
+- L7: dead methods removed (api-token CRUD, ``create_user_with_name``,
+  multi-shape subscription URL probing).
+Subscription URLs are never logged (invariant 6).
+"""
 import asyncio
-import httpx
-from typing import Optional, Dict, Any, Union
-from datetime import datetime, date, timezone
+import re
+import secrets as _secrets
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from typing import Any, Dict, Optional, Union
+
+import httpx
+
 from app.config import settings
 from app.core.errors import InfraError
+from app.infra.remnawave.dto import UPDATE_FIELDS, LIVE_STATUSES, SENTINEL_YEAR_BEFORE, parse_dt, unwrap
 from app.logger import logger
 
-# Фиксированное значение для подписки "навсегда" (Remna не поддерживает null/бессрочно)
+# "Forever": Remnawave has no null expiry, the bot writes this date.
 LIFETIME_EXPIRE_AT = "2099-12-31T23:59:59Z"
+# Created without a subscription (2.x /start users); < 2020 means "none".
+NO_SUBSCRIPTION_SENTINEL = "2000-01-01T00:00:00Z"
 
-# Whitelist полей для update_user и маппинг snake_case -> camelCase
+DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+UI_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
+
+# snake_case / camelCase kwargs -> PATCH /api/users fields (3.4.3, see dto.UPDATE_FIELDS).
 _USER_UPDATE_WHITELIST = {
-    "name": "name",
     "username": "username",
-    "password": "password",
-    "permissions": "permissions",
+    "status": "status",
+    "description": "description",
+    "tag": "tag",
+    "email": "email",
     "expire_at": "expireAt",
     "expireAt": "expireAt",
     "telegram_id": "telegramId",
@@ -28,17 +64,29 @@ _USER_UPDATE_WHITELIST = {
     "trafficLimitBytes": "trafficLimitBytes",
     "traffic_limit_strategy": "trafficLimitStrategy",
     "trafficLimitStrategy": "trafficLimitStrategy",
+    "external_squad_uuid": "externalSquadUuid",
+    "externalSquadUuid": "externalSquadUuid",
 }
+assert set(_USER_UPDATE_WHITELIST.values()) <= UPDATE_FIELDS
+
+
+def panel_id(user_id: Any) -> int:
+    """Numeric Remnawave 3.x user id or ValueError (legacy UUIDs are rejected
+    before a request is made, 06 L3)."""
+    if isinstance(user_id, bool):
+        raise ValueError(f"not a panel id: {user_id!r}")
+    try:
+        value = int(str(user_id).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"not a numeric panel id: {user_id!r}") from None
+    if value <= 0:
+        raise ValueError(f"not a positive panel id: {user_id!r}")
+    return value
 
 
 def normalize_expire_at(value: Optional[Union[str, datetime, date]]) -> Optional[str]:
-    """
-    Нормализует значение expireAt для Remna API.
-    - None -> None
-    - datetime/date с year >= 2099 -> LIFETIME_EXPIRE_AT
-    - str содержащий "2099" (подписка навсегда) -> LIFETIME_EXPIRE_AT
-    - иначе -> ISO8601 UTC с суффиксом Z
-    """
+    """expireAt for the API: None -> None, year >= 2099 -> LIFETIME_EXPIRE_AT,
+    otherwise ISO8601 UTC with ``Z`` (naive datetimes are UTC)."""
     if value is None:
         return None
     if isinstance(value, (datetime, date)):
@@ -46,34 +94,23 @@ def normalize_expire_at(value: Optional[Union[str, datetime, date]]) -> Optional
             return LIFETIME_EXPIRE_AT
         if isinstance(value, datetime):
             if value.tzinfo is None:
-                logger.debug("Remna normalize_expire_at: naive datetime трактуется как UTC")
                 value = value.replace(tzinfo=timezone.utc)
-            value = value.astimezone(timezone.utc)
-            return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-        return datetime(value.year, value.month, value.day, 23, 59, 59, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime(value.year, value.month, value.day, 23, 59, 59, tzinfo=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
     if isinstance(value, str):
         if "2099" in value:
             return LIFETIME_EXPIRE_AT
-        try:
-            expire_str = value.replace("Z", "+00:00").replace("z", "+00:00")
-            if "+" not in expire_str and "-" not in expire_str[-6:]:
-                expire_str += "+00:00"
-            dt = datetime.fromisoformat(expire_str)
-            if dt.tzinfo:
-                dt = dt.astimezone(timezone.utc)
-            else:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except (ValueError, TypeError):
-            return value
+        dt = parse_dt(value)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else value
     return None
 
 
 def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Строит payload для Remna API из kwargs с whitelist и маппингом snake_case -> camelCase.
-    Не включает поля со значением None. Приоритет для expire: expireAt > expire_at.
-    """
+    """PATCH payload from kwargs: whitelist + snake_case -> camelCase, None skipped.
+    ``expireAt`` wins over ``expire_at``. Unknown fields (``name``, ``password``,
+    ``permissions``: absent in 3.x) are dropped with a debug line."""
     result: Dict[str, Any] = {}
     expire_val = kwargs.get("expireAt", kwargs.get("expire_at"))
     if expire_val is not None:
@@ -81,27 +118,23 @@ def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         if normalized is not None:
             result["expireAt"] = normalized
     for key, val in kwargs.items():
-        if val is None:
-            continue
-        if key in ("expire_at", "expireAt"):
+        if val is None or key in ("expire_at", "expireAt"):
             continue
         api_key = _USER_UPDATE_WHITELIST.get(key)
         if api_key is None:
-            logger.debug(f"Remna update_user: игнорируем неподдерживаемое поле {key!r}")
+            logger.debug(f"Remna update_user: field {key!r} is not in the 3.4.3 contract, dropped")
             continue
-        if api_key == "telegramId":
-            result["telegramId"] = int(val)
+        if api_key in ("telegramId", "trafficLimitBytes", "hwidDeviceLimit"):
+            result[api_key] = int(val)
         elif api_key == "activeInternalSquads":
-            result["activeInternalSquads"] = val if isinstance(val, list) else [val]
-        elif api_key == "trafficLimitBytes":
-            result["trafficLimitBytes"] = int(val)
+            result[api_key] = list(val) if isinstance(val, (list, tuple)) else [val]
         else:
             result[api_key] = val
     return result
 
 
 def is_username_taken_error(exc: Exception) -> bool:
-    """True если ошибка Remnawave = «username уже занят» (A019 / already exists)."""
+    """True when Remnawave answered "username already exists" (A019)."""
     if not isinstance(exc, httpx.HTTPStatusError):
         text = str(exc).lower()
         return "already exists" in text or "a019" in text
@@ -114,15 +147,20 @@ def is_username_taken_error(exc: Exception) -> bool:
     return status in (400, 409) and ("exists" in low or "a019" in low)
 
 
+def is_not_found_error(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and exc.response.status_code == 404
+    )
+
+
 def is_own_remna_user(
     user_data: Dict[str, Any], telegram_id: int, known_remna_id: Optional[str] = None
 ) -> bool:
-    """Можно ли считать найденного по username юзера Remnawave «своим».
-
-    Только если его telegramId совпадает с текущим юзером, ИЛИ telegramId пуст и
-    это тот же юзер, чей id уже сохранен у нас в БД (известная привязка).
-    Иначе это чужой аккаунт (переиспользованный @ник, тезка) — не забирать.
-    """
+    """A panel user found by username is "ours" only if its telegramId equals
+    ours, or telegramId is empty and its id is the one stored in our DB.
+    Anything else is somebody else's account (reused @nick, namesake)."""
     if not isinstance(user_data, dict):
         return False
     tg = user_data.get("telegramId")
@@ -138,8 +176,8 @@ def is_own_remna_user(
 
 
 def pick_primary_remna_user(users: list) -> Optional[Dict[str, Any]]:
-    """Из нескольких юзеров с одним telegramId выбирает основной:
-    ACTIVE впереди, затем самая поздняя expireAt, затем меньший id."""
+    """Several users with one telegramId: ACTIVE first, then latest expireAt,
+    then the smaller id."""
     candidates = [u for u in users if isinstance(u, dict)]
     if not candidates:
         return None
@@ -156,65 +194,90 @@ def pick_primary_remna_user(users: list) -> Optional[Dict[str, Any]]:
     return max(candidates, key=_key)
 
 
+def plan_from_squad_names(names) -> Optional[str]:
+    """Tariff plan code from squad names (06 L6: ``raw['plan']`` does not exist).
+    Manual variants count as their base plan: ``pro-m``/``pro-friend`` -> pro."""
+    from app.domain.plans import PLAN_CATALOG
+
+    catalog = {c for c, m in PLAN_CATALOG.items() if m.get("squad") and c != "trial"}
+    for raw in names or ():
+        n = str(raw or "").lower()
+        for suffix in ("-friend", "-m"):
+            if n.endswith(suffix):
+                n = n[: -len(suffix)]
+                break
+        if n in catalog:
+            return n
+    return None
+
+
 @dataclass
 class RemnaUser:
-    """DTO для пользователя Remna"""
-    uuid: str  # remna_id
+    """2.x DTO. ``uuid`` holds the numeric 3.x id as a string (kept for callers)."""
+
+    uuid: str
     telegram_id: Optional[int]
     username: Optional[str]
-    name: Optional[str]  # display name или username
-    raw_data: Dict[str, Any]  # полные данные из API
+    name: Optional[str]
+    raw_data: Dict[str, Any]
 
 
 @dataclass
 class RemnaSubscription:
-    """DTO для подписки Remna"""
     active: bool
-    expires_at: Optional[datetime]  # expireAt из API
-    plan: Optional[str]  # тариф, если доступен
-    raw_data: Dict[str, Any]  # полные данные из API
+    expires_at: Optional[datetime]  # naive UTC, as 2.x callers expect
+    plan: Optional[str]
+    raw_data: Dict[str, Any]
 
 
-# Глобальный переиспользуемый HTTP клиент для connection pooling
+# One pooled httpx client per process.
 _shared_http_client: Optional[httpx.AsyncClient] = None
 
 
 def get_shared_http_client() -> httpx.AsyncClient:
-    """Получает переиспользуемый HTTP клиент с connection pooling"""
     global _shared_http_client
     if _shared_http_client is None:
-        # Используем connection pooling для лучшей производительности
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
         _shared_http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),  # 30s общий, 10s на подключение
-            limits=limits
-            # HTTP/2 отключен (требует пакет h2, не критично для работы)
+            timeout=DEFAULT_TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
         )
-        logger.info("Создан переиспользуемый HTTP клиент для Remna API с connection pooling")
+        logger.info("Remna API: shared HTTP client created")
     return _shared_http_client
 
 
 async def close_shared_http_client():
-    """Закрывает глобальный HTTP клиент (для cleanup)"""
     global _shared_http_client
     if _shared_http_client:
         await _shared_http_client.aclose()
         _shared_http_client = None
-        logger.info("Закрыт переиспользуемый HTTP клиент для Remna API")
+        logger.info("Remna API: shared HTTP client closed")
+
+
+def _subscription_base() -> Optional[str]:
+    return str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
+
+
+def apply_subscription_domain(url: Optional[str]) -> Optional[str]:
+    """SUBSCRIPTION_BASE_URL overrides the host of the panel's subscriptionUrl."""
+    if not url:
+        return url
+    base = _subscription_base()
+    if not base:
+        return url
+    from urllib.parse import urlparse
+
+    try:
+        parsed, sub = urlparse(url), urlparse(base)
+        if parsed.netloc and parsed.netloc != sub.netloc:
+            return url.replace(f"{parsed.scheme}://{parsed.netloc}", base, 1)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"SUBSCRIPTION_BASE_URL override failed ({type(e).__name__})")
+    return url
 
 
 class RemnaClient:
-    def __init__(self, max_retries: int = 3, initial_delay: float = 1.0, max_delay: float = 60.0, 
-                 use_shared_client: bool = True):
-        """
-        Инициализирует клиент Remna API
-        
-        Args:
-            max_retries: Максимальное количество повторных попыток
-            initial_delay: Начальная задержка между попытками (секунды)
-            max_delay: Максимальная задержка между попытками (секунды)
-            use_shared_client: Использовать ли переиспользуемый HTTP клиент (connection pooling)
-        """
+    def __init__(self, max_retries: int = 3, initial_delay: float = 1.0, max_delay: float = 60.0,
+                 use_shared_client: bool = True, timeout: Optional[httpx.Timeout] = None):
         base_url = settings.remna_base_url or settings.REMNA_API_BASE
         self.base_url = str(base_url).rstrip("/") if base_url else None
         self.api_key = settings.remna_api_token or settings.REMNA_API_KEY
@@ -222,205 +285,119 @@ class RemnaClient:
         self.initial_delay = initial_delay
         self.max_delay = max_delay
         self.use_shared_client = use_shared_client
+        self.timeout = timeout
         self._own_client: Optional[httpx.AsyncClient] = None
-    
+
+    @classmethod
+    def for_ui(cls) -> "RemnaClient":
+        """Short timeout and one retry: a button press must not hang for minutes (06 L4)."""
+        return cls(max_retries=1, initial_delay=0.5, timeout=UI_TIMEOUT)
+
     @property
     def client(self) -> httpx.AsyncClient:
-        """Получает HTTP клиент (переиспользуемый или собственный)"""
         if self.use_shared_client:
             return get_shared_http_client()
-        else:
-            if self._own_client is None:
-                self._own_client = httpx.AsyncClient(
-                    timeout=httpx.Timeout(30.0, connect=10.0),
-                    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
-                )
-            return self._own_client
+        if self._own_client is None:
+            self._own_client = httpx.AsyncClient(
+                timeout=self.timeout or DEFAULT_TIMEOUT,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            )
+        return self._own_client
 
     async def request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
-        """Выполняет HTTP запрос к API Remna с использованием API токена и retry механизмом"""
+        """HTTP call with bearer token and retry (5xx, 429, network errors)."""
         if not self.api_key:
-            raise ValueError("REMNA_API_KEY не настроен в конфигурации")
+            raise ValueError("REMNA_API_KEY is not configured")
 
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.api_key}"
         headers["Content-Type"] = "application/json"
+        if self.timeout is not None and "timeout" not in kwargs:
+            kwargs["timeout"] = self.timeout
 
         if endpoint.startswith("/api") and self.base_url and self.base_url.rstrip("/").endswith("/api"):
             endpoint = endpoint[4:]
-        
         url = f"{self.base_url}{endpoint}"
-        
+
         last_exception = None
         delay = self.initial_delay
-        
         for attempt in range(self.max_retries + 1):
             try:
                 if attempt > 0:
-                    logger.warning(f"Повторная попытка {attempt}/{self.max_retries} для {method} {url} (задержка: {delay:.2f}с)")
+                    logger.warning(f"Remna retry {attempt}/{self.max_retries} {method} {endpoint} (delay {delay:.2f}s)")
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, self.max_delay)
-                else:
-                    logger.debug(f"Выполняется {method} запрос к {url}")
-                
                 resp = await self.client.request(method, url, headers=headers, **kwargs)
                 resp.raise_for_status()
-                
                 if attempt > 0:
-                    logger.info(f"Запрос успешно выполнен после {attempt} попыток")
-
-                # Remnawave 3.x: DELETE отдаёт 204, фоновые/bulk-операции 202 — оба без тела.
+                    logger.info(f"Remna {method} {endpoint} succeeded after {attempt} retries")
+                # 3.x: DELETE answers 204, background/bulk actions 202, both without a body.
                 if resp.status_code in (202, 204) or not resp.content:
                     return {}
-
                 return resp.json()
-                
             except httpx.HTTPStatusError as e:
                 last_exception = e
                 status_code = e.response.status_code
                 if 400 <= status_code < 500:
-                    if status_code == 429:
-                        logger.warning(f"Rate limit достигнут (429), повтор через {delay:.2f}с")
-                        if attempt < self.max_retries:
-                            continue
-                    logger.error(f"HTTP ошибка {status_code}: {e.response.text}")
+                    if status_code == 429 and attempt < self.max_retries:
+                        logger.warning(f"Remna rate limit (429), retry in {delay:.2f}s")
+                        continue
+                    if status_code == 404:
+                        logger.debug(f"Remna 404 {method} {endpoint}")
+                    else:
+                        logger.error(f"Remna HTTP {status_code} {method} {endpoint}: {e.response.text[:300]}")
                     raise
                 if attempt < self.max_retries:
-                    logger.warning(f"HTTP ошибка {status_code}, повтор через {delay:.2f}с")
+                    logger.warning(f"Remna HTTP {status_code} {method} {endpoint}, retry in {delay:.2f}s")
                     continue
-                else:
-                    logger.error(f"HTTP ошибка {status_code} после {self.max_retries} попыток: {e.response.text}")
-                    raise
-                    
+                logger.error(f"Remna HTTP {status_code} {method} {endpoint} after {self.max_retries} retries")
+                raise
             except httpx.RequestError as e:
                 last_exception = e
                 if attempt < self.max_retries:
-                    logger.warning(f"Ошибка запроса (сеть/таймаут), повтор через {delay:.2f}с: {e}")
+                    logger.warning(f"Remna network error ({type(e).__name__}) {method} {endpoint}, retry in {delay:.2f}s")
                     continue
-                else:
-                    logger.error(f"Ошибка запроса после {self.max_retries} попыток: {e}")
-                    # Используем InfraError для сетевых ошибок и таймаутов
-                    raise InfraError(
-                        message=f"Ошибка подключения к Remna API: {str(e)}",
-                        service="remna",
-                        details=f"URL: {url}, Attempts: {self.max_retries + 1}"
-                    ) from e
-        
+                logger.error(f"Remna network error ({type(e).__name__}) {method} {endpoint} after {self.max_retries} retries")
+                raise InfraError(
+                    message=f"Remna API connection error: {type(e).__name__}",
+                    service="remna",
+                    details=f"{method} {endpoint}, attempts: {self.max_retries + 1}",
+                ) from e
         if last_exception:
             raise InfraError(
-                message=f"Ошибка подключения к Remna API после {self.max_retries + 1} попыток",
+                message=f"Remna API unreachable after {self.max_retries + 1} attempts",
                 service="remna",
-                details=str(last_exception)
+                details=type(last_exception).__name__,
             ) from last_exception
-        raise RuntimeError("Неожиданная ошибка в retry механизме")
+        raise RuntimeError("unexpected state in the retry loop")
 
     async def close(self):
-        """Закрывает HTTP клиент (только если это собственный клиент)"""
         if not self.use_shared_client and self._own_client:
             await self._own_client.aclose()
             self._own_client = None
 
     def _sanitize_display_name(self, name: Optional[str], telegram_id: int) -> str:
-        """
-        Валидирует и очищает имя для отображения в Remnawave.
-
-        Args:
-            name: Имя из Telegram (first_name + last_name)
-            telegram_id: Telegram ID для fallback
-
-        Returns:
-            Безопасное имя для отображения (max 64 символа, без спецсимволов)
-        """
+        """Human name for the panel ``description`` (max 64 chars)."""
         if not name or not name.strip():
             return f"User {telegram_id}"
-
-        # Убираем лишние пробелы
         clean_name = " ".join(name.split())
-
-        # Ограничиваем длину (Remnawave может иметь лимит)
         if len(clean_name) > 64:
             clean_name = clean_name[:61] + "..."
-
-        # Если имя состоит только из спецсимволов/эмодзи — fallback
-        import re
-        # Убираем все кроме букв, цифр, пробелов и базовых знаков препинания
-        text_only = re.sub(r'[^\w\s\-\.]', '', clean_name, flags=re.UNICODE)
-        if not text_only.strip():
+        if not re.sub(r"[^\w\s\-\.]", "", clean_name, flags=re.UNICODE).strip():
             return f"User {telegram_id}"
-
         return clean_name
 
-    async def _update_name_if_fallback(self, user: RemnaUser, new_name: str) -> None:
-        """
-        Обновляет имя пользователя, если текущее выглядит как fallback.
+    # ------------------------------------------------------------------ users
 
-        Fallback-имена: tg_*, User *, пустое имя.
-        Если new_name тоже fallback — не обновляем.
-        """
-        import re
-
-        current_name = user.name or ""
-
-        # Проверяем, является ли текущее имя fallback
-        is_current_fallback = (
-            not current_name.strip() or
-            re.match(r'^tg_\d+', current_name) or
-            re.match(r'^User[\s_]\d+', current_name)
-        )
-
-        if not is_current_fallback:
-            return  # Текущее имя нормальное, не трогаем
-
-        # Проверяем, что новое имя не fallback
-        is_new_fallback = (
-            not new_name.strip() or
-            re.match(r'^tg_\d+', new_name) or
-            re.match(r'^User[\s_]\d+', new_name)
-        )
-
-        if is_new_fallback:
-            return  # Новое имя тоже fallback, нет смысла обновлять
-
-        # Обновляем имя в Remnawave
-        try:
-            await self.update_user(user.uuid, name=new_name)
-            logger.info(f"Обновлено имя пользователя {user.uuid}: '{current_name}' -> '{new_name}'")
-        except Exception as e:
-            logger.warning(f"Не удалось обновить имя пользователя {user.uuid}: {e}")
-
-    async def get_api_tokens(self) -> Dict[str, Any]:
-        """Получить список API токенов"""
-        return await self.request("GET", "/api/tokens")
-
-    async def create_api_token(self, name: str, permissions: Optional[list] = None) -> Dict[str, Any]:
-        """Создать новый API токен"""
-        payload = {"name": name}
-        if permissions:
-            payload["permissions"] = permissions
-        return await self.request("POST", "/api/tokens", json=payload)
-
-    async def delete_api_token(self, token_id: str) -> Dict[str, Any]:
-        """Удалить API токен"""
-        return await self.request("DELETE", f"/api/tokens/{token_id}")
-
-    async def update_api_token(self, token_id: str, name: Optional[str] = None, 
-                              permissions: Optional[list] = None) -> Dict[str, Any]:
-        """Обновить API токен"""
-        payload = {}
-        if name is not None:
-            payload["name"] = name
-        if permissions is not None:
-            payload["permissions"] = permissions
-        return await self.request("PUT", f"/api/tokens/{token_id}", json=payload)
-
-    async def get_users(self, size: int = 50, start: int = 1) -> Dict[str, Any]:
-        """Получить список пользователей"""
-        return await self.request("GET", f"/api/users?size={size}&start={start}")
+    async def get_users(self, size: int = 50, start: int = 0) -> Dict[str, Any]:
+        """GET /api/users page. ``start`` is an offset from 0 (06 L2); size <= 1000."""
+        size = max(1, min(int(size), 1000))
+        return await self.request("GET", f"/api/users?size={size}&start={max(0, int(start))}")
 
     async def create_user(
         self,
         username: str,
-        password: str,
+        password: Optional[str] = None,
         expire_at: Optional[Union[str, datetime, date]] = None,
         telegram_id: Optional[int] = None,
         active_internal_squads: Optional[list] = None,
@@ -428,24 +405,23 @@ class RemnaClient:
         hwid_device_limit: Optional[int] = None,
         traffic_limit_bytes: Optional[int] = None,
         traffic_limit_strategy: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Создать нового пользователя через API"""
-        # Remna API требует поле expireAt (camelCase). Используем normalize_expire_at для единообразия.
-        # Если expire_at не указан — используем сентинельную дату 2000-01-01 (нет подписки).
-        # Дата до 2020 в subscription-логике трактуется как "нет подписки" (статус "none").
-        NO_SUBSCRIPTION_SENTINEL = "2000-01-01T00:00:00Z"
-        payload = {"username": username, "password": password}
-        normalized_expire = normalize_expire_at(expire_at) or NO_SUBSCRIPTION_SENTINEL
-        payload["expireAt"] = normalized_expire
-        logger.debug(f"Remna create_user: expireAt={normalized_expire}")
+        """POST /api/users. ``password`` is accepted for 2.x callers and ignored
+        (3.x has no such field). ``display_name`` goes to ``description``.
+        Without ``expire_at`` the 2000-01-01 sentinel ("no subscription") is used."""
+        payload: Dict[str, Any] = {
+            "username": username,
+            "expireAt": normalize_expire_at(expire_at) or NO_SUBSCRIPTION_SENTINEL,
+        }
         if telegram_id:
             payload["telegramId"] = int(telegram_id)
         if active_internal_squads:
-            payload["activeInternalSquads"] = active_internal_squads
-        if display_name:
-            payload["name"] = display_name  # Человекочитаемое имя для админки
+            payload["activeInternalSquads"] = list(active_internal_squads)
+        if description or display_name:
+            payload["description"] = description or display_name
         if hwid_device_limit is not None:
-            payload["hwidDeviceLimit"] = hwid_device_limit
+            payload["hwidDeviceLimit"] = int(hwid_device_limit)
         if traffic_limit_bytes is not None:
             payload["trafficLimitBytes"] = int(traffic_limit_bytes)
         if traffic_limit_strategy is not None:
@@ -460,17 +436,15 @@ class RemnaClient:
         known_remna_id: Optional[str] = None,
         **create_kwargs,
     ) -> tuple:
-        """Создает юзера Remnawave, при занятом username НИКОГДА не забирая чужого.
+        """Create a panel user; a taken username NEVER hands over someone else's account.
 
-        Кандидаты: base_username -> tg_<telegram_id> -> tg_<telegram_id>_<rand>.
-        На «username занят» смотрим владельца: если is_own_remna_user — возвращаем
-        его (adopted=True, это наш же юзер после сбоя), иначе пробуем следующий
-        кандидат. telegramId чужого юзера не переписывается никогда.
-
-        Возвращает (user_data: dict, adopted: bool). Прочие ошибки пробрасывает.
+        Candidates: base_username -> tg_<id> -> tg_<id>_<rand>. On "username
+        taken" the owner is checked: our own user (same telegramId, or the id
+        stored in our DB) is returned with adopted=True; otherwise the next
+        candidate is tried. A panel error while checking the owner is raised
+        (06 M3): "cannot tell" is not "someone else's".
+        Returns (user_data: dict, adopted: bool).
         """
-        import secrets as _secrets
-
         candidates = [base_username]
         fallback = f"tg_{int(telegram_id)}"
         if fallback not in candidates:
@@ -480,9 +454,7 @@ class RemnaClient:
         last_exc: Optional[Exception] = None
         for name in candidates:
             try:
-                response = await self.create_user(
-                    username=name, telegram_id=telegram_id, **create_kwargs
-                )
+                response = await self.create_user(username=name, telegram_id=telegram_id, **create_kwargs)
                 user_data = response.get("response", response) if isinstance(response, dict) else response
                 return user_data, False
             except Exception as e:
@@ -492,14 +464,13 @@ class RemnaClient:
                 existing = await self._find_user_by_username(name)
                 if existing and is_own_remna_user(existing, telegram_id, known_remna_id):
                     logger.info(
-                        f"Remna username {name} уже принадлежит этому же юзеру "
-                        f"(tg={telegram_id}, id={existing.get('id')}) — используем его"
+                        f"Remna username {name} already belongs to tg={telegram_id} "
+                        f"(id={existing.get('id')}), reusing it"
                     )
                     return existing, True
                 logger.warning(
-                    f"Remna username {name} занят ДРУГИМ юзером "
-                    f"(id={(existing or {}).get('id')}, telegramId={(existing or {}).get('telegramId')}) — "
-                    f"не забираем, пробуем другой username для tg={telegram_id}"
+                    f"Remna username {name} is taken by another user (id={(existing or {}).get('id')}), "
+                    f"trying another username for tg={telegram_id}"
                 )
         assert last_exc is not None
         raise last_exc
@@ -507,7 +478,7 @@ class RemnaClient:
     async def create_obhod_user(
         self,
         username: str,
-        password: str,
+        password: Optional[str],
         expire_at: Optional[Union[str, datetime, date]],
         active_internal_squads: list,
         traffic_limit_bytes: int,
@@ -515,20 +486,15 @@ class RemnaClient:
         display_name: Optional[str] = None,
         hwid_device_limit: Optional[int] = None,
     ) -> str:
-        """Создать обходного пользователя БЕЗ telegramId и вернуть его uuid.
+        """Create the obhod user WITHOUT telegramId and return its id.
 
-        КРИТИЧНО: obhod-юзер создается БЕЗ telegramId — иначе лукап
-        get_user_by_telegram_id/{id} станет неоднозначным и сломает основную
-        подписку. К obhod-юзеру обращаемся ТОЛЬКО по сохраненному uuid.
-
-        username должен быть уникальным (обычно tg_<id>_obhod, см.
-        build_remna_username + суффикс).
+        No telegramId on purpose: otherwise the telegramId lookup of the main
+        user becomes ambiguous. The obhod user is addressed only by the stored id.
         """
         response = await self.create_user(
             username=username,
-            password=password,
             expire_at=expire_at,
-            telegram_id=None,  # НИКОГДА не задаем telegramId обходному юзеру
+            telegram_id=None,
             active_internal_squads=active_internal_squads,
             display_name=display_name,
             hwid_device_limit=hwid_device_limit,
@@ -536,29 +502,20 @@ class RemnaClient:
             traffic_limit_strategy=traffic_limit_strategy,
         )
         user_data = response.get("response", response) if isinstance(response, dict) else response
-        uuid = user_data.get("uuid") or user_data.get("id") if isinstance(user_data, dict) else None
-        if not uuid:
-            raise ValueError(f"create_obhod_user: не удалось получить uuid из ответа: {response}")
-        logger.info(f"Создан obhod-юзер Remna: uuid={uuid}, username={username}")
-        return str(uuid)
+        uid = (user_data.get("id") or user_data.get("uuid")) if isinstance(user_data, dict) else None
+        if not uid:
+            raise ValueError("create_obhod_user: no id in the panel response")
+        logger.info(f"Remna obhod user created: id={uid} username={username}")
+        return str(uid)
 
     async def get_user_traffic_info(self, user_id: str) -> Dict[str, Any]:
-        """Вернуть инфо о трафике/лимите обходного (или любого) юзера по uuid.
-
-        Returns dict с ключами (любой может быть None):
-          used_bytes  — usedTrafficBytes
-          limit_bytes — trafficLimitBytes (0 = безлимит)
-          strategy    — trafficLimitStrategy
-          expire_at   — expireAt (str как из API)
-          status      — status (ACTIVE/LIMITED/EXPIRED/...)
-        """
+        """Traffic/limit of a user: used_bytes, limit_bytes (0 = unlimited),
+        strategy, expire_at (raw string), status."""
         data = await self.get_user_by_id(user_id)
-        raw = data.get("response", data) if isinstance(data, dict) else {}
+        raw = unwrap(data)
         if not isinstance(raw, dict):
             raw = {}
         return {
-            # API отдает использованный трафик вложенно: userTraffic.usedTrafficBytes
-            # (топ-левел usedTrafficBytes нет — проверено на живой панели 2.8.0)
             "used_bytes": (raw.get("userTraffic") or {}).get("usedTrafficBytes"),
             "limit_bytes": raw.get("trafficLimitBytes"),
             "strategy": raw.get("trafficLimitStrategy"),
@@ -575,460 +532,241 @@ class RemnaClient:
         tg_first_name: Optional[str] = None,
         tg_last_name: Optional[str] = None,
     ) -> RemnaUser:
+        """Find by telegramId, create when absent (2.x grant paths only; in 3.0
+        accounts are created only by ProvisioningService).
+
+        The lookup is strict: a panel outage raises instead of creating a duplicate.
         """
-        Получить или создать пользователя в Remna.
+        from app.utils.remna_username import build_remna_display_name, build_remna_username
 
-        Логика:
-        1. Попробовать найти по telegram_id
-        2. Если не найден — создать нового
-        3. Если username занят — чужой аккаунт НЕ забираем, создаем с другим
-           username (см. create_user_unique)
-
-        Args:
-            telegram_id:    Telegram ID пользователя
-            name:           Устаревший параметр display-имени (для обратной совместимости)
-            expire_at:      Дата истечения (если не указано - создается без активной подписки)
-            tg_username:    Telegram @username (без @)
-            tg_first_name:  Имя из Telegram
-            tg_last_name:   Фамилия из Telegram
-
-        Returns:
-            RemnaUser
-        """
-        from app.utils.remna_username import build_remna_username, build_remna_display_name
-        import secrets
-
-        # username — по новой единой логике
         username = build_remna_username(
-            telegram_id=telegram_id,
-            username=tg_username,
-            first_name=tg_first_name,
-            last_name=tg_last_name,
+            telegram_id=telegram_id, username=tg_username, first_name=tg_first_name, last_name=tg_last_name,
+        )
+        display_name = build_remna_display_name(
+            telegram_id=telegram_id, username=tg_username, first_name=tg_first_name, last_name=tg_last_name,
+        ) if (tg_username or tg_first_name or tg_last_name) else self._sanitize_display_name(
+            name or f"User {telegram_id}", telegram_id
         )
 
-        # display_name: кириллица допустима
-        display_name = build_remna_display_name(
-            telegram_id=telegram_id,
-            username=tg_username,
-            first_name=tg_first_name,
-            last_name=tg_last_name,
-        ) if (tg_username or tg_first_name or tg_last_name) else self._sanitize_display_name(name or f"User {telegram_id}", telegram_id)
-
-        # 1. Сначала ищем по telegram_id. strict: ошибка панели != «юзера нет»,
-        # иначе при сбое панели создавался дубль с тем же telegramId.
         existing = await self.get_user_by_telegram_id(telegram_id, strict=True)
         if existing:
-            logger.info(f"Найден существующий пользователь: uuid={existing.uuid}, telegram_id={telegram_id}")
-
-            # Обновляем имя, если текущее выглядит как fallback (tg_*, User *)
-            await self._update_name_if_fallback(existing, display_name)
-
             return existing
 
-        # 2. Не найден — создаем без подписки.
-        # expire_at не выставляем — пользователь создается без активной подписки.
-        # Подписка появится только после оплаты (provision_tariff).
-        # Хотфикс 2.1: при занятом username чужой аккаунт НЕ забираем и его
-        # telegramId НЕ переписываем (раньше так уводили чужую подписку).
-        password = secrets.token_urlsafe(16)
         user_data, adopted = await self.create_user_unique(
             telegram_id=telegram_id,
             base_username=username,
-            password=password,
             expire_at=expire_at,
             display_name=display_name,
         )
-        uuid = user_data.get('uuid') or user_data.get('id') if isinstance(user_data, dict) else None
-        if not uuid:
-            raise ValueError(f"Не удалось получить id из ответа: {user_data}")
-        if adopted and not user_data.get('telegramId'):
-            # Свой юзер (совпал сохраненный id) без telegramId — привязываем.
-            await self.update_user(str(uuid), telegramId=telegram_id)
+        uid = (user_data.get("id") or user_data.get("uuid")) if isinstance(user_data, dict) else None
+        if not uid:
+            raise ValueError("no id in the panel response")
+        if adopted and not user_data.get("telegramId"):
+            # Our own user (matched by the stored id) without telegramId: bind it.
+            await self.update_user(str(uid), telegramId=telegram_id)
         logger.info(
-            f"{'Найден свой' if adopted else 'Создан'} пользователь Remna: id={uuid}, "
-            f"telegram_id={telegram_id}, username={user_data.get('username')}"
+            f"Remna user {'reused' if adopted else 'created'}: id={uid} tg={telegram_id} "
+            f"username={user_data.get('username')}"
         )
         return RemnaUser(
-            uuid=str(uuid),
+            uuid=str(uid),
             telegram_id=telegram_id,
-            username=user_data.get('username') or username,
+            username=user_data.get("username") or username,
             name=display_name,
             raw_data=user_data,
         )
 
     async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """Публичный резолв пользователя Remnawave по username (или None).
-
-        Тонкая обертка над _find_user_by_username. Используется для recovery
-        обходного юзера (M1): username детерминирован (tg_<id>_obhod), и если
-        DB-строка не записалась (сбой commit после create), uuid восстанавливаем
-        отсюда вместо повторного create (который уперся бы в duplicate-username).
-        """
+        """User by username, None on 404. Other panel errors are raised (06 M3)."""
         return await self._find_user_by_username(username)
 
     async def _find_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
-        """
-        Найти пользователя по username.
-        Использует прямой эндпоинт API 2.6.x: GET /users/by-username/{username}
-        """
         try:
             response = await self.request("GET", f"/api/users/by-username/{username}")
-            user_data = response.get('response', response) if isinstance(response, dict) else response
-
-            if not user_data or not isinstance(user_data, dict):
-                logger.warning(f"Пользователь с username={username} не найден")
-                return None
-
-            logger.info(f"Найден пользователь по username={username}: uuid={user_data.get('uuid')}")
-            return user_data
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.warning(f"Пользователь с username={username} не найден (404)")
+            if is_not_found_error(e):
                 return None
-            logger.error(f"Ошибка поиска по username {username}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка поиска по username {username}: {e}")
-            return None
-
-    # Алиас для обратной совместимости
-    async def create_user_with_name(self, telegram_id: int, name: str, expire_at: Optional[str] = None) -> RemnaUser:
-        """Алиас для get_or_create_user (обратная совместимость)."""
-        return await self.get_or_create_user(telegram_id, name, expire_at)
+            raise
+        user_data = unwrap(response)
+        return user_data if isinstance(user_data, dict) and user_data else None
 
     async def delete_user(self, user_id: str) -> Dict[str, Any]:
-        """Удалить пользователя"""
-        return await self.request("DELETE", f"/api/users/{user_id}")
+        return await self.request("DELETE", f"/api/users/{panel_id(user_id)}")
 
     async def disable_user(self, user_id: str) -> Dict[str, Any]:
-        """Деактивировать пользователя (status=DISABLED).
-
-        Надежнее, чем expireAt в прошлом: Remnawave 2.8.0 отклоняет past expireAt
-        с 400 «Expiration date cannot be in the past». Disable отзывает доступ,
-        сохраняя юзера/счетчик трафика. Обратимо через enable_user.
-        """
-        return await self.request("POST", f"/api/users/{user_id}/actions/disable")
+        """status=DISABLED (reversible with enable_user)."""
+        return await self.request("POST", f"/api/users/{panel_id(user_id)}/actions/disable")
 
     async def enable_user(self, user_id: str) -> Dict[str, Any]:
-        """Снова активировать пользователя (отмена disable_user)."""
-        return await self.request("POST", f"/api/users/{user_id}/actions/enable")
+        return await self.request("POST", f"/api/users/{panel_id(user_id)}/actions/enable")
 
     async def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
-        """Получить пользователя по ID"""
-        return await self.request("GET", f"/api/users/{user_id}")
+        return await self.request("GET", f"/api/users/{panel_id(user_id)}")
+
+    async def find_users_by_telegram_id(self, telegram_id: int) -> list:
+        """ALL panel users with this telegramId (strict: errors are raised).
+
+        3.x removed /users/by-telegram-id; /users/stream filters by telegramId.
+        The filter is re-checked here (review m-2): a panel upgrade that ignores
+        the filter must not hand us other people's accounts.
+        """
+        response = await self.request("GET", f"/api/users/stream?telegramId={int(telegram_id)}&size=25")
+        body = unwrap(response)
+        if isinstance(body, dict) and "users" in body:
+            body = body["users"]
+        if isinstance(body, dict):
+            body = [body] if body else []
+        if not isinstance(body, list):
+            return []
+        matched = [u for u in body if isinstance(u, dict) and str(u.get("telegramId")) == str(telegram_id)]
+        if len(matched) != len(body):
+            logger.warning(
+                f"Remnawave stream?telegramId={telegram_id} returned "
+                f"{len(body) - len(matched)} users with another telegramId, dropped"
+            )
+        return matched
 
     async def get_user_by_telegram_id(self, telegram_id: int, strict: bool = False) -> Optional[RemnaUser]:
-        """
-        Получить пользователя Remna по telegram_id.
+        """The primary panel user of a Telegram id (ACTIVE, latest expireAt).
 
-        В Remnawave 3.0.0 эндпоинт GET /users/by-telegram-id/{telegramId} удалён,
-        вместо него курсорный GET /users/stream с фильтром telegramId.
-
-        strict=False (UI-чтение): любая ошибка -> None, как раньше.
-        strict=True (перед созданием юзера): None ТОЛЬКО если юзера точно нет
-        (404 / пустой список). Ошибка панели (5xx, таймаут) пробрасывается, чтобы
-        вызывающий не принял «панель лежит» за «юзера нет» и не создал дубль.
-
-        Если найдено несколько юзеров с этим telegramId, берем ACTIVE с самой
-        поздней датой expireAt (порядок выдачи панели не гарантирован).
-
-        Returns:
-            RemnaUser если найден, None если не найден
+        strict=False (2.x UI reads): any error -> None.
+        strict=True (before creating a user): None only for 404 / empty list;
+        a panel error is raised so "panel down" is never read as "no user".
         """
         try:
-            response = await self.request(
-                "GET", f"/api/users/stream?telegramId={telegram_id}&size=25"
-            )
-
-            # Обрабатываем ответ
-            user_data = response.get('response', response) if isinstance(response, dict) else response
-
-            # stream отдаёт {users: [...], nextCursor, hasMore}
-            if isinstance(user_data, dict) and 'users' in user_data:
-                user_data = user_data['users']
-
-            # Ревью m-2: не доверяем фильтру панели. Если апгрейд панели
-            # проигнорирует/переименует telegramId, stream вернет чужих юзеров,
-            # и «лучший» из них был бы привязан к звонящему (захват аккаунта).
-            if isinstance(user_data, dict) and user_data:
-                user_data = [user_data]
-            if isinstance(user_data, list):
-                matched = [
-                    u for u in user_data
-                    if isinstance(u, dict) and str(u.get("telegramId")) == str(telegram_id)
-                ]
-                if len(matched) != len(user_data):
-                    logger.warning(
-                        f"Remnawave stream?telegramId={telegram_id} вернул "
-                        f"{len(user_data) - len(matched)} юзеров с чужим telegramId, отброшены"
-                    )
-                user_data = matched
-            if isinstance(user_data, list):
-                if not user_data:
-                    logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
-                    return None
-                if len(user_data) > 1:
-                    logger.warning(
-                        f"Несколько юзеров Remnawave с telegramId={telegram_id}: "
-                        f"{[u.get('id') for u in user_data if isinstance(u, dict)]} — берем ACTIVE с поздним expireAt"
-                    )
-                    user_data = pick_primary_remna_user(user_data)
-                else:
-                    user_data = user_data[0]
-
-            if not user_data or not isinstance(user_data, dict):
-                logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")
-                return None
-
-            uuid = user_data.get('uuid') or user_data.get('id')
-            if not uuid:
-                logger.warning(f"Пользователь telegram_id={telegram_id} найден, но без uuid")
-                return None
-
-            logger.info(f"Найден пользователь: uuid={uuid}, telegram_id={telegram_id}")
-            return RemnaUser(
-                uuid=str(uuid),
-                telegram_id=telegram_id,
-                username=user_data.get('username'),
-                name=user_data.get('name') or user_data.get('username'),
-                raw_data=user_data
-            )
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna (404)")
-                return None
-            logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
-            if strict:
-                raise
-            return None
+            users = await self.find_users_by_telegram_id(telegram_id)
         except Exception as e:
-            logger.error(f"Ошибка get_user_by_telegram_id({telegram_id}): {e}")
+            if is_not_found_error(e):
+                return None
+            logger.error(f"get_user_by_telegram_id({telegram_id}) failed: {type(e).__name__}")
             if strict:
                 raise
             return None
+        if not users:
+            return None
+        if len(users) > 1:
+            logger.warning(
+                f"Several Remnawave users with telegramId={telegram_id}: "
+                f"{[u.get('id') for u in users]}, picking ACTIVE with the latest expireAt"
+            )
+        user_data = pick_primary_remna_user(users)
+        uid = (user_data or {}).get("id") or (user_data or {}).get("uuid")
+        if not uid:
+            return None
+        return RemnaUser(
+            uuid=str(uid),
+            telegram_id=telegram_id,
+            username=user_data.get("username"),
+            name=user_data.get("description") or user_data.get("username"),
+            raw_data=user_data,
+        )
 
-    async def get_user_with_subscription_by_telegram_id(self, telegram_id: int) -> Optional[tuple[RemnaUser, Optional[RemnaSubscription]]]:
-        """
-        Получить пользователя Remna и его подписку по telegram_id.
-        Возвращает кортеж (RemnaUser, RemnaSubscription | None).
-        """
+    async def get_user_with_subscription_by_telegram_id(
+        self, telegram_id: int
+    ) -> Optional[tuple[RemnaUser, Optional[RemnaSubscription]]]:
+        """(RemnaUser, RemnaSubscription | None). Active = ACTIVE/LIMITED and
+        expireAt in the future (06 L6). A date before 2020 = no subscription."""
         remna_user = await self.get_user_by_telegram_id(telegram_id)
         if not remna_user:
             return None
-        
-        # Извлекаем информацию о подписке из raw_data пользователя
-        subscription = None
-        raw_data = remna_user.raw_data
-        
-        # Проверяем наличие подписки в данных пользователя
-        expire_at_raw = raw_data.get('expireAt') or raw_data.get('expires_at') or raw_data.get('valid_until')
-        expire_dt = None
-        is_active = False
-        
-        if expire_at_raw:
-            try:
-                # Парсим дату (может быть ISO строка или timestamp)
-                if isinstance(expire_at_raw, str):
-                    # Убираем Z и заменяем на +00:00 для fromisoformat
-                    expire_str = expire_at_raw.replace('Z', '+00:00')
-                    # Если нет таймзоны, добавляем UTC
-                    if '+' not in expire_str and '-' not in expire_str[-6:]:
-                        expire_str += '+00:00'
-                    expire_dt = datetime.fromisoformat(expire_str)
-                    # Конвертируем в UTC если нужно
-                    if expire_dt.tzinfo:
-                        expire_dt = expire_dt.replace(tzinfo=None)
-                elif isinstance(expire_at_raw, (int, float)):
-                    expire_dt = datetime.fromtimestamp(expire_at_raw)
-                elif isinstance(expire_at_raw, datetime):
-                    expire_dt = expire_at_raw
-                    if expire_dt.tzinfo:
-                        expire_dt = expire_dt.replace(tzinfo=None)
-
-                # Подписка активна, если expireAt в будущем И не отозвана (subRevokedAt)
-                if expire_dt:
-                    is_revoked = raw_data.get('subRevokedAt') is not None
-                    is_active = (expire_dt > datetime.utcnow()) and not is_revoked
-            except Exception as e:
-                logger.warning(f"Ошибка парсинга expireAt для пользователя {remna_user.uuid}: {e}")
-                expire_dt = None
-        
-        # Подписка существует только если есть реальная дата expireAt.
-        # Даты до 2020 — сентинельные (пользователь создан без подписки) → subscription=None → статус "none".
-        if expire_dt is not None and expire_dt.year >= 2020:
-            plan = raw_data.get('plan') or raw_data.get('planCode') or raw_data.get('plan_code')
-
-            subscription = RemnaSubscription(
+        raw = remna_user.raw_data
+        expire = parse_dt(raw.get("expireAt"))
+        if expire is None or expire.year < SENTINEL_YEAR_BEFORE:
+            return (remna_user, None)
+        now = datetime.now(timezone.utc)
+        status = str(raw.get("status") or "").upper()
+        # Older payloads without status: treat as ACTIVE (2.x behaviour for the date check).
+        is_active = (status in LIVE_STATUSES or not status) and expire > now
+        squads = [s.get("name") for s in raw.get("activeInternalSquads") or [] if isinstance(s, dict)]
+        return (
+            remna_user,
+            RemnaSubscription(
                 active=is_active,
-                expires_at=expire_dt,
-                plan=plan,
-                raw_data=raw_data.get('subscription', raw_data)
-            )
-        
-        return (remna_user, subscription)
+                expires_at=expire.replace(tzinfo=None),
+                plan=plan_from_squad_names(squads),
+                raw_data=raw,
+            ),
+        )
 
     async def update_user(self, user_id: str, **kwargs) -> Dict[str, Any]:
-        """
-        Обновить данные пользователя.
-
-        Remnawave 3.x использует PATCH /api/users с числовым id в теле запроса
-        (в 2.x на этом месте был uuid).
-
-        kwargs: expire_at/expireAt, telegram_id/telegramId, active_internal_squads/activeInternalSquads и др.
-        """
+        """PATCH /api/users with the numeric id in the body (3.x)."""
         payload = build_user_payload_from_kwargs(kwargs)
-        # Remnawave требует идентификатор в теле запроса; с 3.0.0 это числовой id
-        payload["id"] = int(user_id)
-
-        if payload.get("expireAt"):
-            logger.debug(f"Remna update_user {user_id}: expireAt={payload['expireAt']}")
-        if len(payload) == 1:  # только id, нечего обновлять
-            logger.debug("Remna update_user: нет полей для обновления (только id)")
+        payload["id"] = panel_id(user_id)
+        if len(payload) == 1:
+            logger.debug("Remna update_user: nothing to update")
             return {}
-
         return await self.request("PATCH", "/api/users", json=payload)
 
+    # ----------------------------------------------------------------- squads
+
     async def get_nodes(self) -> Dict[str, Any]:
-        """Получить список нод"""
         return await self.request("GET", "/api/nodes")
 
     async def get_internal_squads(self) -> Dict[str, Any]:
-        """Получить список внутренних сквадов"""
         return await self.request("GET", "/api/internal-squads")
 
     async def list_internal_squads(self) -> list:
-        """Список внутренних сквадов. В отличие от get_squad_by_name НЕ глушит ошибки."""
+        """Internal squads as dicts. Errors are raised (unlike get_squad_by_name)."""
         response = await self.get_internal_squads()
-        if isinstance(response, list):
-            return response
-        if isinstance(response, dict):
-            response_obj = response.get('response', {})
-            if isinstance(response_obj, dict):
-                squads = response_obj.get('internalSquads', response_obj.get('items'))
-                if squads is not None:
-                    return list(squads)
-            return list(response.get('items', response.get('data', [])) or [])
+        body = unwrap(response)
+        if isinstance(body, list):
+            return body
+        if isinstance(body, dict):
+            squads = body.get("internalSquads", body.get("items"))
+            if squads is not None:
+                return list(squads)
         return []
 
     async def get_squad_by_name(self, squad_name: str) -> Optional[Dict[str, Any]]:
-        """Получить сквад по имени"""
+        """Squad by name, None when absent or on error (2.x callers)."""
         try:
-            response = await self.get_internal_squads()
-            squads = []
-            
-            # Обрабатываем разные форматы ответа
-            if isinstance(response, list):
-                squads = response
-            elif isinstance(response, dict):
-                # Проверяем response.internalSquads (основной формат)
-                response_obj = response.get('response', {})
-                squads = response_obj.get('internalSquads', 
-                    response_obj.get('items', 
-                        response.get('items', 
-                            response.get('data', []))))
-            
-            for squad in squads:
-                if squad.get('name') == squad_name:
+            for squad in await self.list_internal_squads():
+                if isinstance(squad, dict) and squad.get("name") == squad_name:
                     return squad
             return None
         except Exception as e:
-            logger.error(f"Ошибка при получении сквада {squad_name}: {e}")
+            logger.error(f"Remna squad lookup {squad_name!r} failed: {type(e).__name__}")
             return None
+
+    # ------------------------------------------------------------------- hwid
+
+    async def get_hwid_devices(self, user_id: Any) -> Dict[str, Any]:
+        """GET /api/hwid/devices/{userId} -> {"response": {"total", "devices"}}."""
+        return await self.request("GET", f"/api/hwid/devices/{panel_id(user_id)}")
+
+    async def delete_hwid_device(self, user_id: Any, hwid: str) -> Dict[str, Any]:
+        """POST /api/hwid/devices/delete {userId, hwid}; returns the remaining devices."""
+        return await self.request(
+            "POST", "/api/hwid/devices/delete", json={"userId": panel_id(user_id), "hwid": str(hwid)}
+        )
+
+    async def list_all_hwid_devices(self, size: int = 500, start: int = 0) -> Dict[str, Any]:
+        """GET /api/hwid/devices page over every user (offset ``start`` from 0)."""
+        size = max(1, min(int(size), 1000))
+        return await self.request("GET", f"/api/hwid/devices?size={size}&start={max(0, int(start))}")
+
+    # ------------------------------------------------------------ subscription
 
     async def get_user_subscription_url(self, user_id: str) -> Optional[str]:
-        """Получить subscription URL для пользователя
-        
-        API Remnawave возвращает структуру:
-        {
-            "response": {
-                "uuid": "...",
-                "subscriptionUrl": "https://...",
-                "subscriptionToken": "...",
-                ...
-            }
-        }
-        или может быть напрямую объект пользователя
-        """
+        """``response.subscriptionUrl`` with the SUBSCRIPTION_BASE_URL host
+        override. A bare ``subscriptionToken`` is turned into a URL on that base.
+        UI read: None on any error. The URL is never logged."""
         try:
-            user_data = await self.get_user_by_id(user_id)
-            logger.debug(f"Получены данные пользователя {user_id}: {list(user_data.keys()) if isinstance(user_data, dict) else type(user_data)}")
-            
-            # Проверяем разные варианты структуры ответа
-            subscription_url = None
-            subscription_token = None
-            
-            # Вариант 1: Прямо в корне ответа
-            if isinstance(user_data, dict):
-                subscription_url = user_data.get('subscriptionUrl') or user_data.get('subscription_url')
-                subscription_token = user_data.get('subscriptionToken') or user_data.get('subscription_token')
-                
-                # Вариант 2: В response объекте
-                if not subscription_url and not subscription_token:
-                    response = user_data.get('response', {})
-                    if isinstance(response, dict):
-                        subscription_url = response.get('subscriptionUrl') or response.get('subscription_url')
-                        subscription_token = response.get('subscriptionToken') or response.get('subscription_token')
-                        
-                        # Также проверяем вложенные структуры
-                        if not subscription_url and not subscription_token:
-                            # Может быть в data
-                            data = response.get('data', {})
-                            if isinstance(data, dict):
-                                subscription_url = data.get('subscriptionUrl') or data.get('subscription_url')
-                                subscription_token = data.get('subscriptionToken') or data.get('subscription_token')
-                
-                # Вариант 3: В raw_data (если есть)
-                if not subscription_url and not subscription_token:
-                    raw_data = user_data.get('raw_data', {})
-                    if isinstance(raw_data, dict):
-                        subscription_url = raw_data.get('subscriptionUrl') or raw_data.get('subscription_url')
-                        subscription_token = raw_data.get('subscriptionToken') or raw_data.get('subscription_token')
-            
-            # Если нашли subscription_url напрямую
-            if subscription_url:
-                # Domain override через SUBSCRIPTION_BASE_URL из config (убирает hardcoded домены)
-                sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
-                if sub_base:
-                    try:
-                        from urllib.parse import urlparse
-                        parsed = urlparse(subscription_url)
-                        sub_parsed = urlparse(sub_base)
-                        if parsed.netloc and parsed.netloc != sub_parsed.netloc:
-                            subscription_url = subscription_url.replace(
-                                f"{parsed.scheme}://{parsed.netloc}",
-                                sub_base,
-                                1,
-                            )
-                            logger.info(f"Применен SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
-                    except Exception as url_err:
-                        logger.warning(f"Не удалось применить SUBSCRIPTION_BASE_URL override: {url_err}")
-                logger.info(f"Найден subscriptionUrl для пользователя {user_id}")
-                return subscription_url
-
-            # Если нашли только token — формируем URL из SUBSCRIPTION_BASE_URL
-            if subscription_token:
-                sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
-                if sub_base:
-                    subscription_url = f"{sub_base}/{subscription_token}"
-                    logger.info(f"Сформирован subscriptionUrl из token для пользователя {user_id}")
-                    return subscription_url
-                else:
-                    logger.warning(
-                        f"SUBSCRIPTION_BASE_URL не задан — не удается построить URL из token для пользователя {user_id}. "
-                        "Задайте SUBSCRIPTION_BASE_URL в .env"
-                    )
-            
-            # Если ничего не нашли, логируем структуру для отладки
-            logger.warning(f"Subscription URL не найден для пользователя {user_id}")
-            logger.debug(f"Ключи ответа: {list(user_data.keys()) if isinstance(user_data, dict) else type(user_data)}")
-            return None
-            
+            raw = unwrap(await self.get_user_by_id(user_id))
         except Exception as e:
-            logger.error(f"Ошибка при получении subscription URL для пользователя {user_id}: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            logger.error(f"Remna subscription URL for {user_id}: {type(e).__name__}")
             return None
+        if not isinstance(raw, dict):
+            return None
+        url = raw.get("subscriptionUrl")
+        if url:
+            return apply_subscription_domain(url)
+        token = raw.get("subscriptionToken")
+        base = _subscription_base()
+        if token and base:
+            return f"{base}/{token}"
+        logger.warning(f"Remna: no subscription URL for user {user_id}")
+        return None
 
     async def health_check(self) -> Dict[str, Any]:
-        """Проверить статус API"""
         return await self.request("GET", "/api/system/health")
