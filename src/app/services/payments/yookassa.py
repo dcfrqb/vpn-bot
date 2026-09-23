@@ -1775,8 +1775,8 @@ async def get_or_create_remna_user_and_get_subscription_url(
                         # ИДЕМПОТЕНТНОСТЬ: если уже есть зафиксированный target из
                         # Phase A — используем его, не пересчитываем от текущего expireAt.
                         # Иначе при retry _compute_extend_expire_str будет каждый раз
-                        # добавлять +period к уже сохранённому в Remnawave значению —
-                        # подписка уезжает в годы вперёд (был такой баг).
+                        # добавлять +period к уже сохраненному в Remnawave значению —
+                        # подписка уезжает в годы вперед (был такой баг).
                         if subscription.remnawave_expected_expire_at:
                             new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
                         else:

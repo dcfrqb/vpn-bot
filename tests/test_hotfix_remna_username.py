@@ -11,8 +11,8 @@ from app.utils.remna_username import (
     is_valid_remna_username,
 )
 
-YO = "ё"
-YO_UP = "Ё"
+YO = "\u0451"
+YO_UP = "\u0401"
 
 
 def test_plain_e_is_e_not_yo():
