@@ -1,7 +1,7 @@
 """
 Вспомогательные функции для работы с экранами
 """
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from datetime import datetime
 from app.services.sync_service import SyncService, RemnaUnavailableError
 from app.services.cache import get_cached_sync_result
@@ -10,6 +10,11 @@ from app.ui.screens.main_menu import MainMenuScreen
 from app.ui.screens.profile import ProfileScreen
 from app.ui.screens import ScreenID
 from app.logger import logger
+
+if TYPE_CHECKING:  # только для аннотаций, без рантайм-импорта (избегаем циклов)
+    from app.ui.viewmodels.connect import ConnectViewModel
+    from app.ui.viewmodels.main_menu import MainMenuViewModel
+    from app.ui.viewmodels.profile import ProfileViewModel
 
 
 async def get_main_menu_viewmodel(

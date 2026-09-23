@@ -655,27 +655,44 @@ async def plan_premium_period(callback: types.CallbackQuery):
 
 @router.callback_query(lambda c: c.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
-    """Обработчик возврата в главное меню - использует ScreenManager через Navigator"""
+    """Кнопка «В главное меню» из legacy-сообщений (после оплаты, промо, проверки).
+
+    Раньше тут был NameError (get_navigator не импортирован), кнопка молчала.
+    Теперь явный сброс навигации и показ главного меню: кнопка называется
+    «В главное меню», поэтому ведем ровно туда, а не «назад» по backstack.
+    """
     logger.info(f"Пользователь {callback.from_user.id} вернулся в главное меню")
-    # Мгновенный фидбек
     # UI EXCEPTION: прямой вызов UI метода
     await callback.answer()
-    
-    # Используем ScreenManager для обработки BACK действия через Navigator
+
+    from app.navigation.navigator import get_navigator
     from app.ui.screen_manager import get_screen_manager
-    screen_manager = get_screen_manager()
+
+    user_id = callback.from_user.id
     navigator = get_navigator()
-    
-    # Определяем текущий экран из Navigator
-    current_screen = navigator.get_current_screen(callback.from_user.id) or ScreenID.MAIN_MENU
-    
-    # Обрабатываем BACK действие через Navigator
-    await screen_manager.handle_action(
-        screen_id=current_screen,
-        action="back",
-        payload="-",
+    screen_manager = get_screen_manager()
+
+    navigator.clear_backstack(user_id)
+    navigator.clear_flow_anchor(user_id)
+    navigator._set_current_screen(user_id, ScreenID.MAIN_MENU)
+    try:
+        screen_manager._set_current_screen(user_id, ScreenID.MAIN_MENU)
+        screen_manager._backstacks.pop(user_id, None)
+    except Exception as e:
+        logger.debug(f"back_to_main: screen_manager state sync soft-fail: {e}")
+
+    viewmodel = await get_main_menu_viewmodel(
+        telegram_id=user_id,
+        first_name=callback.from_user.first_name,
+        last_name=callback.from_user.last_name,
+        username=callback.from_user.username,
+    )
+    await screen_manager.show_screen(
+        screen_id=ScreenID.MAIN_MENU,
         message_or_callback=callback,
-        user_id=callback.from_user.id
+        viewmodel=viewmodel,
+        edit=True,
+        user_id=user_id,
     )
 
 
