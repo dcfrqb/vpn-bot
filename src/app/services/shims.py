@@ -9,12 +9,12 @@ What is real here and what is a placeholder:
 | Port                | Shim                       | State                                   |
 |---------------------|----------------------------|-----------------------------------------|
 | RemnaGateway        | LegacyRemnaGateway         | real over RemnaClient, devices -> B     |
-| PaymentGateway      | LegacyPaymentGateway       | create/get real, charge/refund -> A     |
-| StarsGateway        | DisabledStarsGateway       | placeholder -> A                        |
-| ProvisioningService | LegacyProvisioningService  | placeholder -> B                        |
+| PaymentGateway      | LegacyPaymentGateway       | = infra.yookassa.YooKassaGateway (A)    |
+| StarsGateway        | DisabledStarsGateway       | placeholder; money swaps in the real one|
+| ProvisioningService | LegacyProvisioningService  | paid periods + revoke over 2.x (A) -> B |
 | StatusService       | LegacyStatusService        | real over services.users (+cache)       |
 | DevicesService      | UnavailableDevicesService  | empty list / False -> B                 |
-| CheckoutService     | LegacyCheckoutService      | quote/start real, check -> A            |
+| CheckoutService     | LegacyCheckoutService      | -> services.checkout (A)                |
 | PromoService        | LegacyPromoService         | placeholder -> E                        |
 | MaintenanceGuard    | RedisMaintenanceGuard      | real (manual Redis flag)                |
 | Notifier            | notifications.TelegramNotifier (not a shim)                          |
@@ -33,12 +33,12 @@ from app.domain.models import (
     Entitlement,
     PanelUser,
     PaymentIntent,
-    PaymentStatus,
     PromoReward,
     Quote,
     SubKind,
     SubscriptionState,
 )
+from app.infra.yookassa.gateway import YooKassaGateway
 from app.logger import logger
 
 
@@ -265,44 +265,11 @@ class LegacyRemnaGateway:
             return False
 
 
-class LegacyPaymentGateway:
-    """PaymentGateway over services.payments.yookassa (sync SDK in 2.x)."""
-
-    async def create_payment(
-        self,
-        intent: PaymentIntent,
-        *,
-        description: str,
-        idempotence_key: str,
-        save_payment_method: bool = False,
-        metadata: Optional[Mapping[str, Any]] = None,
-    ) -> PaymentIntent:
-        if save_payment_method:
-            raise _placeholder("PaymentGateway.create_payment(save_payment_method)", "A")
-        from dataclasses import replace
-
-        from app.services.payments.yookassa import create_payment
-
-        # 2.x create_payment prices server-side itself and raises on mismatch.
-        url, external_id = await create_payment(
-            amount_rub=intent.amount_rub,
-            description=description,
-            user_id=int(intent.telegram_id or 0),
-            plan_code=intent.plan_code,
-            period_months=intent.months,
-        )
-        return replace(intent, external_id=external_id, confirmation_url=url, status=PaymentStatus.PENDING)
-
-    async def get_payment(self, external_id: str) -> Optional[dict]:
-        from app.services.payments.yookassa import check_payment_status
-
-        return await check_payment_status(external_id)
-
-    async def charge_saved_method(self, intent, *, payment_method_id, description, idempotence_key) -> PaymentIntent:
-        raise _placeholder("PaymentGateway.charge_saved_method", "A")
-
-    async def refund(self, external_id, *, amount_rub=None, idempotence_key, reason="") -> Optional[dict]:
-        raise _placeholder("PaymentGateway.refund", "A")
+class LegacyPaymentGateway(YooKassaGateway):
+    """PaymentGateway: since stream A the async YooKassa gateway
+    (app.infra.yookassa.YooKassaGateway, no SDK, no database). Kept under this
+    name so the frozen container keeps wiring it; the orchestrator renames the
+    container line at the cutover."""
 
 
 class DisabledStarsGateway:
@@ -314,15 +281,21 @@ class DisabledStarsGateway:
 
 
 class LegacyProvisioningService:
-    """2.x provisioning lives in yookassa.handle_successful_payment and
-    remna_service.provision_tariff and is called by the old flows directly.
-    Stream B builds the real ProvisioningService."""
+    """ProvisioningService over the 2.x provisioning core (stream A adapter in
+    app.services.payments.legacy_provisioning): paid main periods and revoke.
+    Stream B replaces it with its own service in the container."""
 
     async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str) -> SubscriptionState:
-        raise _placeholder("ProvisioningService.grant", "B")
+        if entitlement is None or not getattr(entitlement, "payment_id", None):
+            raise _placeholder("ProvisioningService.grant (non-payment entitlements)", "B")
+        from app.services.payments.legacy_provisioning import grant
+
+        return await grant(telegram_id, entitlement, trace_id=trace_id)
 
     async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str) -> bool:
-        raise _placeholder("ProvisioningService.revoke", "B")
+        from app.services.payments.legacy_provisioning import revoke
+
+        return await revoke(telegram_id, sub_kind=sub_kind, reason=reason, trace_id=trace_id)
 
 
 class LegacyStatusService:
@@ -363,44 +336,47 @@ class UnavailableDevicesService:
 
 
 class LegacyCheckoutService:
-    """quote/start over services.checkout + yookassa.create_payment."""
+    """CheckoutService: delegates to app.services.checkout.CheckoutServiceImpl
+    (stream A) built over the process container by app.services.money."""
 
-    def __init__(self, payments: Optional[LegacyPaymentGateway] = None):
-        self._payments = payments or LegacyPaymentGateway()
+    def __init__(self, payments: Any = None):
+        self._payments = payments if payments is not None else LegacyPaymentGateway()
+
+    def _impl(self):
+        from app.services.money import money
+
+        try:
+            from app.container import get_container
+
+            container = get_container()
+        except RuntimeError:
+            container = None
+        if container is not None:
+            return money(container).checkout
+        return _standalone_checkout(self._payments)
 
     async def quote(self, telegram_id: int, plan_code: str, months: int) -> Optional[Quote]:
-        from app.domain.plans import LEGACY_PLAN_CODES, get_plan_name
-        from app.services.checkout import resolve_purchase_amount
-
-        amount = await resolve_purchase_amount(plan_code, months, int(telegram_id))
-        if amount <= 0:
-            return None
-        code = (plan_code or "").lower().strip()
-        return Quote(
-            plan_code=code,
-            months=int(months),
-            amount_rub=int(amount),
-            title=get_plan_name(code),
-            is_legacy=code in LEGACY_PLAN_CODES,
-        )
+        return await self._impl().quote(telegram_id, plan_code, months)
 
     async def start(self, telegram_id: int, quote: Quote, *, method: str = "yookassa", autorenew: bool = False) -> PaymentIntent:
-        if method != "yookassa" or autorenew:
-            raise _placeholder("CheckoutService.start(method/autorenew)", "A")
-        intent = PaymentIntent(
-            plan_code=quote.plan_code,
-            months=quote.months,
-            amount_rub=quote.amount_rub,
-            telegram_id=int(telegram_id),
-        )
-        return await self._payments.create_payment(
-            intent,
-            description=f"CRS VPN {quote.title}",
-            idempotence_key=f"checkout:{telegram_id}:{quote.plan_code}:{quote.months}",
-        )
+        return await self._impl().start(telegram_id, quote, method=method, autorenew=autorenew)
 
     async def check(self, telegram_id: int, payment_id: int) -> PaymentIntent:
-        raise _placeholder("CheckoutService.check", "A")
+        return await self._impl().check(telegram_id, payment_id)
+
+
+def _standalone_checkout(payments: Any):
+    """Checkout without a process container (scripts, unit tests of quote)."""
+    from app.config import settings
+    from app.infra.telegram_stars import TelegramStarsGateway
+    from app.services.money import LegacyHooks, MoneyDeps, build_money
+    from app.services.payments.store import SqlPaymentStore
+    from app.services.payments.ui import NullUi
+
+    deps = MoneyDeps(payments=payments, stars=TelegramStarsGateway(), provisioning=LegacyProvisioningService(),
+                     notifier=None, promo=LegacyPromoService(), store=SqlPaymentStore(), settings=settings,
+                     ui=NullUi(), hooks=LegacyHooks())
+    return build_money(deps).checkout
 
 
 class LegacyPromoService:

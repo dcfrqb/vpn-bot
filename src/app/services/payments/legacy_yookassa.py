@@ -862,43 +862,8 @@ async def _alert_paid_not_provisioned(
             logger.warning(f"[{trace_id}] provisioning alert to admin {admin_id} failed: {e}")
 
 
-def _price_mismatch_reason(
-    plan_code: Optional[str],
-    period_months: Optional[int],
-    amount: float,
-    currency: Optional[str],
-    meta: Any,
-) -> Optional[str]:
-    """None если оплаченная сумма совпадает с прайсом, иначе причина для ревью.
-
-    Допустимые суммы: текущая цена по каталогу ИЛИ expected_amount, записанный
-    сервером в metadata при создании платежа (create_payment сам сверяет его с
-    каталогом, так что клиент на него не влияет). Второе нужно, чтобы смена
-    цен не отправляла на ревью платежи, созданные до смены.
-    """
-    from app.core.plans import amounts_match, get_expected_amount
-
-    if currency and str(currency).upper() != "RUB":
-        return f"currency={currency!r} (ожидали RUB)"
-    candidates = []
-    catalog = get_expected_amount(plan_code, period_months)
-    if catalog > 0:
-        candidates.append(catalog)
-    if isinstance(meta, dict) and meta.get("expected_amount") not in (None, ""):
-        try:
-            recorded = int(float(meta.get("expected_amount")))
-            if recorded > 0:
-                candidates.append(recorded)
-        except (TypeError, ValueError):
-            pass
-    if not candidates:
-        return f"нет цены в прайсе для plan={plan_code!r} period={period_months!r}"
-    if any(amounts_match(amount, c) for c in candidates):
-        return None
-    return (
-        f"сумма {amount} не совпадает с прайсом {sorted(set(candidates))} "
-        f"для plan={plan_code!r} period={period_months!r}"
-    )
+# 3.0: правило вынесено в app.services.payments.pricing (одно на оба пути).
+from app.services.payments.pricing import price_mismatch_reason as _price_mismatch_reason  # noqa: E402
 
 
 async def _hold_payment_for_review(

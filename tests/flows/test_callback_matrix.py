@@ -42,8 +42,12 @@ PACKED_SAMPLES = {
     cb.BcAdm(a="new").pack(): "E",
     cb.Gift(a="buy").pack(): "A",
 }
-# Streams delete their entries when their handlers land.
-PENDING_PACKED = set(PACKED_SAMPLES)
+# Streams delete their entries when their handlers land: add the stream letter
+# to LANDED_STREAMS (one line per stream keeps merges trivial).
+LANDED_STREAMS = {
+    "A",
+}
+PENDING_PACKED = {k for k, owner in PACKED_SAMPLES.items() if owner not in LANDED_STREAMS}
 
 # 2.x strings (every producer in the 2.1.1 code) -> (alias key, packed rewrite or None).
 LEGACY_SAMPLES = {

@@ -385,7 +385,7 @@ async def test_webhook_returns_503_on_provisioning_pending():
 
     with patch('app.api.routes.yookassa._is_yookassa_ip', return_value=True), \
          patch('app.api.routes.yookassa._webhook_rate_limit_ok', new_callable=AsyncMock, return_value=True), \
-         patch('app.services.payments.yookassa.process_payment_webhook',
+         patch('app.services.payments.webhook.process_payment_webhook',
                new_callable=AsyncMock,
                side_effect=ProvisioningPendingError("Remnawave timeout")):
         # bot_instance must be truthy

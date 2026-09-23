@@ -3,8 +3,9 @@ Webhook ЮKassa: POST /webhook/yookassa.
 Полноценная обработка: IP whitelist, идемпотентность, provision.
 Webhook используется только как триггер — статус платежа всегда верифицируется через YooKassa API.
 
-3.0 Foundation: перенесено из app/api/main.py без изменений логики (маршрут
-стал APIRouter). app.api.main реэкспортирует эти имена. Владелец: поток A.
+3.0 Foundation: перенесено из app/api/main.py (маршрут стал APIRouter).
+3.0 поток A: payment.succeeded / payment.canceled идут в
+app.services.payments.webhook (Fulfillment), refund.succeeded как в 2.1.
 """
 import functools
 import ipaddress
@@ -206,8 +207,9 @@ async def yookassa_webhook(request: Request):
 
         # Обрабатываем в зависимости от события
         if event == "payment.succeeded":
-            # Единая точка обработки: local DB + Remnawave + уведомление пользователя
-            from app.services.payments.yookassa import process_payment_webhook
+            # 3.0: единая точка обработки оплаты: Fulfillment (сверка с API YooKassa,
+            # ценовой гейт, выдача, уведомления). Контейнер собран в lifespan.
+            from app.services.payments.webhook import process_payment_webhook
             from app.services.payments.errors import ProvisioningError
             try:
                 success = await process_payment_webhook(data, bot_instance)
@@ -234,6 +236,14 @@ async def yookassa_webhook(request: Request):
                 req_id=f"yookassa_{payment_id}",
                 payload=data.get("object", {}),
             )
+            # 3.0: статус canceled пишем сразу (сверка через API внутри Fulfillment),
+            # чтобы «Проверить оплату» и автоплатеж видели отказ без ожидания recovery.
+            from app.services.payments.webhook import process_payment_webhook
+            from app.services.payments.errors import ProvisioningError
+            try:
+                await process_payment_webhook(data, bot_instance)
+            except ProvisioningError:
+                return JSONResponse(status_code=503, content={"status": "retry", "reason": "api_unavailable"})
             return JSONResponse(status_code=200, content={"status": "ok", "event": "canceled"})
 
         elif event == "refund.succeeded":

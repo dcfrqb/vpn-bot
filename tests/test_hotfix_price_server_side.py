@@ -211,39 +211,7 @@ def test_expected_amount_catalog():
     assert get_expected_amount("obhod_500", 1) == 1199
 
 
-@pytest.mark.asyncio
-async def test_recovery_skips_payments_on_review():
-    from app.services.payments import recovery
-
-    held = SimpleNamespace(
-        id=1, external_id="e1", telegram_user_id=1, amount=1, description="", created_at=None,
-        payment_metadata={"needs_review": True},
-    )
-
-    class _Rows:
-        def __init__(self, items):
-            self._items = items
-
-        def scalars(self):
-            return SimpleNamespace(all=lambda: list(self._items))
-
-    session = MagicMock()
-    session.execute = AsyncMock(side_effect=[_Rows([held]), _Rows([]), _Rows([])])
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    handle = AsyncMock()
-    with patch.object(recovery, "SessionLocal", MagicMock(return_value=cm)), \
-         patch.object(yk, "handle_successful_payment", handle):
-        result = await recovery.retry_needs_provisioning(bot=AsyncMock())
-    handle.assert_not_awaited()
-    assert result["processed"] == 0
-
-
-# --------------------------------------------------------------------------
-# Фикс-раунд 1 (F1): правило цены в core/plans + services/checkout,
-# create_payment считает сумму сам
-# --------------------------------------------------------------------------
+# test_recovery_skips_payments_on_review: moved to tests/money/test_recovery_sweep.py (3.0 Fulfillment)
 
 def test_quote_purchase_is_the_single_rule():
     from app.core.plans import quote_purchase

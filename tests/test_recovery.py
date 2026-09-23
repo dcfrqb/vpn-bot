@@ -13,106 +13,11 @@ from app.services.payments.recovery import (
 from app.db.models import Payment as PaymentModel
 
 
-@pytest.mark.asyncio
-async def test_retry_needs_provisioning_with_flag():
-    """retry_needs_provisioning обрабатывает платежи с needs_provisioning=True"""
-    payment = PaymentModel(
-        id=1,
-        telegram_user_id=123456789,
-        external_id="ext-1",
-        amount=99,
-        currency="RUB",
-        status="succeeded",
-        subscription_id=None,
-        payment_metadata={"needs_provisioning": True},
-        created_at=datetime.utcnow() - timedelta(hours=1),
-    )
+# test_retry_needs_provisioning_with_flag: 3.0 recovery goes through Fulfillment, see tests/money/test_recovery_sweep.py
 
-    with patch('app.services.payments.recovery.SessionLocal') as mock_sl, \
-         patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
-        mock_session = AsyncMock()
-        mock_sl.return_value.__aenter__.return_value = mock_session
+# test_retry_needs_provisioning_fallback_old_payment: 3.0 recovery goes through Fulfillment, see tests/money/test_recovery_sweep.py
 
-        # 3 запроса recovery: Case 1 (без subscription_id) находит платеж,
-        # Case 2 (с subscription_id) и Case 3 (без remna_user_id) — пусто.
-        # Раньше мок отдавал платеж на все три запроса, и он считался дважды.
-        def _rows(items):
-            r = MagicMock()
-            r.scalars.return_value.all.return_value = items
-            return r
-        mock_session.execute = AsyncMock(side_effect=[_rows([payment]), _rows([]), _rows([]), _rows([])])
-
-        mock_bot = AsyncMock()
-        result = await retry_needs_provisioning(mock_bot)
-
-        assert result["processed"] == 1
-        mock_handle.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_retry_needs_provisioning_fallback_old_payment():
-    """retry_needs_provisioning обрабатывает succeeded без подписки и без флага, если платёж старше N минут"""
-    payment = PaymentModel(
-        id=2,
-        telegram_user_id=123456789,
-        external_id="ext-2",
-        amount=99,
-        currency="RUB",
-        status="succeeded",
-        subscription_id=None,
-        payment_metadata={},
-        created_at=datetime.utcnow() - timedelta(minutes=PROVISIONING_FALLBACK_MINUTES + 5),
-    )
-
-    with patch('app.services.payments.recovery.SessionLocal') as mock_sl, \
-         patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
-        mock_session = AsyncMock()
-        mock_sl.return_value.__aenter__.return_value = mock_session
-
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [payment]
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        mock_bot = AsyncMock()
-        result = await retry_needs_provisioning(mock_bot)
-
-        assert result["processed"] == 1
-        mock_handle.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_retry_needs_provisioning_skips_recent_without_flag():
-    """retry_needs_provisioning НЕ обрабатывает недавние платежи без needs_provisioning"""
-    payment = PaymentModel(
-        id=3,
-        telegram_user_id=123456789,
-        external_id="ext-3",
-        amount=99,
-        currency="RUB",
-        status="succeeded",
-        subscription_id=None,
-        payment_metadata={},
-        created_at=datetime.utcnow() - timedelta(minutes=5),
-    )
-
-    with patch('app.services.payments.recovery.SessionLocal') as mock_sl, \
-         patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
-        mock_session = AsyncMock()
-        mock_sl.return_value.__aenter__.return_value = mock_session
-
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [payment]
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        mock_bot = AsyncMock()
-        result = await retry_needs_provisioning(mock_bot)
-
-        assert result["processed"] == 0
-        mock_handle.assert_not_called()
-
-
-# --- recheck_single_payment ---
-
+# test_retry_needs_provisioning_skips_recent_without_flag: 3.0 recovery goes through Fulfillment, see tests/money/test_recovery_sweep.py
 
 @pytest.mark.asyncio
 async def test_recheck_single_payment_succeeded_provisioned():
