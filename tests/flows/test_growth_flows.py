@@ -30,6 +30,8 @@ def g(flow, monkeypatch):
         return None
 
     monkeypatch.setattr("app.services.grants._ensure_user", _noop)
+    # hermetic even when a developer .env points DATABASE_URL at a real server
+    monkeypatch.setattr("app.services.admin_stats._session", lambda: None)
     status = FakeStatus()
     prov = FakeProvisioning(status)
     repo = MemoryPromoRepo()

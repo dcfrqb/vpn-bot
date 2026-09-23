@@ -145,7 +145,21 @@ async def test_devices_unlink_disabled_by_flag_keeps_list_hides_button(flow, mon
     assert not any("Отвязать" in label for label in labels)
 
 
-async def test_promo_command_requires_code(flow):
+async def test_promo_command_is_owned_by_the_promo_engine(flow):
+    """/promo without a code lands on stream E's handler (D has no /promo)."""
+    from app.domain.texts import promo as T
+
     await flow.send("/promo")
     sent = flow.session.calls_of("SendMessage")
-    assert "/promo КОД" in sent[-1].text
+    assert sent[-1].text in (T.ENTER_CODE, T.CODES_DISABLED)
+
+
+async def test_start_clears_broadcast_opt_out(flow, monkeypatch):
+    calls = []
+
+    async def fake_set_opt_out(uid, value):
+        calls.append((uid, value))
+
+    monkeypatch.setattr("app.services.broadcast.set_opt_out", fake_set_opt_out)
+    await flow.send("/start")
+    assert calls and calls[-1][1] is False

@@ -71,11 +71,22 @@ async def test_only_one_grace_per_expiry(g):
     assert (await g.service.eligible(TG, await _user(g))).reason == "already_active"
 
 
-async def test_refused_while_provisioning_is_the_2x_placeholder(g):
-    from app.services.shims import LegacyProvisioningService
+async def test_refused_while_provisioning_cannot_clear_grace(g):
+    class OldGrant:
+        async def grant(self, telegram_id, entitlement, trace_id):
+            raise AssertionError("not called")
 
-    g.service.provisioning = LegacyProvisioningService()
+    g.service.provisioning = OldGrant()
     assert (await g.service.eligible(TG, await _user(g))).reason == "provisioning_not_ready"
+    g.service.provisioning = None
+    assert (await g.service.eligible(TG, await _user(g))).reason == "provisioning_not_ready"
+
+
+async def test_accepted_with_the_real_panel_provisioning(g):
+    from app.services.provisioning import PanelProvisioningService
+
+    g.service.provisioning = PanelProvisioningService(g.c.remna)
+    assert (await g.service.eligible(TG, await _user(g))).ok
 
 
 async def test_panel_error_rolls_back_the_db_mark(g):

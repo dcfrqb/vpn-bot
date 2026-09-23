@@ -19,9 +19,10 @@ shows ACTIVE. A payment in between goes through ProvisioningService.grant,
 which (stream B) extends from the PAID term, restores the plan squad and
 traffic limit and calls ``GraceService.clear``.
 
-Grace is refused while ProvisioningService is still the 2.x placeholder:
-the 2.x grant keeps unknown squads and the traffic cap, so a paying user
-would stay on the grace squad with 5 GB a day.
+Grace is refused unless ProvisioningService.grant accepts ``clear_grace``
+(stream B's PanelProvisioningService): a grant without it keeps unknown
+squads and the traffic cap, so a paying user would stay on the grace squad
+with 5 GB a day.
 """
 from __future__ import annotations
 
@@ -35,6 +36,20 @@ from app.services.events_repo import GRACE_ACTIVE, GRACE_ENDED, EventsRepo
 
 GIB = 1024 ** 3
 PAID_MARGIN = timedelta(hours=1)
+
+
+def _supports_clear_grace(provisioning: Any) -> bool:
+    """True when ``provisioning.grant`` takes ``clear_grace`` (stream B's service)."""
+    import inspect
+
+    grant = getattr(provisioning, "grant", None)
+    if grant is None:
+        return False
+    try:
+        params = inspect.signature(grant).parameters
+    except (TypeError, ValueError):
+        return False
+    return "clear_grace" in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
 
 
 @dataclass(frozen=True)
@@ -85,7 +100,7 @@ class GraceService:
             return GraceDecision(False, "no_squad")
         if is_manual_squad_name(self.squad):
             return GraceDecision(False, "squad_is_manual")
-        if self.provisioning is None or type(self.provisioning).__name__ == "LegacyProvisioningService":
+        if not _supports_clear_grace(self.provisioning):
             return GraceDecision(False, "provisioning_not_ready")
         return GraceDecision(True)
 

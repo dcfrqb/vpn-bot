@@ -34,15 +34,8 @@ async def test_non_admin_cannot_toggle(flow, monkeypatch):
 async def test_help_and_checkout_stay_open_during_maintenance(flow, monkeypatch):
     await flow.container.maintenance.set_active(True, reason="test", by=1)
     flow.maintenance_mw.reset_cache()
-    calls = []
-
-    async def fake_handle_action(self, **kw):
-        calls.append(kw["action"])
-        return True
-
-    monkeypatch.setattr("app.ui.screen_manager.ScreenManager.handle_action", fake_handle_action)
-    await flow.press("help")
-    assert calls == ["open"]
+    await flow.press("help")  # alias -> Nav(s="help"), stream D's help screen
+    assert flow.session.calls_of("EditMessageText") or flow.session.calls_of("SendMessage")
     assert not [a for a in flow.answers() if a.params.get("text") == MAINTENANCE_SCREEN]
 
     await flow.press("buy_subscription")
