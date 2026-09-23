@@ -23,7 +23,14 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from app.logger import logger
 from app.services.payments.errors import WebhookRetryableError
-from app.services.redis_flags import delete_key, get_value, set_once, set_value
+from app.infra.redis.flags import (
+    MARKER_ACQUIRED,
+    MARKER_IN_PROGRESS,
+    MARKER_UNAVAILABLE,
+    acquire_marker,
+    mark_marker_done,
+    release_marker,
+)
 
 WEBHOOK_DEDUP_TTL_SECONDS = 86400
 WEBHOOK_PROCESSING_TTL_SECONDS = 900
@@ -48,39 +55,28 @@ def webhook_dedup_key(webhook_data: Dict[str, Any], event: str) -> Optional[str]
 
 
 async def acquire_webhook_dedup(webhook_data: Dict[str, Any], event: str, trace_id: str) -> WebhookDedup:
+    """Маркер yk_event:<event>:<id> через общий примитив infra.redis.flags.acquire_marker
+    (логика processing/done и ревью N4 теперь живут там, 3.0 Foundation)."""
     key = webhook_dedup_key(webhook_data, event)
     if not key:
         return WebhookDedup(UNAVAILABLE)
-    got = await set_once(key, f"processing:{trace_id}", ttl=WEBHOOK_PROCESSING_TTL_SECONDS)
-    if got is None:
+    status = await acquire_marker(key, trace_id, WEBHOOK_PROCESSING_TTL_SECONDS)
+    if status == MARKER_UNAVAILABLE:
         return WebhookDedup(UNAVAILABLE)
-    if got:
+    if status == MARKER_ACQUIRED:
         return WebhookDedup(ACQUIRED, key)
-    current = await get_value(key)
-    if current is None:
-        # Ревью N4: между нашим SET NX и GET первая доставка упала и сняла
-        # маркер. Раньше пустое значение считалось «done» (200, ретрай съеден).
-        # Пробуем взять маркер еще раз; не вышло и значения опять нет -> 503.
-        got = await set_once(key, f"processing:{trace_id}", ttl=WEBHOOK_PROCESSING_TTL_SECONDS)
-        if got:
-            return WebhookDedup(ACQUIRED, key)
-        current = await get_value(key)
-        if current is None:
-            logger.info(f"[{trace_id}] webhook {key}: marker state unknown -> retry later")
-            return WebhookDedup(IN_PROGRESS, key)
-    if current.startswith("processing"):
-        logger.info(f"[{trace_id}] webhook {key}: first delivery still in progress -> retry later")
+    if status == MARKER_IN_PROGRESS:
         return WebhookDedup(IN_PROGRESS, key)
     logger.info(f"[{trace_id}] webhook duplicate suppressed: {key} (already processed)")
     return WebhookDedup(DUPLICATE, key)
 
 
 async def mark_webhook_done(key: str, trace_id: str) -> None:
-    await set_value(key, f"done:{trace_id}", ttl=WEBHOOK_DEDUP_TTL_SECONDS)
+    await mark_marker_done(key, trace_id, WEBHOOK_DEDUP_TTL_SECONDS)
 
 
 async def release_webhook_dedup(key: str, trace_id: str) -> None:
-    await delete_key(key)
+    await release_marker(key)
     logger.info(f"[{trace_id}] webhook dedup released for retry: {key}")
 
 
