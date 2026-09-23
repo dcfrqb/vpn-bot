@@ -221,6 +221,16 @@ class Fulfillment(FulfillmentNotices):
                 rec.id, amount=Decimal(int(total_amount)), charge_id=charge_id,
                 meta_patch={"paid_currency": currency, "paid_source": "stars"},
             ) or rec
+            try:
+                blocked = await self.d.hooks.user_block_reason(rec.telegram_id)
+            except Exception:  # noqa: BLE001
+                blocked = None
+            if blocked is not None and not rec.meta.get(M_REVIEW_APPROVED):
+                # Paid although stop-listed (blocked between invoice and payment):
+                # the money is recorded and an admin decides (security m-6).
+                await self._hold(rec, f"оплата звездами от заблокированного пользователя ({blocked}): "
+                                      "верни звезды или одобри выдачу", f"stars-{rec.id}")
+                return FulfilResult(Outcome.HELD, rec)
         elif rec.telegram_charge_id and rec.telegram_charge_id != charge_id:
             logger.error(f"stars: second charge {charge_id} for payment {rec.id}")
             await self.d.notifier.notify_admins(

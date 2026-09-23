@@ -79,6 +79,8 @@ def outcome_text(code: str, reward: PromoReward, *, support: Optional[str] = Non
     code_l = (code or "").lower()
     o = reward.outcome
     shown = h(code)
+    if o is PromoOutcome.RATE_LIMITED:
+        return "Слишком много неверных промокодов подряд. Попробуй снова через час."
     if o is PromoOutcome.BUSY:
         return "⏳ Уже обрабатываем твой промокод, подожди пару секунд."
     if o is PromoOutcome.ALREADY_USED:

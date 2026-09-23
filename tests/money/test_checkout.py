@@ -161,3 +161,23 @@ async def test_port_check_maps_statuses():
     deps.payments.succeed(res.intent.external_id)
     assert (await m.checkout.check(TG, res.intent.payment_id)).status is PaymentStatus.SUCCEEDED
     assert (await m.checkout.check(TG + 1, res.intent.payment_id)).status is PaymentStatus.FAILED
+
+
+async def test_stoplisted_after_invoice_is_refused_at_precheck_and_held_if_paid():
+    """Security m-6: blocked between the invoice and the payment."""
+    from app.domain.texts import checkout as T
+    from app.services.fulfillment import Outcome
+
+    m, deps = make_money(STARS_ENABLED=True, STARS_RATE=1.0)
+    q = await m.checkout.quote(TG, "lite", 1)
+    res = await m.checkout.start_checkout(TG, q, method="stars")
+    payload = stars_payload(res.intent.payment_id)
+    deps.hooks.blocked_users[TG] = "конкурент"
+    assert await m.checkout.precheck_stars(TG, payload, q.stars, "XTR") == T.PAYMENT_BLOCKED
+    # Telegram charged anyway (race): recorded, held for an admin, nothing granted.
+    r = await m.fulfillment.on_stars_paid(telegram_id=TG, payment_id=res.intent.payment_id,
+                                          charge_id="ch-9", total_amount=q.stars, currency="XTR")
+    assert r.outcome is Outcome.HELD
+    rec = await deps.store.get(res.intent.payment_id)
+    assert rec.status == "succeeded" and rec.meta.get("needs_review")
+    assert not deps.provisioning.by_payment

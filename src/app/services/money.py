@@ -84,7 +84,13 @@ class LegacyHooks:
     async def user_block_reason(self, telegram_id: int) -> Optional[str]:
         from app.services.blocklist import get_user_block_reason
 
-        return await get_user_block_reason(telegram_id)
+        reason = await get_user_block_reason(telegram_id)
+        if reason is None:
+            from app.middlewares.blocklist import is_blocked
+
+            if is_blocked(int(telegram_id)):
+                reason = "заблокирован в боте (/block)"
+        return reason
 
     async def card_block_reason(self, fingerprint: Optional[str]) -> Optional[str]:
         from app.services.blocklist import get_card_block_reason

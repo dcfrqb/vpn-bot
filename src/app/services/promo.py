@@ -122,6 +122,16 @@ def builtin_external_id(code: str, telegram_id: int) -> str:
 # --------------------------------------------------------------------------- engine
 
 
+PROMO_MISS_LIMIT = 10
+PROMO_MISS_WINDOW_S = 3600
+
+
+def mask_code(code: str) -> str:
+    """A gift code is a bearer token: never write it to logs whole (security m-5)."""
+    code = code or ""
+    return code[:4] + "..." if code.startswith(GIFT_PREFIX) else code
+
+
 def _is_clear_upgrade(current: str, offered: str) -> bool:
     """``offered`` costs more per month and allows at least as many devices."""
     from app.domain.plans import get_plan_device_limit, get_plan_price, is_valid_plan_code
@@ -209,20 +219,43 @@ class PromoEngine:
 
         tg = int(telegram_id)
         code_n = normalize_code(code)
+        builtin = code_n in BUILTIN_PROMOS
+        if not builtin and await self._misses(tg) >= PROMO_MISS_LIMIT:
+            return PromoReward(code=code_n or "?", outcome=PromoOutcome.RATE_LIMITED)
         if not CODE_RE.match(code_n):
+            await self._miss(tg)
             return PromoReward(code=code_n or "?", outcome=PromoOutcome.NOT_FOUND)
         async with user_action_lock("promo", tg) as acquired:
             if not acquired:
                 return PromoReward(code=code_n, outcome=PromoOutcome.BUSY)
             try:
-                if code_n in BUILTIN_PROMOS:
+                if builtin:
                     return await self._builtin(tg, BUILTIN_PROMOS[code_n], source)
                 if code_n.startswith(GIFT_PREFIX):
-                    return await self._gift(tg, code_n, source)
-                return await self._table(tg, code_n, source)
+                    reward = await self._gift(tg, code_n, source)
+                else:
+                    reward = await self._table(tg, code_n, source)
+                if reward.outcome is PromoOutcome.NOT_FOUND:
+                    await self._miss(tg)
+                return reward
             except Exception as e:  # noqa: BLE001 - never leak to the user
-                logger.exception(f"promo.redeem code={code_n} tg={tg} failed: {type(e).__name__}")
+                logger.exception(f"promo.redeem code={mask_code(code_n)} tg={tg} failed: {type(e).__name__}")
                 return PromoReward(code=code_n, outcome=PromoOutcome.ERROR)
+
+    async def _misses(self, tg: int) -> int:
+        """Unknown codes tried in the last hour (security m-1: no dictionary
+        guessing of admin codes). Redis down = fail-open."""
+        from app.infra.redis.flags import get_value
+
+        try:
+            return int(await get_value(f"rl:promo_miss:{int(tg)}") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _miss(self, tg: int) -> None:
+        from app.infra.redis.flags import incr_counter
+
+        await incr_counter(f"rl:promo_miss:{int(tg)}", ttl=PROMO_MISS_WINDOW_S)
 
     # ------------------------------------------------------------ helpers for routers
 
@@ -459,7 +492,8 @@ class PromoEngine:
         try:
             new_state = await self._grant(tg, ent, trace_id=f"promo:{code}:{tg}:{res.redemption_id}")
         except Exception as e:  # noqa: BLE001
-            logger.error(f"promo {code}: grant failed tg={tg} ({type(e).__name__}), releasing the reservation")
+            logger.error(f"promo {mask_code(code)}: grant failed tg={tg} ({type(e).__name__}), "
+                         "releasing the reservation")
             await self.repo.finish(res.redemption_id, False)
             return PromoReward(code=code, outcome=PromoOutcome.ERROR)
         await self.repo.finish(res.redemption_id, True, {"plan": plan, "days": row.days, "traffic_gb": row.traffic_gb,

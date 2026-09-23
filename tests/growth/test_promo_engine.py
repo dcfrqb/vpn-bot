@@ -363,3 +363,21 @@ async def test_refunded_gift_code_stops_working(engine_parts):
     await repo.set_active(row.id, False)
     assert (await engine.redeem(TG, code)).outcome is PromoOutcome.EXPIRED
     assert not prov.calls
+
+
+async def test_unknown_codes_are_rate_limited_but_builtins_are_not(engine_parts):
+    """Security m-1: no dictionary guessing of admin codes."""
+    engine, _, prov, *_ = engine_parts
+    await _code(engine)  # "spring"
+    for i in range(10):
+        assert (await engine.redeem(TG, f"guess{i}")).outcome is PromoOutcome.NOT_FOUND
+    assert (await engine.redeem(TG, "spring")).outcome is PromoOutcome.RATE_LIMITED
+    assert (await engine.redeem(TG + 1, "spring")).applied  # per user
+    assert (await engine.redeem(TG, "trial")).outcome is not PromoOutcome.RATE_LIMITED
+
+
+def test_gift_codes_are_masked_in_logs():
+    from app.services.promo import mask_code
+
+    assert mask_code("g_abcdefghijkl") == "g_ab..."
+    assert mask_code("spring") == "spring"

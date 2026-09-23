@@ -68,6 +68,10 @@ class BlocklistMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         user_id = event.from_user.id if event.from_user else None
+        if isinstance(event, Message) and event.successful_payment is not None:
+            # Money already taken by Telegram: always record it (the payment is
+            # held for an admin, security m-6), never drop it silently.
+            return await handler(event, data)
         if user_id and user_id in _runtime_blocked and user_id not in (settings.ADMINS or []):
             logger.info(f"blocklist: blocked user {user_id} — request dropped")
             if isinstance(event, Message):

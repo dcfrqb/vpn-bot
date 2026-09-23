@@ -389,6 +389,15 @@ class CheckoutServiceImpl:
             return T.PRECHECK_STALE
         if int(total_amount) != rec.expected_stars or fresh.stars != rec.expected_stars:
             return T.PRECHECK_PRICE_CHANGED
+        try:
+            blocked = await self.d.hooks.user_block_reason(rec.telegram_id)
+        except Exception:  # noqa: BLE001 - stop-list errors never block a sale (2.x)
+            blocked = None
+        if blocked is not None:
+            # Blocked after the invoice was sent: refuse before Telegram charges
+            # (security m-6).
+            logger.warning(f"stars pre_checkout refused: tg_id={rec.telegram_id} is stop-listed")
+            return T.PAYMENT_BLOCKED
         return None
 
 

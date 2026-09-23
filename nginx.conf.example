@@ -48,7 +48,7 @@ server {
     # панели. Панель шлет пачками (истечения в полночь, concurrency 100), поэтому
     # burst большой: отказ nginx = 3 ретрая панели и потерянное событие.
     location = /webhook/remnawave {
-        allow <PANEL_HOST_IP>;   # хост панели Remnawave (сверить с servers.md)
+        allow <PANEL_HOST_IP>;   # IP хоста панели Remnawave (реальное значение: servers.md, не в репо)
         deny all;
 
         limit_req zone=webhook burst=500 nodelay;

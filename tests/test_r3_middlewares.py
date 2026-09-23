@@ -97,3 +97,30 @@ async def test_maintenance_blocks_users_admin_passes_and_fails_open():
     broken = MaintenanceMiddleware(Guard(RuntimeError("redis")), admin_ids=lambda: [])
     await broken(handler, message_update(user(2), "/trial").message.as_(bot), {})
     assert seen == [42, 2]
+
+
+async def test_blocklist_lets_successful_payment_through_and_drops_the_rest():
+    """Security m-6: Telegram already took the stars, the payment must be recorded."""
+    from datetime import datetime
+
+    from aiogram.types import Chat, Message, SuccessfulPayment, User
+
+    from app.middlewares import blocklist as bl
+
+    uid = 900000321
+    bl._runtime_blocked.add(uid)
+    try:
+        seen = []
+
+        async def handler(event, data):
+            seen.append(event)
+
+        common = dict(message_id=1, date=datetime(2026, 9, 23), chat=Chat(id=uid, type="private"),
+                      from_user=User(id=uid, is_bot=False, first_name="x"))
+        paid = Message(**common, successful_payment=SuccessfulPayment(
+            currency="XTR", total_amount=90, invoice_payload="p:1",
+            telegram_payment_charge_id="c", provider_payment_charge_id="p"))
+        await bl.BlocklistMiddleware()(handler, paid, {})
+        assert seen == [paid]
+    finally:
+        bl._runtime_blocked.discard(uid)

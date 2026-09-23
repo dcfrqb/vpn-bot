@@ -212,6 +212,7 @@ class PromoOutcome(str, enum.Enum):
     NOT_ELIGIBLE = "not_eligible"
     BUSY = "busy"  # lock held by a parallel redemption
     DISABLED = "disabled"
+    RATE_LIMITED = "rate_limited"  # too many unknown codes in a row (security m-1)
     ERROR = "error"
 
 
