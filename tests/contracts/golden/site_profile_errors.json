@@ -1,0 +1,20 @@
+{
+  "db_unavailable": [
+    503,
+    {
+      "error": "db_unavailable"
+    }
+  ],
+  "forbidden": [
+    403,
+    {
+      "error": "forbidden"
+    }
+  ],
+  "not_found": [
+    404,
+    {
+      "error": "not_found"
+    }
+  ]
+}

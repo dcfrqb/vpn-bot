@@ -42,6 +42,9 @@ class FakeRemna:
         self.fail_squads = False
         self.fail_lookup_tg = False
         self._next_id = 1000
+        self.devices: Dict[int, List[Dict[str, Any]]] = {}
+        self.deleted_devices: List[tuple] = []
+        self.healthy = True
 
     # ---- helpers for tests ----
     def add_user(self, uid: int, username: str, telegram_id: Optional[int] = None,
@@ -155,3 +158,41 @@ class FakeRemna:
         self.enabled.append(int(user_id))
         self.users[int(user_id)]["status"] = "ACTIVE"
         return {}
+
+    async def get_users(self, size: int = 50, start: int = 1):
+        users = list(self.users.values())
+        page = users[start - 1:start - 1 + size]
+        return {"response": {"users": [dict(u) for u in page], "total": len(users)}}
+
+    async def health_check(self):
+        if not self.healthy:
+            raise httpx.ConnectError("panel down")
+        return {"response": {"ok": True}}
+
+
+class FakeRemnaGateway:
+    """Порт RemnaGateway 3.0 для тестов: настоящий шим LegacyRemnaGateway
+    поверх FakeRemna (инварианты сквадов и лимита проверяются тем же кодом)
+    плюс устройства в памяти (в шиме их нет, это поток B)."""
+
+    def __new__(cls, fake: Optional[FakeRemna] = None):
+        from app.domain.models import DeviceInfo
+        from app.services.shims import LegacyRemnaGateway
+
+        fake = fake or FakeRemna()
+
+        class _Gateway(LegacyRemnaGateway):
+            async def list_devices(self, panel_id: int):
+                return [DeviceInfo(hwid=d["hwid"], platform=d.get("platform"), device_model=d.get("deviceModel"))
+                        for d in fake.devices.get(int(panel_id), [])]
+
+            async def delete_device(self, panel_id: int, hwid: str) -> bool:
+                before = fake.devices.get(int(panel_id), [])
+                after = [d for d in before if d["hwid"] != hwid]
+                fake.devices[int(panel_id)] = after
+                fake.deleted_devices.append((int(panel_id), hwid))
+                return len(after) != len(before)
+
+        gw = _Gateway(client_factory=lambda: fake)
+        gw.fake = fake
+        return gw

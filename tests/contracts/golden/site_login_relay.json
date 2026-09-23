@@ -1,0 +1,65 @@
+{
+  "requests": [
+    {
+      "header_names": [
+        "X-Internal-Token"
+      ],
+      "json": {
+        "payload": "login_Ab3-_Ab3-_Ab3-_Ab3-_",
+        "user": {
+          "first_name": "Test",
+          "id": 900000101,
+          "username": "tester"
+        }
+      },
+      "token_ok": true,
+      "url": "http://vpn-site-api:8000/api/internal/tg-login/claim"
+    },
+    {
+      "header_names": [
+        "X-Internal-Token"
+      ],
+      "json": {
+        "data": "sitelogin:ok:xxxxxxxxxxxxxxxxxxxx",
+        "user_id": 900000101
+      },
+      "token_ok": true,
+      "url": "http://vpn-site-api:8000/api/internal/tg-login/answer"
+    }
+  ],
+  "shown": [
+    {
+      "keyboard": [
+        [
+          {
+            "data": "sitelogin:ok:xxxxxxxxxxxxxxxxxxxx",
+            "text": "Да, это я",
+            "url": null
+          }
+        ],
+        [
+          {
+            "data": "sitelogin:no:xxxxxxxxxxxxxxxxxxxx",
+            "text": "Нет",
+            "url": null
+          }
+        ]
+      ],
+      "method": "SendMessage",
+      "parse_mode": null,
+      "text": "Войти на сайт как @tester?"
+    },
+    {
+      "keyboard": null,
+      "method": "AnswerCallbackQuery",
+      "parse_mode": null,
+      "text": null
+    },
+    {
+      "keyboard": null,
+      "method": "EditMessageText",
+      "parse_mode": null,
+      "text": "Готово, вернись на сайт."
+    }
+  ]
+}

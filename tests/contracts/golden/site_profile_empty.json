@@ -1,0 +1,19 @@
+{
+  "body": {
+    "accounts": [],
+    "payments": [],
+    "stats": {
+      "first_payment_at": null,
+      "last_payment_at": null,
+      "paid_total_rub": 0,
+      "payments_count": 0
+    },
+    "user": {
+      "customer_since": "2025-12-01T10:00:00Z",
+      "first_name": "Name",
+      "telegram_id": 111,
+      "username": "name"
+    }
+  },
+  "status": 200
+}
