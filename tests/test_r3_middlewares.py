@@ -8,7 +8,8 @@ from app.bot.middlewares.errors import ErrorsMiddleware
 from app.bot.middlewares.maintenance import MaintenanceMiddleware
 from app.container import HANDLER_KEYS, build_container
 from app.domain.models import AdminTopic
-from app.domain.texts.common import GENERIC_ERROR, GENERIC_ERROR_ALERT, MAINTENANCE
+from app.domain.texts.common import GENERIC_ERROR, GENERIC_ERROR_ALERT
+from app.domain.texts.notify import MAINTENANCE_SCREEN
 from tests.fakes.bot import callback_update, make_bot, message_update, user
 from tests.fakes.notifier import RecordingNotifier
 
@@ -88,11 +89,11 @@ async def test_maintenance_blocks_users_admin_passes_and_fails_open():
     async def handler(event, data):
         seen.append(event.from_user.id)
 
-    await mw(handler, message_update(user(1), "hi").message.as_(bot), {})
-    await mw(handler, message_update(user(42), "hi").message.as_(bot), {})
+    await mw(handler, message_update(user(1), "/trial").message.as_(bot), {})
+    await mw(handler, message_update(user(42), "/trial").message.as_(bot), {})
     assert seen == [42]
-    assert s.calls_of("SendMessage")[0].text == MAINTENANCE
+    assert s.calls_of("SendMessage")[0].text == MAINTENANCE_SCREEN
 
     broken = MaintenanceMiddleware(Guard(RuntimeError("redis")), admin_ids=lambda: [])
-    await broken(handler, message_update(user(2), "hi").message.as_(bot), {})
+    await broken(handler, message_update(user(2), "/trial").message.as_(bot), {})
     assert seen == [42, 2]

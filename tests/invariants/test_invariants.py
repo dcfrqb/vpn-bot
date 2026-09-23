@@ -45,6 +45,8 @@ NEW_LAYER = [
     *(SRC / "services" / f"{m}.py" for m in ("accounts", "provisioning", "provisioning_rules", "credits", "status",
                                                     "devices", "obhod", "panel_sync")),
     ROOT / "tests" / "panel",
+    # stream C
+    SRC / "services" / "events_repo.py", SRC / "services" / "grace.py", SRC / "services" / "maintenance.py",
 ]
 MANUAL = ["pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "premium-friend", "arcadia"]
 

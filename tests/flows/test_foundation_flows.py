@@ -94,9 +94,11 @@ async def test_native_broadcast_close_button_still_works(flow):
 
 
 async def test_maintenance_blocks_users_but_not_admins(flow, monkeypatch):
+    # Stream C: only panel-dependent screens are closed (connect, devices, trial);
+    # see tests/flows/test_maintenance_flows.py for the open ones.
     await flow.container.maintenance.set_active(True, reason="test", by=1)
     flow.maintenance_mw.reset_cache()
-    await flow.press("help")
+    await flow.press("connect_vpn")
     ans = flow.answers()
     assert len(ans) == 1 and ans[0].params.get("show_alert") is True
     assert "технические работы" in ans[0].params["text"].lower()
