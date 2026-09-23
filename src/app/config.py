@@ -15,6 +15,23 @@ _LENIENT_BOOL_FIELDS = (
     "TASK_RECONCILER_ENABLED",
     "TASK_SUN718_REVERT_ENABLED",
     "TASK_BROADCAST_RESUME_ENABLED",
+    # 3.0 (все по умолчанию выключены, кроме DEVICE_CLEANUP_DRY_RUN)
+    "AUTOPAY_ENABLED",
+    "STARS_ENABLED",
+    "GIFTS_ENABLED",
+    "REFUND_24H_ENABLED",
+    "PROMO_CODES_ENABLED",
+    "DEVICES_UNLINK_ENABLED",
+    "MAINTENANCE_AUTO_ENABLED",
+    "GRACE_ENABLED",
+    "DEVICE_CLEANUP_DRY_RUN",
+    "TASK_DEVICE_CLEANUP_ENABLED",
+    "TASK_OBHOD_LIFECYCLE_ENABLED",
+    "TASK_AUTOPAY_ENABLED",
+    "TASK_GRACE_ENABLED",
+    "TASK_PANEL_HEALTH_ENABLED",
+    "TASK_REMINDERS_ENABLED",
+    "TASK_PANEL_SYNC_ENABLED",
 )
 
 # Выключатели фоновых задач (ревью N5): непонятное значение = False (fail safe).
@@ -27,7 +44,35 @@ _KILL_SWITCH_FIELDS = frozenset({
     "TASK_RECONCILER_ENABLED",
     "TASK_SUN718_REVERT_ENABLED",
     "TASK_BROADCAST_RESUME_ENABLED",
+    "TASK_DEVICE_CLEANUP_ENABLED",
+    "TASK_OBHOD_LIFECYCLE_ENABLED",
+    "TASK_AUTOPAY_ENABLED",
+    "TASK_GRACE_ENABLED",
+    "TASK_PANEL_HEALTH_ENABLED",
+    "TASK_REMINDERS_ENABLED",
+    "TASK_PANEL_SYNC_ENABLED",
 })
+
+# 3.0: числовые и опциональные поля, которые в .env.example записаны пустыми.
+_EMPTY_IS_UNSET_FIELDS = (
+    "ADMIN_CHAT_ID",
+    "ADMIN_TOPIC_PAYMENTS",
+    "ADMIN_TOPIC_REFUNDS",
+    "ADMIN_TOPIC_PANEL",
+    "ADMIN_TOPIC_ERRORS",
+    "ADMIN_TOPIC_PROMO",
+    "ADMIN_TOPIC_BROADCAST",
+    "STARS_RATE",
+    "RECONCILER_INTERVAL_S",
+    "DEVICE_CLEANUP_DAYS",
+    "GRACE_DAYS",
+    "GRACE_DAILY_GB",
+    "PANEL_WEBHOOK_SECRET",
+    "GRACE_SQUAD",
+    "CONNECT_ARTICLE_URL",
+    "PRIVACY_URL",
+    "SUPPORT_HANDLE",
+)
 
 _TRUE = {"1", "true", "yes", "y", "on"}
 _FALSE = {"0", "false", "no", "n", "off"}
@@ -127,6 +172,61 @@ class Settings(BaseSettings):
     # Отдельный секрет (у сайта это BOT_API_TOKEN). Пустой = маршруты отвечают 503.
     BOT_INTERNAL_TOKEN: Union[str, None] = None
 
+    # =====================================================================
+    # Release 3.0. Все новое поведение за флагами, по умолчанию ВЫКЛЮЧЕНО.
+    # Заголовки секций заморожены (Foundation); поле добавляет поток-владелец
+    # в свою секцию через коммит оркестратора.
+    # =====================================================================
+
+    # --- 3.0 Foundation: админ-чат с темами (Notifier) ---
+    # ADMIN_CHAT_ID пустой -> уведомления в личку каждому из ADMINS (как в 2.x).
+    ADMIN_CHAT_ID: Union[int, None] = None
+    ADMIN_TOPIC_PAYMENTS: Union[int, None] = None   # message_thread_id темы
+    ADMIN_TOPIC_REFUNDS: Union[int, None] = None
+    ADMIN_TOPIC_PANEL: Union[int, None] = None
+    ADMIN_TOPIC_ERRORS: Union[int, None] = None
+    ADMIN_TOPIC_PROMO: Union[int, None] = None
+    ADMIN_TOPIC_BROADCAST: Union[int, None] = None
+
+    # --- 3.0 Stream A: Money (оплата, автоплатеж, Stars, возвраты, подарки) ---
+    AUTOPAY_ENABLED: bool = False
+    STARS_ENABLED: bool = False
+    STARS_RATE: float = 0.0          # рублей за 1 звезду (XTR); 0 = не настроено
+    GIFTS_ENABLED: bool = False
+    REFUND_24H_ENABLED: bool = False
+    TASK_AUTOPAY_ENABLED: bool = False
+
+    # --- 3.0 Stream B: Panel core (статус, устройства, реконсилер, обход) ---
+    RECONCILER_INTERVAL_S: int = 600
+    DEVICES_UNLINK_ENABLED: bool = False
+    DEVICE_CLEANUP_DAYS: int = 30
+    DEVICE_CLEANUP_DRY_RUN: bool = True
+    TASK_DEVICE_CLEANUP_ENABLED: bool = False
+    TASK_OBHOD_LIFECYCLE_ENABLED: bool = False
+    TASK_PANEL_SYNC_ENABLED: bool = False   # новый реконсилер по всем юзерам (pull-forward)
+
+    # --- 3.0 Stream C: Panel events (вебхуки панели, напоминания, техработы, льготный период) ---
+    PANEL_WEBHOOK_SECRET: Union[str, None] = None  # пустой = POST /webhook/remnawave отвечает 503
+    MAINTENANCE_AUTO_ENABLED: bool = False
+    GRACE_ENABLED: bool = False
+    GRACE_SQUAD: Union[str, None] = None
+    GRACE_DAYS: int = 3
+    GRACE_DAILY_GB: int = 5
+    TASK_GRACE_ENABLED: bool = False
+    TASK_PANEL_HEALTH_ENABLED: bool = False
+    TASK_REMINDERS_ENABLED: bool = False
+
+    # --- 3.0 Stream D: User UI (меню, подключение, помощь) ---
+    CONNECT_ARTICLE_URL: Union[str, None] = None
+    PRIVACY_URL: Union[str, None] = None
+    SUPPORT_HANDLE: Union[str, None] = None  # @username поддержки; пусто = ADMIN_SUPPORT_USERNAME
+
+    # --- 3.0 Stream E: Growth & admin (промокоды, подарки, рассылки) ---
+    PROMO_CODES_ENABLED: bool = False
+
+    # --- 3.0 Stream F: Data & quality ---
+    # (пока без полей)
+
     # Путь к .env файлу
     _base_path = Path("/opt/crs-vpn-bot/.env")
     _local_path = Path(__file__).resolve().parents[2] / ".env"
@@ -156,6 +256,15 @@ class Settings(BaseSettings):
             logger.warning(f"{info.field_name}={v!r}: не булево значение, используем дефолт {default}")
             return default
         return parsed
+
+    @field_validator(*_EMPTY_IS_UNSET_FIELDS, mode="before")
+    @classmethod
+    def _empty_is_unset(cls, v, info):
+        """Пустое значение в .env (ADMIN_CHAT_ID=) = поле не задано: None или
+        дефолт поля, а не ValidationError на старте."""
+        if isinstance(v, str) and not v.strip():
+            return cls.model_fields[info.field_name].default
+        return v
 
     @field_validator("ADMINS", "BLOCKED_TELEGRAM_IDS", mode="after")
     @classmethod
@@ -213,8 +322,11 @@ def is_admin(user_id: int) -> bool:
 def task_enabled(name: str) -> bool:
     """Включена ли фоновая задача: BACKGROUND_TASKS_ENABLED и TASK_<NAME>_ENABLED.
 
-    name: RECOVERY, EXPIRY_NOTIFIER, RECONCILER, SUN718_REVERT, BROADCAST_RESUME.
+    name: RECOVERY, EXPIRY_NOTIFIER, RECONCILER, SUN718_REVERT, BROADCAST_RESUME
+    (2.x, по умолчанию включены) и 3.0: DEVICE_CLEANUP, OBHOD_LIFECYCLE, AUTOPAY,
+    GRACE, PANEL_HEALTH, REMINDERS, PANEL_SYNC (по умолчанию выключены).
+    Неизвестное имя = False (раньше AttributeError).
     """
     if not settings.BACKGROUND_TASKS_ENABLED:
         return False
-    return bool(getattr(settings, f"TASK_{name.upper()}_ENABLED"))
+    return bool(getattr(settings, f"TASK_{name.upper()}_ENABLED", False))
