@@ -212,7 +212,11 @@ class RemnaClient:
                 
                 if attempt > 0:
                     logger.info(f"Запрос успешно выполнен после {attempt} попыток")
-                
+
+                # Remnawave 3.x: DELETE отдаёт 204, фоновые/bulk-операции 202 — оба без тела.
+                if resp.status_code in (202, 204) or not resp.content:
+                    return {}
+
                 return resp.json()
                 
             except httpx.HTTPStatusError as e:
@@ -656,16 +660,24 @@ class RemnaClient:
     async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[RemnaUser]:
         """
         Получить пользователя Remna по telegram_id.
-        Использует прямой эндпоинт API 2.6.x: GET /users/by-telegram-id/{telegramId}
+
+        В Remnawave 3.0.0 эндпоинт GET /users/by-telegram-id/{telegramId} удалён,
+        вместо него курсорный GET /users/stream с фильтром telegramId.
 
         Returns:
             RemnaUser если найден, None если не найден
         """
         try:
-            response = await self.request("GET", f"/api/users/by-telegram-id/{telegram_id}")
+            response = await self.request(
+                "GET", f"/api/users/stream?telegramId={telegram_id}&size=1000"
+            )
 
             # Обрабатываем ответ
             user_data = response.get('response', response) if isinstance(response, dict) else response
+
+            # stream отдаёт {users: [...], nextCursor, hasMore}
+            if isinstance(user_data, dict) and 'users' in user_data:
+                user_data = user_data['users']
 
             # API может вернуть список пользователей или одного
             if isinstance(user_data, list):
@@ -765,18 +777,19 @@ class RemnaClient:
         """
         Обновить данные пользователя.
 
-        Remnawave API использует PATCH /api/users с uuid в теле запроса.
+        Remnawave 3.x использует PATCH /api/users с числовым id в теле запроса
+        (в 2.x на этом месте был uuid).
 
         kwargs: expire_at/expireAt, telegram_id/telegramId, active_internal_squads/activeInternalSquads и др.
         """
         payload = build_user_payload_from_kwargs(kwargs)
-        # Добавляем uuid в payload - Remnawave требует uuid в теле запроса
-        payload["uuid"] = user_id
+        # Remnawave требует идентификатор в теле запроса; с 3.0.0 это числовой id
+        payload["id"] = int(user_id)
 
         if payload.get("expireAt"):
             logger.debug(f"Remna update_user {user_id}: expireAt={payload['expireAt']}")
-        if len(payload) == 1:  # только uuid, нечего обновлять
-            logger.debug("Remna update_user: нет полей для обновления (только uuid)")
+        if len(payload) == 1:  # только id, нечего обновлять
+            logger.debug("Remna update_user: нет полей для обновления (только id)")
             return {}
 
         return await self.request("PATCH", "/api/users", json=payload)

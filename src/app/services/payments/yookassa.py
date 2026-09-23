@@ -12,7 +12,7 @@ from app.config import settings
 from app.logger import logger
 from app.db.session import SessionLocal
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser, RemnaUser
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.remnawave.client import RemnaClient, normalize_expire_at
 from app.services.payments.errors import ProvisioningPendingError
@@ -91,6 +91,22 @@ async def create_payment(
     """Создает платеж в YooKassa и возвращает (payment_url, external_id)"""
     trace_id = str(uuid.uuid4())
     try:
+        # Стоп-лист: не продаём тем, кого внесли вручную (см. app/services/blocklist.py)
+        from app.services.blocklist import get_user_block_reason, notify_admins
+        block_reason = await get_user_block_reason(user_id)
+        if block_reason is not None:
+            logger.warning(
+                f"[{trace_id}] blocked_user_payment_attempt: tg_id={user_id} "
+                f"plan={plan_code} amount={amount_rub} reason={block_reason}"
+            )
+            await notify_admins(
+                f"\u26d4\ufe0f <b>Заблокированный пользователь пытался оплатить</b>\n"
+                f"ID: <code>{user_id}</code>\n"
+                f"Тариф: {plan_code or '-'}, сумма: {amount_rub}\u20bd\n"
+                f"Причина блокировки: {block_reason or '-'}"
+            )
+            raise ValueError("Оплата недоступна для этого аккаунта")
+
         if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_API_KEY:
             raise ValueError("YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены")
         
@@ -271,6 +287,34 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             return False
         
         payment_id = payment.id
+
+        # Стоп-лист по карте: деньги уже списаны, поэтому выдачу не рвём,
+        # только сигналим админам — решение о возврате принимает человек.
+        try:
+            from app.services.blocklist import (
+                card_fingerprint,
+                get_card_block_reason,
+                notify_admins,
+            )
+
+            _card = ((webhook_data.get("object") or {}).get("payment_method") or {}).get("card")
+            _fp = card_fingerprint(_card)
+            _card_reason = await get_card_block_reason(_fp)
+            if _card_reason is not None:
+                logger.warning(
+                    f"[{trace_id}] blocked_card_payment: external_id={payment_id} "
+                    f"fingerprint={_fp} reason={_card_reason}"
+                )
+                await notify_admins(
+                    f"\u26a0\ufe0f <b>Оплата с карты из стоп-листа</b>\n"
+                    f"Платёж: <code>{payment_id}</code>\n"
+                    f"Карта: <code>{_fp}</code>\n"
+                    f"Причина: {_card_reason or '-'}\n\n"
+                    f"Подписка выдана штатно. Решай по возврату вручную."
+                )
+        except Exception as _bl_err:
+            logger.warning(f"[{trace_id}] blocklist card check failed: {_bl_err}")
+
         webhook_metadata = payment.metadata or {}
         description = payment.description
 
@@ -1174,8 +1218,29 @@ async def handle_successful_payment(
             user_full_name = f"{_first} {_last}".strip() or "Без имени"
 
             username_line = (
-                f"Username: @{_he(telegram_user.username)}\n" if telegram_user.username else ""
+                f"🔗 @{_he(telegram_user.username)}\n" if telegram_user.username else ""
             )
+
+            # Статистика по клиенту: какая это по счёту успешная оплата и сколько
+            # всего заработано. Считаем ТОЛЬКО succeeded в RUB. Текущий платёж уже
+            # закоммичен со status='succeeded' выше, поэтому он входит в счёт —
+            # т.е. payment_number это порядковый номер именно этой оплаты.
+            stats_row = await session.execute(
+                select(
+                    func.count(PaymentModel.id),
+                    func.coalesce(func.sum(PaymentModel.amount), 0),
+                ).where(
+                    PaymentModel.telegram_user_id == telegram_user_id,
+                    PaymentModel.status == "succeeded",
+                    func.upper(PaymentModel.currency) == "RUB",
+                )
+            )
+            payment_number, total_earned = stats_row.one()
+            payment_number = int(payment_number or 0) or 1
+
+            total_str = f"{float(total_earned or 0):.2f}".rstrip("0").rstrip(".")
+            if "." not in total_str:
+                total_str = f"{int(float(total_earned or 0))}"
 
             plan_label = _he(plan_name)
             if period_months:
@@ -1199,14 +1264,26 @@ async def handle_successful_payment(
             if "." not in amount_str:
                 amount_str = f"{int(amount)}"
 
+            # Цветовой акцент + порядковый номер оплаты по этому клиенту.
+            if payment_number <= 1:
+                count_line = "🟢 Новый клиент · 1-я оплата"
+            else:
+                count_line = f"🔁 Постоянный клиент · {payment_number}-я оплата"
+
             admin_text = (
                 "💰 <b>Новая оплата VPN</b>\n\n"
-                f"Пользователь: {_he(user_full_name)}\n"
+                f"👤 <b>{_he(user_full_name)}</b>\n"
                 f"{username_line}"
-                f"Telegram ID: <code>{telegram_user_id}</code>\n"
+                f"🆔 ID: <code>{telegram_user_id}</code>\n\n"
+                "<blockquote>"
                 f"Тариф: {plan_label}\n"
-                f"Сумма: {amount_str} {_he(currency_symbol)}\n"
-                f"Действует до: {expires_str}\n"
+                f"Сумма: {amount_str} {_he(currency_symbol)}"
+                "</blockquote>\n\n"
+                "<blockquote>"
+                f"{count_line}\n"
+                f"📈 Всего с клиента: {total_str} ₽"
+                "</blockquote>\n\n"
+                f"📅 Действует до: {expires_str}\n\n"
                 f"Payment ID: <code>{_he(str(external_id))}</code>\n"
                 f"Remnawave ID: <code>{_he(str(remna_id))}</code>"
             )
