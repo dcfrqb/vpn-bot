@@ -1,7 +1,7 @@
 """Тесты для нового provisioning state flow.
 
 Покрывает:
-- Phase B failure → ProvisioningPendingError, provisioning_state='failed', uvedomлений нет
+- Phase B failure → ProvisioningPendingError, provisioning_state='failed', юзеру ничего, админу один алерт
 - Phase B verify mismatch → ProvisioningPendingError
 - Idempotent skip только при provisioning_state='synced'
 - resync_subscription_to_remnawave: успех / провал / inactive sub
@@ -15,6 +15,25 @@ from unittest.mock import AsyncMock, MagicMock, patch, Mock
 
 from app.services.payments.errors import ProvisioningPendingError
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser
+
+TEST_ADMIN_ID = 900000099
+
+
+@pytest.fixture(autouse=True)
+def _isolated_admins_and_redis():
+    """Не зависим от локального .env (ADMINS) и живого Redis на localhost."""
+    from app.services.payments import yookassa as yk
+    with patch.object(yk.settings, "ADMINS", [TEST_ADMIN_ID]), \
+         patch("app.services.cache.get_redis_client", return_value=None):
+        yield
+
+
+def _assert_user_not_notified_admin_alerted(mock_bot, tg_id=123456789):
+    """Юзеру ничего (доступа нет), админу ровно один алерт «оплата есть, доступ не выдан»."""
+    chats = [c.kwargs.get("chat_id") for c in mock_bot.send_message.await_args_list]
+    assert tg_id not in chats
+    assert chats == [TEST_ADMIN_ID]
+    assert "доступ не выдан" in mock_bot.send_message.await_args_list[0].kwargs["text"]
 
 
 def _build_session_with_state():
@@ -98,7 +117,7 @@ async def test_phase_b_silent_failure_raises_pending():
     assert state["subscription"] is not None
     assert state["subscription"].provisioning_state == "failed"
     assert state["subscription"].last_provisioning_error is not None
-    mock_bot.send_message.assert_not_called()
+    _assert_user_not_notified_admin_alerted(mock_bot)
 
 
 @pytest.mark.asyncio
@@ -127,7 +146,7 @@ async def test_phase_b_verify_mismatch_raises_pending():
 
     assert state["subscription"].provisioning_state == "failed"
     assert "verification" in (state["subscription"].last_provisioning_error or "")
-    mock_bot.send_message.assert_not_called()
+    _assert_user_not_notified_admin_alerted(mock_bot)
 
 
 @pytest.mark.asyncio
@@ -152,7 +171,7 @@ async def test_phase_b_remna_exception_raises_pending():
             )
 
     assert state["subscription"].provisioning_state == "failed"
-    mock_bot.send_message.assert_not_called()
+    _assert_user_not_notified_admin_alerted(mock_bot)
 
 
 @pytest.mark.asyncio
