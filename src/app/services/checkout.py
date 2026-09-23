@@ -229,12 +229,16 @@ class CheckoutServiceImpl:
         )
 
     async def _start_yookassa(self, tg: int, quote: Any, *, kind: str, autorenew: bool,
-                              user: Optional[Mapping[str, Any]], now) -> StartResult:
+                              user: Optional[Mapping[str, Any]], now=None) -> StartResult:
         from app.domain.models import PaymentIntent, PaymentKind
         from app.domain.texts import months_ru
 
-        bucket = int(now.timestamp()) // int(REUSE_WINDOW.total_seconds())
-        key = f"co:{tg}:{kind}:{quote.plan_code}:{quote.months}:{int(autorenew)}:{bucket}"
+        # One key per checkout attempt: the client repeats it on network/5xx retries,
+        # so YooKassa never creates two payments for one attempt. A new attempt
+        # (after the old one was paid or expired) must get a NEW payment, so the
+        # key is not derived from (user, plan, months): the pending reuse above
+        # already covers double clicks.
+        key = f"co:{tg}:{uuid.uuid4().hex}"
         description = f"CRS VPN {quote.title}, {months_ru(quote.months)}".replace(" ", " ")
         if kind == "gift":
             description = f"Подарок: {description}"
