@@ -91,7 +91,13 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     from app.routers.admin import router as admin_router
     from app.routers.ui import router as ui_router
     from app.routers.legacy_callbacks import router as legacy_router
+    from app.routers.site_login import router as site_login_router
 
+    # site_login — перед UI/start и любыми catch-all callback-роутерами:
+    # диплинк /start login_* и callback sitelogin: должны перехватываться
+    # здесь и не доходить до обычного cmd_start (не создавать telegram_users,
+    # не сбрасывать навигатор) и до legacy_callbacks.
+    dp.include_router(site_login_router)
     # UI router должен быть первым для обработки ui: callbacks
     dp.include_router(ui_router)
     dp.include_router(start_router)
@@ -189,6 +195,8 @@ async def run_polling():
                     raise
     finally:
         subscription_checker.stop()
+        from app.routers.site_login import close_session as close_site_login_session
+        await close_site_login_session()
         await bot.session.close()
 
 
@@ -287,6 +295,11 @@ async def run_webhook():
             await runner.cleanup()
         except Exception:
             pass
+        try:
+            from app.routers.site_login import close_session as close_site_login_session
+            await close_site_login_session()
+        except Exception as _e:
+            logger.warning(f"site_login session close failed: {_e}")
         await bot.delete_webhook()
         await bot.session.close()
         logger.info("Webhook удален, бот остановлен")

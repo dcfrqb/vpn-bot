@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
     CRYPTO_NETWORK: Union[str, None] = None
 
+    # Вход на сайт через бота (tg-login relay). SITE_INTERNAL_TOKEN пустой —
+    # фича выключена, site_login отвечает заглушкой и на сайт не ходит.
+    SITE_INTERNAL_URL: str = "http://vpn-site-api:8000"
+    SITE_INTERNAL_TOKEN: Union[str, None] = None
+
     # Путь к .env файлу
     _base_path = Path("/opt/crs-vpn-bot/.env")
     _local_path = Path(__file__).resolve().parents[2] / ".env"
