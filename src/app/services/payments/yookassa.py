@@ -1598,55 +1598,34 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     # Если пользователь уже существует, обновляем expireAt и сквад
                     remna_user_id = str(telegram_user.remna_user_id)
 
-                    # КРИТИЧНО: Обновляем expireAt в Remnawave (source of truth)
-                    # Если period_months передан — продлеваем от текущего expireAt (как provision_tariff).
-                    # Иначе — fallback на subscription.valid_until (старое поведение).
-                    device_limit = _device_limit_for_plan(subscription.plan_code)
-                    try:
-                        if period_months is not None:
-                            # ИДЕМПОТЕНТНОСТЬ: если уже есть зафиксированный target из
-                            # Phase A — используем его, не пересчитываем от текущего expireAt.
-                            # Иначе при retry _compute_extend_expire_str будет каждый раз
-                            # добавлять +period к уже сохранённому в Remnawave значению —
-                            # подписка уезжает в годы вперёд (был такой баг).
-                            if subscription.remnawave_expected_expire_at:
-                                new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
-                                logger.info(
-                                    f"remna expire_at update (idempotent target): "
-                                    f"remna_user_id={remna_user_id} new_expire={new_expire_str} "
-                                    f"device_limit={device_limit}"
-                                )
-                            else:
-                                new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
-                                logger.info(
-                                    f"remna expire_at update: remna_user_id={remna_user_id} "
-                                    f"new_expire={new_expire_str} device_limit={device_limit}"
-                                )
-                            await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=device_limit)
-                            logger.debug(f"remna expire_at updated for remna_user_id={remna_user_id}")
-                        elif subscription.valid_until:
-                            # Fallback: старое поведение — используем valid_until из local DB
-                            expire_at_str = normalize_expire_at(subscription.valid_until)
-                            logger.info(f"remna expire_at update (fallback): remna_user_id={remna_user_id} valid_until={expire_at_str} device_limit={device_limit}")
-                            await client.update_user(remna_user_id, expire_at=expire_at_str, hwid_device_limit=device_limit)
-                            logger.debug(f"remna expire_at updated (fallback) for remna_user_id={remna_user_id}")
-                    except Exception as expire_update_e:
-                        logger.warning(f"⚠️ Не удалось обновить expireAt для пользователя {remna_user_id}: {expire_update_e}")
-
-                    # Обновляем сквад согласно текущей подписке
-                    squad_name = await get_squad_name_for_plan(subscription.plan_code)
-                    if squad_name:
-                        try:
-                            squad = await client.get_squad_by_name(squad_name)
-                            if squad:
-                                squad_uuid = squad.get('uuid')
-                                logger.debug(f"remna squad update: remna_user_id={remna_user_id} squad={squad_name}")
-                                try:
-                                    await client.update_user(remna_user_id, activeInternalSquads=[squad_uuid])
-                                except Exception as squad_update_e:
-                                    logger.warning(f"remna squad update failed: remna_user_id={remna_user_id} squad={squad_name} err={squad_update_e}")
-                        except Exception as squad_e:
-                            logger.warning(f"remna squad lookup failed: squad={squad_name} err={squad_e}")
+                    # КРИТИЧНО: expireAt + сквад тарифа + лимит устройств одним PATCH
+                    # по политике services/remna_tariff (ручные сквады и поднятые
+                    # лимиты не затираются). Любая ошибка -> RemnaTariffError ->
+                    # выдача не засчитывается (provisioning failed, retry).
+                    # Если period_months передан — цель берется из Phase A
+                    # (idempotent target) или считается от текущего expireAt.
+                    # Иначе — fallback на subscription.valid_until (resync).
+                    new_expire_str = None
+                    if period_months is not None:
+                        # ИДЕМПОТЕНТНОСТЬ: если уже есть зафиксированный target из
+                        # Phase A — используем его, не пересчитываем от текущего expireAt.
+                        # Иначе при retry _compute_extend_expire_str будет каждый раз
+                        # добавлять +period к уже сохранённому в Remnawave значению —
+                        # подписка уезжает в годы вперёд (был такой баг).
+                        if subscription.remnawave_expected_expire_at:
+                            new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
+                        else:
+                            new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
+                    elif subscription.valid_until:
+                        new_expire_str = normalize_expire_at(subscription.valid_until)
+                    logger.info(
+                        f"remna tariff apply: remna_user_id={remna_user_id} plan={subscription.plan_code} "
+                        f"new_expire={new_expire_str}"
+                    )
+                    from app.services.remna_tariff import apply_tariff_to_remna_user
+                    await apply_tariff_to_remna_user(
+                        client, remna_user_id, subscription.plan_code, expire_at=new_expire_str,
+                    )
 
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
                     if subscription_url:
@@ -1673,30 +1652,21 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     )
                     telegram_user.remna_user_id = remna_user_id
                     await session.commit()
-                    # Обновляем expireAt и лимит устройств (продлеваем от текущего expireAt в Remnawave)
-                    _device_limit = _device_limit_for_plan(subscription.plan_code)
+                    # expireAt + сквад + лимит одним PATCH (политика remna_tariff)
+                    _new_expire = None
                     if period_months is not None:
-                        try:
-                            # Та же идемпотентность что и в основной ветке: предпочитаем
-                            # зафиксированный target из Phase A, чтобы retry не дрейфил.
-                            if subscription.remnawave_expected_expire_at:
-                                new_expire_str = normalize_expire_at(subscription.remnawave_expected_expire_at)
-                            else:
-                                new_expire_str = await _compute_extend_expire_str(client, remna_user_id, period_months)
-                            await client.update_user(remna_user_id, expire_at=new_expire_str, hwid_device_limit=_device_limit)
-                            logger.info(f"remna expire_at updated: remna_user_id={remna_user_id} new_expire={new_expire_str} device_limit={_device_limit}")
-                        except Exception as upd_e:
-                            logger.warning(f"remna expire_at update failed: remna_user_id={remna_user_id} err={upd_e}")
-                    # Обновляем сквад
-                    _squad_name = await get_squad_name_for_plan(subscription.plan_code)
-                    if _squad_name:
-                        try:
-                            _squad = await client.get_squad_by_name(_squad_name)
-                            if _squad:
-                                await client.update_user(remna_user_id, activeInternalSquads=[_squad.get("uuid")])
-                                logger.debug(f"remna squad updated: remna_user_id={remna_user_id} squad={_squad_name}")
-                        except Exception:
-                            pass
+                        # Та же идемпотентность что и в основной ветке: предпочитаем
+                        # зафиксированный target из Phase A, чтобы retry не дрейфил.
+                        if subscription.remnawave_expected_expire_at:
+                            _new_expire = normalize_expire_at(subscription.remnawave_expected_expire_at)
+                        else:
+                            _new_expire = await _compute_extend_expire_str(client, remna_user_id, period_months)
+                    elif subscription.valid_until:
+                        _new_expire = normalize_expire_at(subscription.valid_until)
+                    from app.services.remna_tariff import apply_tariff_to_remna_user
+                    await apply_tariff_to_remna_user(
+                        client, remna_user_id, subscription.plan_code, expire_at=_new_expire,
+                    )
                     # Получаем subscription URL и сохраняем
                     subscription_url = await client.get_user_subscription_url(remna_user_id)
                     if subscription_url:
@@ -1720,7 +1690,10 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 password = generate_remna_password(length=24)
                 
                 # Дата истечения: используем relativedelta для точных календарных месяцев (как provision_tariff)
-                if period_months is not None and period_months > 0:
+                # Предпочитаем зафиксированную в Phase A цель (идемпотентно для retry).
+                if subscription.remnawave_expected_expire_at:
+                    expire_at = subscription.remnawave_expected_expire_at
+                elif period_months is not None and period_months > 0:
                     from datetime import timezone as _tz
                     from dateutil.relativedelta import relativedelta as _rd
                     expire_at = datetime.now(_tz.utc) + _rd(months=period_months)
@@ -2128,65 +2101,14 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     else:
                         logger.error(f"❌ Не удалось получить subscription URL для remna_user_id={remna_user_id}")
                 
-                # Обновляем пользователя для добавления Telegram ID (если его не было в ответе)
-                # expireAt и настройки internal squads
-                try:
-                    update_payload = {}
-                    
-                    # Обновляем expireAt в Remna для нового пользователя (клиент нормализует и маппит expire_at -> expireAt)
-                    if subscription.valid_until:
-                        update_payload["expire_at"] = subscription.valid_until
-                        logger.info(f"📝 Обновляю expireAt для нового пользователя")
-                    
-                    # Убеждаемся, что telegramId установлен
-                    if user_response_data and not user_response_data.get("telegramId"):
-                        update_payload["telegramId"] = int(telegram_user_id)  # API ожидает число
-                    
-                    # Добавляем internal squads в зависимости от плана подписки
-                    squad_name = await get_squad_name_for_plan(subscription.plan_code)
-                    if squad_name:
-                        try:
-                            squad = await client.get_squad_by_name(squad_name)
-                            if squad:
-                                squad_uuid = squad.get('uuid')
-                                if squad_uuid:
-                                    # Получаем текущие сквады пользователя
-                                    # Если user_response_data еще не содержит актуальные данные, получаем их заново
-                                    if not user_response_data or 'activeInternalSquads' not in user_response_data:
-                                        user_data = await client.get_user_by_id(str(remna_user_id))
-                                        if isinstance(user_data, dict):
-                                            if "response" in user_data and isinstance(user_data["response"], dict):
-                                                user_response_data = user_data["response"]
-                                            else:
-                                                user_response_data = user_data
-                                    
-                                    current_squads = user_response_data.get('activeInternalSquads', []) if user_response_data else []
-                                    current_squad_uuids = []
-                                    for s in current_squads:
-                                        if isinstance(s, dict):
-                                            current_squad_uuids.append(s.get('uuid'))
-                                        elif isinstance(s, str):
-                                            current_squad_uuids.append(s)
-                                    
-                                    # Если нужного сквада нет, добавляем его
-                                    if squad_uuid not in current_squad_uuids:
-                                        current_squad_uuids.append(squad_uuid)
-                                        update_payload["activeInternalSquads"] = current_squad_uuids
-                                        logger.info(f"📝 Добавлен сквад {squad_name} ({squad_uuid}) для плана {subscription.plan_code}")
-                                    else:
-                                        logger.info(f"✅ Сквад {squad_name} уже назначен пользователю")
-                            else:
-                                logger.warning(f"⚠️ Сквад {squad_name} не найден в Remnawave")
-                        except Exception as squad_e:
-                            logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
-                    
-                    if update_payload:
-                        logger.info(f"Обновление пользователя в Remna API: {update_payload}")
-                        await client.update_user(str(remna_user_id), **update_payload)
-                        logger.info(f"Пользователь обновлен в Remna API")
-                except Exception as e:
-                    logger.warning(f"Не удалось обновить пользователя в Remna API (не критично): {e}")
-                
+                # Досыпаем сквад тарифа / лимит по общей политике (если при create
+                # сквад не нашелся — здесь будет RemnaTariffError и выдача не
+                # засчитается, а не «оплачено, но без нод»). expireAt уже задан в create.
+                from app.services.remna_tariff import apply_tariff_to_remna_user
+                await apply_tariff_to_remna_user(
+                    client, str(remna_user_id), subscription.plan_code, expire_at=None,
+                )
+
                 return subscription_url
                 
             finally:

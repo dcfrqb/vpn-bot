@@ -18,6 +18,7 @@ Sun718RevertTask — периодическая таска возврата squa
 Регистрируется в app/main.py рядом с SubscriptionChecker.
 """
 import asyncio
+import html
 from datetime import datetime
 from typing import Optional
 
@@ -151,30 +152,30 @@ class Sun718RevertTask:
         target_plan = current_plan if (current_plan == "pro") else pre_promo_plan
         squad_name = get_plan_squad(target_plan) or "basic"
 
+        # Возвращаем только тарифный сквад (pro -> pre_promo_plan), ручные сквады
+        # (*-friend, arcadia и т.п.) и лимит устройств не трогаем.
+        from app.services.remna_tariff import RemnaTariffError, apply_tariff_to_remna_user
+        if not get_plan_squad(target_plan):
+            target_plan = "basic"
         client = RemnaClient()
-        squad = await client.get_squad_by_name(squad_name)
-        if not squad or not squad.get("uuid"):
-            logger.error(
-                f"sun718_revert: squad {squad_name!r} not found, tg={tg_id}"
+        try:
+            await apply_tariff_to_remna_user(
+                client, remna_user_id, target_plan,
+                expire_at=None, set_device_limit=False, trace_id=f"sun718_revert_{payment_id}",
             )
+        except RemnaTariffError as e:
+            logger.error(f"sun718_revert: apply tariff failed tg={tg_id}: {e}")
             await self._notify(
-                title="❌ SUN718 REVERT: squad не найден",
+                title="❌ SUN718 REVERT: не удалось вернуть сквад",
                 body=(f"tg=<code>{tg_id}</code> target_plan={target_plan} "
-                      f"squad_name={squad_name}"),
+                      f"squad_name={squad_name}\nerr=<code>{html.escape(str(e)[:200])}</code>"),
             )
             return  # не маркируем completed — попробуем в следующем тике
-
-        try:
-            await client.update_user(
-                remna_user_id, activeInternalSquads=[squad["uuid"]]
-            )
-        except Exception as e:
-            logger.error(f"sun718_revert: update_user failed tg={tg_id}: {e}")
-            await self._notify(
-                title="❌ SUN718 REVERT: update_user упал",
-                body=f"tg=<code>{tg_id}</code> err=<code>{str(e)[:200]}</code>",
-            )
-            return  # не маркируем — повторим
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
         # Инвалидируем кэш
         try:

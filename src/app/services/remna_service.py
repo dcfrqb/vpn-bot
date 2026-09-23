@@ -200,35 +200,19 @@ async def provision_tariff(
                 valid_until = base + relativedelta(months=period_months)
             valid_until_str = valid_until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        from app.core.plans import get_plan_device_limit, get_plan_squad
+        # expireAt + сквад тарифа + лимит устройств одним PATCH, без затирания
+        # ручных сквадов и поднятых лимитов (services/remna_tariff). Сквад не
+        # найден / PATCH упал -> RemnaTariffError -> выдача не удалась (False).
+        from app.core.plans import get_plan_squad
+        from app.services.remna_tariff import apply_tariff_to_remna_user
 
-        device_limit = get_plan_device_limit(plan_code)
+        if not get_plan_squad(plan_code):
+            plan_code = "basic"  # бывший дефолт, не ломает legacy
         await asyncio.wait_for(
-            client.update_user(
-                remna_user_id,
-                expire_at=valid_until_str,
-                hwid_device_limit=device_limit,
+            apply_tariff_to_remna_user(
+                client, remna_user_id, plan_code, expire_at=valid_until_str, trace_id=req_id,
             ),
-            timeout=REMNAWAVE_CALL_TIMEOUT,
-        )
-
-        # Fallback "basic" сохраняем — это бывший дефолт, не ломает legacy.
-        squad_name = get_plan_squad(plan_code) or "basic"
-        squad = await asyncio.wait_for(
-            client.get_squad_by_name(squad_name),
-            timeout=REMNAWAVE_CALL_TIMEOUT,
-        )
-        if not squad or not squad.get("uuid"):
-            # Squad должен существовать — если его нет, подписка активна но без доступа к нодам.
-            # Явный raise → caller помечает needs_provisioning, админ получит алерт через логи.
-            raise RuntimeError(
-                f"squad_not_found: тариф={plan_code} squad_name={squad_name!r} — "
-                f"проверьте конфигурацию squad'ов в Remnawave. "
-                f"tg_id={telegram_id} remna_user_id={remna_user_id}"
-            )
-        await asyncio.wait_for(
-            client.update_user(remna_user_id, activeInternalSquads=[squad["uuid"]]),
-            timeout=REMNAWAVE_CALL_TIMEOUT,
+            timeout=REMNAWAVE_CALL_TIMEOUT * 2,
         )
 
         log_payment_event(

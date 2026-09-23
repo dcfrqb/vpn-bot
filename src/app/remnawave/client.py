@@ -802,6 +802,20 @@ class RemnaClient:
         """Получить список внутренних сквадов"""
         return await self.request("GET", "/api/internal-squads")
 
+    async def list_internal_squads(self) -> list:
+        """Список внутренних сквадов. В отличие от get_squad_by_name НЕ глушит ошибки."""
+        response = await self.get_internal_squads()
+        if isinstance(response, list):
+            return response
+        if isinstance(response, dict):
+            response_obj = response.get('response', {})
+            if isinstance(response_obj, dict):
+                squads = response_obj.get('internalSquads', response_obj.get('items'))
+                if squads is not None:
+                    return list(squads)
+            return list(response.get('items', response.get('data', [])) or [])
+        return []
+
     async def get_squad_by_name(self, squad_name: str) -> Optional[Dict[str, Any]]:
         """Получить сквад по имени"""
         try:
