@@ -6,23 +6,16 @@ aiogram обрабатывает апдейты параллельно: 5 быс
 использования промокода ДО выдачи (уникальный external_id в payments).
 
 Если Redis недоступен, лок не блокирует (fail-open): от двойной выдачи в этом
-случае защищает уникальная запись в БД.
+случае защищает уникальная запись в БД. Примитивы — services/redis_flags.
 """
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from app.logger import logger
+from app.services.redis_flags import compare_and_delete, set_once
 
 DEFAULT_LOCK_TTL_SECONDS = 120
-
-# Снимаем лок только если он все еще наш (TTL мог истечь и лок взял другой).
-_RELEASE_LUA = """
-if redis.call('get', KEYS[1]) == ARGV[1] then
-    return redis.call('del', KEYS[1])
-end
-return 0
-"""
 
 
 @asynccontextmanager
@@ -35,23 +28,12 @@ async def user_action_lock(
     """
     key = f"lock:{scope}:{int(user_id)}"
     token = uuid.uuid4().hex
-    client = None
-    acquired = True
-    try:
-        from app.services.cache import get_redis_client
-        client = get_redis_client()
-        if client is not None:
-            acquired = bool(await client.set(key, token, ex=ttl, nx=True))
-    except Exception as e:
-        logger.warning(f"user_action_lock {key}: redis unavailable, continuing without lock: {e}")
-        client = None
-        acquired = True
-
+    got = await set_once(key, token, ttl=ttl)
+    if got is None:
+        logger.warning(f"user_action_lock {key}: redis unavailable, continuing without lock")
+    acquired = got is not False
     try:
         yield acquired
     finally:
-        if client is not None and acquired:
-            try:
-                await client.eval(_RELEASE_LUA, 1, key, token)
-            except Exception as e:
-                logger.debug(f"user_action_lock {key}: release failed (TTL cleans up): {e}")
+        if got is True:
+            await compare_and_delete(key, token)

@@ -74,6 +74,7 @@ VALID_STATUS_TRANSITIONS = {
     "succeeded": set(),  # терминальный
     "canceled": set(),
     "failed": set(),
+    "refunded": set(),  # терминальный: после возврата payment.succeeded не принимается
 }
 
 
@@ -256,60 +257,14 @@ async def create_payment(
         raise
 
 
-WEBHOOK_DEDUP_TTL_SECONDS = 86400
-
-
-async def _acquire_webhook_dedup(webhook_data: Dict[str, Any], event: str, trace_id: str):
-    """Ставит маркер «вебхук в обработке/обработан».
-
-    Returns: ключ (str) — маркер наш; False — дубль (маркер уже стоит);
-    None — дедуп недоступен (нет id / нет Redis), обрабатываем без него.
-    """
-    event_id = webhook_data.get("id") or (webhook_data.get("object") or {}).get("id")
-    if not event_id:
-        return None
-    try:
-        from app.services.cache import get_redis_client
-        redis_client = get_redis_client()
-        if not redis_client:
-            return None
-        # Ключ по событию + объекту: payment.succeeded и refund.* одного платежа
-        # не глушат друг друга.
-        dedup_key = f"yk_event:{event}:{event_id}"
-        acquired = await redis_client.set(dedup_key, trace_id, ex=WEBHOOK_DEDUP_TTL_SECONDS, nx=True)
-        if not acquired:
-            logger.info(
-                f"[{trace_id}] webhook duplicate suppressed: event={event} id={event_id} "
-                f"(processed or in progress)"
-            )
-            return False
-        return dedup_key
-    except Exception as dedup_err:
-        logger.warning(f"[{trace_id}] webhook dedup check failed (continuing): {dedup_err}")
-        return None
-
-
-async def _release_webhook_dedup(dedup_key: str, trace_id: str) -> None:
-    """Снимает маркер после неуспешной обработки, чтобы повтор YooKassa (после
-    нашего 503) не был проглочен как дубль (дефект Д-2)."""
-    try:
-        from app.services.cache import get_redis_client
-        redis_client = get_redis_client()
-        if redis_client:
-            await redis_client.delete(dedup_key)
-            logger.info(f"[{trace_id}] webhook dedup released for retry: {dedup_key}")
-    except Exception as e:
-        logger.warning(f"[{trace_id}] webhook dedup release failed: {e}")
-
-
 async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
     """Обрабатывает webhook от YooKassa.
 
     Идемпотентность:
-      - верхний слой — Redis-маркер yk_event:<event>:<id> (24h TTL): гасит
-        параллельную/повторную доставку уже обработанного события. Маркер
-        снимается, если обработка не удалась (исключение или False), поэтому
-        повтор YooKassa после 503 обрабатывается заново (фикс Д-2);
+      - верхний слой — маркер yk_event:<event>:<id> (services/payments/webhook_dedup):
+        дубль уже обработанного события -> True без работы; дубль, пока первая
+        доставка еще идет -> WebhookRetryableError (503, YooKassa повторит);
+        неуспех снимает маркер, повтор после 503 обрабатывается заново (Д-2);
       - нижний слой — `with_for_update()` на payment record + FSM VALID_STATUS_TRANSITIONS
         + гейт provisioning_state='synced'.
     """
@@ -322,17 +277,12 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         logger.error(f"[{trace_id}] webhook received: missing event")
         return False
 
-    dedup_key = await _acquire_webhook_dedup(webhook_data, event, trace_id)
-    if dedup_key is False:
-        return True
+    from app.services.payments.webhook_dedup import run_webhook_once
 
-    success = False
-    try:
-        success = await _process_payment_webhook_body(webhook_data, bot, trace_id, event)
-        return success
-    finally:
-        if dedup_key and not success:
-            await _release_webhook_dedup(dedup_key, trace_id)
+    return await run_webhook_once(
+        webhook_data, event, trace_id,
+        lambda: _process_payment_webhook_body(webhook_data, bot, trace_id, event),
+    )
 
 
 async def _process_payment_webhook_body(
@@ -818,18 +768,14 @@ async def _alert_paid_not_provisioned(
     """Один алерт админам на платеж (Redis SET NX, 6 ч): оплачено, но выдача не прошла."""
     from html import escape as _he
 
-    try:
-        from app.services.cache import get_redis_client
-        redis_client = get_redis_client()
-        if redis_client is not None:
-            first = await redis_client.set(
-                f"alert:paid_not_provisioned:{payment_id}", trace_id or "1",
-                ex=_PROVISION_ALERT_TTL_SECONDS, nx=True,
-            )
-            if not first:
-                return
-    except Exception as e:
-        logger.debug(f"[{trace_id}] provisioning alert dedup soft-fail: {e}")
+    from app.services.redis_flags import set_once
+
+    first = await set_once(
+        f"alert:paid_not_provisioned:{payment_id}", trace_id or "1",
+        ttl=_PROVISION_ALERT_TTL_SECONDS,
+    )
+    if first is False:
+        return
 
     text = (
         "⚠️ <b>Оплата есть, доступ не выдан</b>\n\n"

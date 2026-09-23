@@ -277,19 +277,13 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
 
 
 async def handle_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
-    """refund.succeeded с тем же дедупом, что и платежи (маркер снимается при неудаче)."""
+    """refund.succeeded с тем же дедупом, что и платежи (webhook_dedup)."""
     import uuid as _uuid
-    from app.services.payments.yookassa import _acquire_webhook_dedup, _release_webhook_dedup
+    from app.services.payments.webhook_dedup import run_webhook_once
 
     trace_id = str(_uuid.uuid4())
     event = (webhook_data or {}).get("event") or "refund.succeeded"
-    dedup_key = await _acquire_webhook_dedup(webhook_data or {}, event, trace_id)
-    if dedup_key is False:
-        return True
-    success = False
-    try:
-        success = await process_refund_webhook(webhook_data, bot)
-        return success
-    finally:
-        if dedup_key and not success:
-            await _release_webhook_dedup(dedup_key, trace_id)
+    return await run_webhook_once(
+        webhook_data or {}, event, trace_id,
+        lambda: process_refund_webhook(webhook_data, bot),
+    )
