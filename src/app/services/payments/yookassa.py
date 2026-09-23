@@ -579,6 +579,7 @@ async def _verify_remnawave_synced(
     remna_user_id: str,
     expected_expire_at: Optional[datetime],
     trace_id: str,
+    plan_code: Optional[str] = None,
 ) -> tuple[bool, Optional[datetime], Optional[str]]:
     """Перечитывает юзера из Remnawave и проверяет, что expireAt близок к expected.
 
@@ -612,6 +613,28 @@ async def _verify_remnawave_synced(
 
         if status == "EXPIRED":
             return False, actual, f"remnawave status={status} (expected ACTIVE/LIMITED)"
+
+        # Хотфикс 2.1: «synced» только если сквад тарифа реально стоит у юзера.
+        # Иначе оплаченный юзер без сквада не видит ни одной ноды, а подписка
+        # считалась выданной и реконсилер ее больше не трогал.
+        if plan_code:
+            from app.core.plans import get_plan_squad
+            from app.services.remna_tariff import extract_squad_uuids
+            squad_name = get_plan_squad(plan_code)
+            if not squad_name:
+                return False, actual, f"unknown plan_code={plan_code!r}: нет сквада в каталоге"
+            try:
+                squads = await client.list_internal_squads()
+            except Exception as e:
+                return False, actual, f"internal squads lookup failed: {e}"
+            target = next(
+                (sq.get("uuid") for sq in squads if isinstance(sq, dict) and sq.get("name") == squad_name),
+                None,
+            )
+            if not target:
+                return False, actual, f"squad {squad_name!r} not found in Remnawave"
+            if target not in extract_squad_uuids(raw):
+                return False, actual, f"plan squad {squad_name!r} missing on remna user {remna_user_id}"
 
         if expected_expire_at is not None:
             if actual is None:
@@ -714,7 +737,9 @@ async def resync_subscription_to_remnawave(
             )
             return False
 
-        ok, actual, err = await _verify_remnawave_synced(remna_user_id, expected_expire, trace_id)
+        ok, actual, err = await _verify_remnawave_synced(
+            remna_user_id, expected_expire, trace_id, plan_code=subscription.plan_code
+        )
         if not ok:
             await _mark_provisioning_failed(session, subscription.id, f"resync verify: {err}", trace_id)
             return False
@@ -733,6 +758,44 @@ async def resync_subscription_to_remnawave(
             f"tg_id={subscription.telegram_user_id} expire={expected_expire}"
         )
         return True
+
+
+_PROVISION_ALERT_TTL_SECONDS = 6 * 3600
+
+
+async def _alert_paid_not_provisioned(
+    bot, payment_id: int, telegram_user_id: int, error: str, trace_id: str
+) -> None:
+    """Один алерт админам на платеж (Redis SET NX, 6 ч): оплачено, но выдача не прошла."""
+    from html import escape as _he
+
+    try:
+        from app.services.cache import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client is not None:
+            first = await redis_client.set(
+                f"alert:paid_not_provisioned:{payment_id}", trace_id or "1",
+                ex=_PROVISION_ALERT_TTL_SECONDS, nx=True,
+            )
+            if not first:
+                return
+    except Exception as e:
+        logger.debug(f"[{trace_id}] provisioning alert dedup soft-fail: {e}")
+
+    text = (
+        "⚠️ <b>Оплата есть, доступ не выдан</b>\n\n"
+        f"Telegram ID: <code>{telegram_user_id}</code>\n"
+        f"Payment row id: <code>{payment_id}</code>\n"
+        f"Ошибка: <code>{_he(error[:300])}</code>\n\n"
+        "Подписка помечена failed, бот повторит выдачу автоматически "
+        "(повтор вебхука, recovery, реконсилер). Если не пройдет, проверьте "
+        "сквады и юзера в Remnawave."
+    )
+    for admin_id in (settings.ADMINS or []):
+        try:
+            await bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"[{trace_id}] provisioning alert to admin {admin_id} failed: {e}")
 
 
 def _price_mismatch_reason(
@@ -1233,7 +1296,7 @@ async def handle_successful_payment(
 
         # Верификация: перечитываем юзера из Remnawave и сравниваем expireAt.
         ok, actual_expire_at, verify_err = await _verify_remnawave_synced(
-            remna_user_id_post, valid_until, trace_id
+            remna_user_id_post, valid_until, trace_id, plan_code=plan_code
         )
         if not ok:
             await _mark_provisioning_failed(
@@ -1467,10 +1530,13 @@ async def handle_successful_payment(
         except Exception as _ref_e:
             logger.warning(f"[{trace_id}] referral_tracker hook soft-fail: {_ref_e}")
 
-    except ProvisioningPendingError:
+    except ProvisioningPendingError as ppe:
         # Уже залогировано и помечено в _mark_provisioning_failed.
         # Пробрасываем дальше — webhook вернет 503, юзер будет уведомлен только когда
         # reconciler / повторный webhook доведут sync до конца.
+        # Хотфикс 2.1: деньги взяты, доступа нет — админ должен узнать сразу
+        # (один алерт на платеж за 6 часов, дальше ретраи молча).
+        await _alert_paid_not_provisioned(bot, payment_id, telegram_user_id, str(ppe), trace_id)
         raise
     except Exception as e:
         logger.error(f"[{trace_id}] handle_successful_payment failed: payment_id={payment_id} user={telegram_user_id} err={e}")
