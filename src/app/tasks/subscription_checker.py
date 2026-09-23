@@ -47,8 +47,25 @@ class SubscriptionChecker:
                 break
             await self._run_once(label="periodic")
 
+    @staticmethod
+    def any_stage_enabled() -> bool:
+        from app.config import task_enabled
+        return any(task_enabled(n) for n in ("RECOVERY", "EXPIRY_NOTIFIER", "RECONCILER"))
+
     async def _run_once(self, label: str = "") -> None:
+        from app.config import task_enabled
+
         prefix = f"SubscriptionChecker[{label}]" if label else "SubscriptionChecker"
+        if task_enabled("RECOVERY"):
+            await self._run_recovery(prefix)
+        else:
+            logger.debug(f"{prefix}: recovery disabled by config")
+        if task_enabled("EXPIRY_NOTIFIER"):
+            await self._run_expiry(prefix)
+        if task_enabled("RECONCILER"):
+            await self._run_reconciler(prefix)
+
+    async def _run_recovery(self, prefix: str) -> None:
         try:
             from app.services.payments.recovery import (
                 recheck_pending_payments,
@@ -74,6 +91,7 @@ class SubscriptionChecker:
         except Exception as e:
             logger.error(f"{prefix}: error during recovery: {e}")
 
+    async def _run_expiry(self, prefix: str) -> None:
         # Stage C: expiry notifications
         try:
             from app.tasks.expiry_notifier import check_expiry_notifications
@@ -81,6 +99,7 @@ class SubscriptionChecker:
         except Exception as e:
             logger.error(f"{prefix}: error during expiry notifications: {e}")
 
+    async def _run_reconciler(self, prefix: str) -> None:
         # Stage D: Remnawave reconciler shallow scan
         # Дополняет recovery.retry_needs_provisioning: тот ходит по платежам,
         # этот — по подпискам, через provisioning_state. Покрывает кейсы, когда

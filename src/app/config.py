@@ -4,6 +4,38 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AnyHttpUrl, field_validator
 
 
+_LENIENT_BOOL_FIELDS = (
+    "PROMO_SUN718_ENABLED",
+    "PROMO_SOLOKHIN_ENABLED",
+    "PROMO_TRIAL_ENABLED",
+    "PROMO_ADMIN_ENABLED",
+    "BACKGROUND_TASKS_ENABLED",
+    "TASK_RECOVERY_ENABLED",
+    "TASK_EXPIRY_NOTIFIER_ENABLED",
+    "TASK_RECONCILER_ENABLED",
+    "TASK_SUN718_REVERT_ENABLED",
+    "TASK_BROADCAST_RESUME_ENABLED",
+)
+
+_TRUE = {"1", "true", "yes", "y", "on"}
+_FALSE = {"0", "false", "no", "n", "off"}
+
+
+def parse_bool(v):
+    """bool из env-значения или None, если значение непонятное."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int) and v in (0, 1):
+        return bool(v)
+    if isinstance(v, str):
+        s = v.strip().strip('"').strip("'").lower()
+        if s in _TRUE:
+            return True
+        if s in _FALSE:
+            return False
+    return None
+
+
 class Settings(BaseSettings):
     BOT_TOKEN: Union[str, None] = None
     ADMINS: Union[str, list[int], int, None] = None
@@ -58,6 +90,16 @@ class Settings(BaseSettings):
     PROMO_TRIAL_ENABLED: bool = True      # /trial — Standard 5 дней
     PROMO_ADMIN_ENABLED: bool = True      # /admin от не-админа — запрос доступа
 
+    # Фоновые задачи бота (фикс-раунд 1). Отладочный бот ходит в боевую панель
+    # Remnawave, поэтому там все выключается одним BACKGROUND_TASKS_ENABLED=false.
+    # Главный выключатель гасит все; TASK_* выключают по одной.
+    BACKGROUND_TASKS_ENABLED: bool = True
+    TASK_RECOVERY_ENABLED: bool = True          # recovery платежей (SubscriptionChecker)
+    TASK_EXPIRY_NOTIFIER_ENABLED: bool = True   # «подписка истекает» юзерам
+    TASK_RECONCILER_ENABLED: bool = True        # сверка подписок с Remnawave
+    TASK_SUN718_REVERT_ENABLED: bool = True     # откат /sun718 по истечении
+    TASK_BROADCAST_RESUME_ENABLED: bool = True  # дослать рассылки после рестарта
+
     # Не используются кодом, но есть в прод .env: объявлены, чтобы локальный
     # запуск с этим .env не падал (см. model_config extra).
     CRYPTO_USDT_TRC20_ADDRESS: Union[str, None] = None
@@ -71,6 +113,20 @@ class Settings(BaseSettings):
     # роняют старт. Из окружения контейнера неизвестные переменные и так
     # игнорировались; forbid ломал только локальный запуск с реальным .env.
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator(*_LENIENT_BOOL_FIELDS, mode="before")
+    @classmethod
+    def _lenient_bool(cls, v, info):
+        """true/false/1/0/yes/no/on/off без учета регистра. Непонятное значение
+        не роняет старт (раньше ValidationError клал оба контейнера), а
+        логируется и заменяется дефолтом поля."""
+        default = cls.model_fields[info.field_name].default
+        parsed = parse_bool(v)
+        if parsed is None:
+            from app.logger import logger
+            logger.warning(f"{info.field_name}={v!r}: не булево значение, используем дефолт {default}")
+            return default
+        return parsed
 
     @field_validator("ADMINS", "BLOCKED_TELEGRAM_IDS", mode="after")
     @classmethod
@@ -123,3 +179,13 @@ settings = Settings()
 
 def is_admin(user_id: int) -> bool:
     return user_id in settings.ADMINS
+
+
+def task_enabled(name: str) -> bool:
+    """Включена ли фоновая задача: BACKGROUND_TASKS_ENABLED и TASK_<NAME>_ENABLED.
+
+    name: RECOVERY, EXPIRY_NOTIFIER, RECONCILER, SUN718_REVERT, BROADCAST_RESUME.
+    """
+    if not settings.BACKGROUND_TASKS_ENABLED:
+        return False
+    return bool(getattr(settings, f"TASK_{name.upper()}_ENABLED"))

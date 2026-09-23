@@ -136,23 +136,8 @@ async def run_polling():
     except Exception as e:
         logger.error(f"Ошибка получения информации о боте: {e}")
 
-    from app.tasks.subscription_checker import SubscriptionChecker
-    subscription_checker = SubscriptionChecker(bot, check_interval=3600)
-    subscription_checker.start()
-    logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
-
-    from app.tasks.sun718_revert import Sun718RevertTask
-    sun718_revert_task = Sun718RevertTask(bot, check_interval=3600)
-    sun718_revert_task.start()
-
-    # Broadcast: подхватываем рассылки, которые не закончились до рестарта
-    try:
-        from app.services.broadcast import resume_unfinished_broadcasts
-        resumed = await resume_unfinished_broadcasts(bot)
-        if resumed:
-            logger.info(f"Resumed {resumed} unfinished broadcast(s) после рестарта")
-    except Exception as _e:
-        logger.warning(f"broadcast resume failed: {_e}")
+    from app.tasks.background import start_background_tasks
+    subscription_checker = await start_background_tasks(bot)
 
     logger.info("Запуск polling")
     logger.info("=" * 50)
@@ -226,23 +211,8 @@ async def run_webhook():
     except Exception as e:
         logger.error(f"Ошибка получения информации о боте: {e}")
 
-    from app.tasks.subscription_checker import SubscriptionChecker
-    subscription_checker = SubscriptionChecker(bot, check_interval=3600)
-    subscription_checker.start()
-    logger.info("Периодическая проверка подписок запущена (интервал 1 час)")
-
-    from app.tasks.sun718_revert import Sun718RevertTask
-    sun718_revert_task = Sun718RevertTask(bot, check_interval=3600)
-    sun718_revert_task.start()
-
-    # Broadcast: подхватываем рассылки, которые не закончились до рестарта
-    try:
-        from app.services.broadcast import resume_unfinished_broadcasts
-        resumed = await resume_unfinished_broadcasts(bot)
-        if resumed:
-            logger.info(f"Resumed {resumed} unfinished broadcast(s) после рестарта")
-    except Exception as _e:
-        logger.warning(f"broadcast resume failed: {_e}")
+    from app.tasks.background import start_background_tasks
+    subscription_checker = await start_background_tasks(bot)
 
     # TELEGRAM_WEBHOOK_URL должен содержать полный URL включая путь /webhook
     webhook_base_url = settings.TELEGRAM_WEBHOOK_URL.rstrip('/')
