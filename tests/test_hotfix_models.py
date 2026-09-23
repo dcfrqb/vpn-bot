@@ -38,5 +38,7 @@ def test_migration_chain_head():
     cfg = Config(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "src/app/db/migrations"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["7b1c2d3e4f50"]
+    heads = script.get_heads()
+    assert len(heads) == 1  # 3.0: голова двигается (r30_*), но всегда одна
+    assert "7b1c2d3e4f50" in {r.revision for r in script.walk_revisions("base", heads[0])}
     assert script.get_revision("7b1c2d3e4f50").down_revision == "3f6f6890f801"

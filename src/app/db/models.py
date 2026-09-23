@@ -151,6 +151,11 @@ class Subscription(Base):
     last_provisioning_error: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="Текст последней ошибки sync",
     )
+    # --- 3.0 (r30_01, NULL на старых строках) ---
+    autorenew: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)  # автопродление включено
+    autorenew_method_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # payment_methods.id (FK в r30_02)
+    grace_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # конец льготного периода
+    grace_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # none | active | ended
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -205,6 +210,14 @@ class Payment(Base):
         server_onupdate=func.now()
     )
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="Время успешной оплаты")
+    # --- 3.0 (r30_01, NULL на старых строках; бэкфилл в r30_03) ---
+    plan_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    period_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    kind: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)  # domain.models.PaymentKind
+    method: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)  # domain.models.PaymentMethod
+    card_fingerprint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # first6-last4-MM/YY
+    telegram_charge_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)  # Stars
+    refunded_amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
 
     telegram_user: Mapped["TelegramUser"] = relationship("TelegramUser", back_populates="payments")
     subscription: Mapped[Optional["Subscription"]] = relationship("Subscription", foreign_keys=[subscription_id])
@@ -353,6 +366,9 @@ class Broadcast(Base):
     delivered: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     blocked: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    # --- 3.0 (r30_01): сегмент с параметрами и начисление дней за рассылку ---
+    segment_params: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    credit_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     recipients: Mapped[list["BroadcastRecipient"]] = relationship(
         "BroadcastRecipient", back_populates="broadcast", cascade="all, delete-orphan",
@@ -412,3 +428,134 @@ class BlockedCard(Base):
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     blocked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+
+# =============================================================================
+# Release 3.0 (миграция r30_01_additive). Новые таблицы, старые не трогаем.
+# =============================================================================
+
+
+class SavedPaymentMethod(Base):
+    """Сохраненный способ оплаты для автопродления (YooKassa payment_method_id)."""
+    __tablename__ = "payment_methods"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_payment_methods_provider_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="yookassa")
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # «Карта *1234»
+    card_fingerprint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.true())
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class PromoCode(Base):
+    """Промокод (движок промо 3.0, поток E)."""
+    __tablename__ = "promo_codes"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_promo_codes_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)  # trial | days | plan | discount | gift
+    plan_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    discount_percent: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    audience: Mapped[str] = mapped_column(String(24), nullable=False, server_default="all")  # all | new | paid | expired
+    max_uses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    uses: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    per_user_limit: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    valid_from: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=func.true())
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now(),
+    )
+
+
+class PromoRedemption(Base):
+    """Факт активации промо (запись ДО выдачи). promo_code_id пустой у
+    встроенных промо 2.x (trial, sun718, solokhin): тогда код в ``code``."""
+    __tablename__ = "promo_redemptions"
+    __table_args__ = (
+        Index("ix_promo_redemptions_code_user", "code", "telegram_user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    promo_code_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("promo_codes.id", ondelete="CASCADE"), nullable=True, index=True,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    telegram_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    payment_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("payments.id", ondelete="SET NULL"), nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="applied")  # pending | applied | failed
+    reward: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    redeemed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+
+class RefundRequest(Base):
+    """Запрос юзера на возврат в течение 24 ч (поток A). Один открытый на платеж."""
+    __tablename__ = "refund_requests"
+    __table_args__ = (
+        Index(
+            "uq_refund_requests_open_per_payment",
+            "payment_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    payment_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("payments.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    telegram_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")  # pending | approved | rejected | refunded | failed
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(10, 2), nullable=True)
+    decided_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    admin_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    admin_message_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now(),
+    )
+
+
+class Trial(Base):
+    """Пробный период: не больше одного на юзера (поток E; бэкфилл из промо 2.x в r30_03)."""
+    __tablename__ = "trials"
+    __table_args__ = (
+        UniqueConstraint("telegram_user_id", name="uq_trials_telegram_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("telegram_users.telegram_id", ondelete="CASCADE"), nullable=False,
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False, server_default="trial")  # trial | promo:<code> | backfill
+    plan_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("payments.id", ondelete="SET NULL"), nullable=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
