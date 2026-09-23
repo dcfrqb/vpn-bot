@@ -385,7 +385,7 @@ def test_payments_order_kind_and_stats(env):
     assert by_id[7]["description"] == "Standard, 3 мес"
     assert by_id[8]["description"] == "Оплата подписки" and by_id[8]["plan_code"] is None
     assert by_id[3]["paid_at"] is None and by_id[3]["amount_rub"] == 449.0
-    assert all("ё" not in p["description"] for p in got)
+    assert all("\u0451" not in p["description"] for p in got)  # без буквы йо
     # stats: succeeded и не промо -> 1, 4, 7, 8
     assert body["stats"] == {
         "payments_count": 4,
