@@ -495,14 +495,14 @@ def test_cache_key_ttl_60(env, monkeypatch):
 
 
 def test_obhod_package_payment_drops_profile_cache():
-    """Ветка оплаты пакета обхода не доходит до общего invalidate_sync_cache."""
+    """3.0: every fulfilled payment (packages included) drops the site profile cache."""
     import inspect
 
-    from app.services.payments import yookassa
+    from app.services.fulfillment import Fulfillment
+    from app.services.money import LegacyHooks
 
-    src = inspect.getsource(yookassa.handle_successful_payment)
-    pkg_branch = src[src.index("is_obhod_package_code(plan_code)"):src.index("obhod package paid but NOT applied")]
-    assert "invalidate_site_profile_cache" in pkg_branch
+    assert "invalidate_site_profile_cache" in inspect.getsource(LegacyHooks.invalidate_caches)
+    assert "invalidate_caches" in inspect.getsource(Fulfillment._after)
 
 
 def test_router_module_is_thin():

@@ -33,14 +33,18 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot: Any = None,
     from app.services.payments.webhook_dedup import run_webhook_once
 
     async def _body() -> bool:
-        from app.services.fulfillment import Outcome
-        from app.services.money import money
-
-        m = money(container)
-        result = await m.fulfillment.process_external(str(external_id), source="webhook", trace_id=trace_id)
-        logger.info(f"[{trace_id}] webhook {event} {external_id}: {result.outcome.value} {result.detail}")
-        if result.outcome is Outcome.RETRY:
-            raise WebhookRetryableError(f"payment {external_id}: {result.detail or 'retry'}")
-        return result.outcome is not Outcome.NOT_FOUND
+        return await _process_payment_webhook_body(str(external_id), event, trace_id, container)
 
     return await run_webhook_once(webhook_data, event, trace_id, _body)
+
+
+async def _process_payment_webhook_body(external_id: str, event: str, trace_id: str, container: Any) -> bool:
+    """Body after dedup: Fulfillment by provider id (re-read from the API)."""
+    from app.services.fulfillment import Outcome
+    from app.services.money import money
+
+    result = await money(container).fulfillment.process_external(external_id, source="webhook", trace_id=trace_id)
+    logger.info(f"[{trace_id}] webhook {event} {external_id}: {result.outcome.value} {result.detail}")
+    if result.outcome is Outcome.RETRY:
+        raise WebhookRetryableError(f"payment {external_id}: {result.detail or 'retry'}")
+    return result.outcome is not Outcome.NOT_FOUND

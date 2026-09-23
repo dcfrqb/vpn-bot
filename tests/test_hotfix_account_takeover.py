@@ -81,43 +81,4 @@ class _Res:
         return self.obj
 
 
-@pytest.mark.asyncio
-async def test_payment_path_does_not_extend_or_rebind_victim():
-    """Путь оплаты для юзера без remna_user_id: коллизия username с чужим
-    аккаунтом не продлевает/не перетарифицирует чужой аккаунт."""
-    from app.services.payments import yookassa as yk
-
-    fake = FakeRemna()
-    victim = fake.add_user(303, "tg_handle", telegram_id=111, squads=["pro"], limit=10,
-                           expire="2027-01-01T00:00:00Z")
-    tg = SimpleNamespace(telegram_id=222, remna_user_id=None, username="handle", first_name=None, last_name=None)
-    sub = SimpleNamespace(id=5, plan_code="lite", remnawave_expected_expire_at=datetime(2026, 11, 1),
-                          valid_until=None, config_data={}, remna_user_id=None)
-
-    seq = [tg, sub, None]
-    session = MagicMock()
-    session.execute = AsyncMock(side_effect=lambda stmt: _Res(seq.pop(0) if seq else None))
-    session.commit = AsyncMock()
-    session.add = MagicMock()
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-
-    fake_client = _client_on(fake)
-    for name in ("get_user_by_id", "list_internal_squads", "get_squad_by_name",
-                 "get_user_subscription_url", "close"):
-        setattr(fake_client, name, getattr(fake, name))
-
-    with patch.object(yk, "SessionLocal", MagicMock(return_value=cm)), \
-         patch.object(yk, "RemnaClient", return_value=fake_client):
-        url = await yk.get_or_create_remna_user_and_get_subscription_url(
-            telegram_user_id=222, subscription_id=5, period_months=1,
-        )
-
-    assert victim["telegramId"] == 111
-    assert victim["expireAt"] == "2027-01-01T00:00:00Z"
-    assert fake.squad_names(303) == ["pro"]
-    assert tg.remna_user_id != "303"
-    new_user = fake.users[int(tg.remna_user_id)]
-    assert new_user["telegramId"] == 222
-    assert url == new_user["subscriptionUrl"]
+# test_payment_path_does_not_extend_or_rebind_victim: removed in 3.0 with the 2.x provisioning (the grant path is stream B, tests/panel)

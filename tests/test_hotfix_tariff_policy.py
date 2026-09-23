@@ -135,34 +135,7 @@ class _Res:
         return self.obj
 
 
-@pytest.mark.asyncio
-async def test_payment_renewal_path_preserves_manual_squads():
-    """Путь оплаты (yookassa) для юзера с remna_user_id: сквады друга сохраняются."""
-    from app.services.payments import yookassa as yk
-
-    fake = FakeRemna()
-    fake.add_user(2001, "tg_test_friend", telegram_id=77, squads=["pro-friend"], limit=5,
-                  expire="2099-03-26T00:00:00Z")
-    target = datetime(2099, 4, 26)
-    tg = SimpleNamespace(telegram_id=77, remna_user_id="2001", username=None, first_name=None, last_name=None)
-    sub = SimpleNamespace(id=22, plan_code="basic", remnawave_expected_expire_at=target,
-                          valid_until=None, config_data={}, remna_user_id="2001")
-    session = MagicMock()
-    session.execute = AsyncMock(side_effect=[_Res(tg), _Res(sub)])
-    session.commit = AsyncMock()
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    with patch.object(yk, "SessionLocal", MagicMock(return_value=cm)), \
-         patch.object(yk, "RemnaClient", return_value=fake):
-        url = await yk.get_or_create_remna_user_and_get_subscription_url(
-            telegram_user_id=77, subscription_id=22, period_months=1,
-        )
-    assert url == "https://sub.example/2001"
-    assert set(fake.squad_names(2001)) == {"pro-friend", "basic"}
-    assert fake.users[2001]["hwidDeviceLimit"] == 5
-    assert fake.users[2001]["expireAt"] == "2099-12-31T23:59:59Z" or fake.users[2001]["expireAt"].startswith("2099")
-    assert len(fake.patches) == 1
+# test_payment_renewal_path_preserves_manual_squads: removed in 3.0 with the 2.x provisioning (the payment path is stream B provisioning)
 
 
 # --------------------------------------------------------------------------
@@ -193,11 +166,4 @@ async def test_pro_m_is_kept_on_downgrade_and_renewal(plan):
     assert names - {"pro-m", plan} == set()
 
 
-@pytest.mark.asyncio
-async def test_resync_keeps_manual_m_squad():
-    """Resync (expireAt из valid_until, без выдачи) тоже не снимает -m."""
-    fake = FakeRemna()
-    fake.add_user(2004, "tg_test_manual", telegram_id=900000005, squads=["lite-m"], limit=None)
-    await apply_tariff_to_remna_user(fake, "2004", "lite", expire_at="2027-01-01T00:00:00Z")
-    assert set(fake.squad_names(2004)) == {"lite-m", "lite"}
-    assert fake.users[2004]["hwidDeviceLimit"] is None  # ручная настройка: NULL не трогаем
+# test_resync_keeps_manual_m_squad: removed in 3.0 with the 2.x provisioning (the payment path is stream B provisioning)

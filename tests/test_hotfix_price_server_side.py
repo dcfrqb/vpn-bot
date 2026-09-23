@@ -157,51 +157,10 @@ def _payment(amount, plan_code="pro", period=12, extra_meta=None):
     )
 
 
-@pytest.mark.asyncio
-async def test_underpaid_payment_is_held_for_review_not_provisioned():
-    payment = _payment(1.0)
-    session = _fake_session(payment)
-    bot = AsyncMock()
-    remna = AsyncMock()
-    with patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=bot, trace_id="t",
-        )
-    assert outcome == "review"
-    remna.assert_not_awaited()
-    assert payment.payment_metadata["needs_review"] is True
-    assert payment.payment_metadata["review_alerted"] is True
-    chat_ids = [c.kwargs["chat_id"] for c in bot.send_message.await_args_list]
-    assert 900 in chat_ids and 555 in chat_ids
-
-    # повторная обработка (ретрай вебхука/recovery) не спамит алертами
-    bot.send_message.reset_mock()
-    with patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=bot, trace_id="t2",
-        )
-    assert outcome == "review"
-    bot.send_message.assert_not_awaited()
-    remna.assert_not_awaited()
+# test_underpaid_payment_is_held_for_review_not_provisioned: removed in 3.0 with the 2.x provisioning (tests/money/test_fulfillment.py (price gate once))
 
 
-@pytest.mark.asyncio
-async def test_obhod_package_underpaid_not_applied():
-    payment = _payment(1.0, plan_code="obhod_500", period=1)
-    session = _fake_session(payment)
-    apply_pkg = AsyncMock(return_value=True)
-    with patch("app.services.obhod_service.apply_obhod_package", apply_pkg), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=AsyncMock(), trace_id="t",
-        )
-    assert outcome == "review"
-    apply_pkg.assert_not_awaited()
+# test_obhod_package_underpaid_not_applied: removed in 3.0 with the 2.x provisioning (tests/money/test_fulfillment.py (price gate once))
 
 
 def test_expected_amount_catalog():

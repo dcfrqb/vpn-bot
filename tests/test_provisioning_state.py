@@ -92,192 +92,22 @@ def _build_session_with_state():
     return mock_session, state, user, payment_db
 
 
-@pytest.mark.asyncio
-async def test_phase_b_silent_failure_raises_pending():
-    """get_or_create вернул None URL → mark failed + raise ProvisioningPendingError"""
-    from app.services.payments.yookassa import handle_successful_payment
-
-    mock_session, state, user, payment_db = _build_session_with_state()
-    user.remna_user_id = None  # симулируем silent failure: после get_or_create remna_user_id всё ещё пустой
-
-    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock,
-               return_value=None):
-        mock_bot = AsyncMock()
-        with pytest.raises(ProvisioningPendingError):
-            await handle_successful_payment(
-                session=mock_session,
-                payment_id=1,
-                telegram_user_id=123456789,
-                amount=99.0,
-                description="CRS VPN",
-                bot=mock_bot,
-            )
-
-    assert state["subscription"] is not None
-    assert state["subscription"].provisioning_state == "failed"
-    assert state["subscription"].last_provisioning_error is not None
-    _assert_user_not_notified_admin_alerted(mock_bot)
+# test_phase_b_silent_failure_raises_pending: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_phase_b_verify_mismatch_raises_pending():
-    """_verify_remnawave_synced вернул ok=False → mark failed + raise"""
-    from app.services.payments.yookassa import handle_successful_payment
-
-    mock_session, state, user, payment_db = _build_session_with_state()
-
-    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock,
-               return_value="https://sub.example.com/abc"), \
-         patch('app.services.payments.yookassa._verify_remnawave_synced',
-               new_callable=AsyncMock,
-               return_value=(False, None, "expireAt mismatch")):
-        mock_bot = AsyncMock()
-        with pytest.raises(ProvisioningPendingError):
-            await handle_successful_payment(
-                session=mock_session,
-                payment_id=1,
-                telegram_user_id=123456789,
-                amount=99.0,
-                description="CRS VPN",
-                bot=mock_bot,
-            )
-
-    assert state["subscription"].provisioning_state == "failed"
-    assert "verification" in (state["subscription"].last_provisioning_error or "")
-    _assert_user_not_notified_admin_alerted(mock_bot)
+# test_phase_b_verify_mismatch_raises_pending: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_phase_b_remna_exception_raises_pending():
-    """get_or_create бросил exception → mark failed + raise"""
-    from app.services.payments.yookassa import handle_successful_payment
-
-    mock_session, state, user, payment_db = _build_session_with_state()
-
-    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock,
-               side_effect=ConnectionError("Remnawave unreachable")):
-        mock_bot = AsyncMock()
-        with pytest.raises(ProvisioningPendingError):
-            await handle_successful_payment(
-                session=mock_session,
-                payment_id=1,
-                telegram_user_id=123456789,
-                amount=99.0,
-                description="CRS VPN",
-                bot=mock_bot,
-            )
-
-    assert state["subscription"].provisioning_state == "failed"
-    _assert_user_not_notified_admin_alerted(mock_bot)
+# test_phase_b_remna_exception_raises_pending: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_phase_c_marks_synced_and_notifies():
-    """Phase B ok → Phase C ставит provisioning_state='synced', выставляет active=True, valid_until, payment.subscription_id, шлёт уведомление"""
-    from app.services.payments.yookassa import handle_successful_payment
-
-    mock_session, state, user, payment_db = _build_session_with_state()
-
-    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock,
-               return_value="https://sub.example.com/abc"), \
-         patch('app.services.payments.yookassa._verify_remnawave_synced',
-               new_callable=AsyncMock,
-               return_value=(True, datetime.utcnow(), None)):
-        mock_bot = AsyncMock()
-        await handle_successful_payment(
-            session=mock_session,
-            payment_id=1,
-            telegram_user_id=123456789,
-            amount=99.0,
-            description="CRS VPN",
-            bot=mock_bot,
-        )
-
-    sub = state["subscription"]
-    assert sub.provisioning_state == "synced"
-    assert sub.active is True
-    assert sub.valid_until is not None
-    assert sub.remnawave_synced_at is not None
-    assert sub.last_provisioning_error is None
-    assert payment_db.subscription_id == sub.id
-    mock_bot.send_message.assert_called()
+# test_phase_c_marks_synced_and_notifies: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_resync_subscription_to_remnawave_success():
-    """resync для failed подписки → возвращает True, ставит synced"""
-    from app.services.payments.yookassa import resync_subscription_to_remnawave
-
-    sub = Subscription(
-        id=42,
-        telegram_user_id=123456789,
-        plan_code="basic",
-        active=True,
-        valid_until=datetime.utcnow() + timedelta(days=30),
-        provisioning_state="failed",
-        remna_user_id="ru1",
-    )
-    user = TelegramUser(telegram_id=123456789, remna_user_id="ru1")
-
-    mock_sub_result = MagicMock()
-    mock_sub_result.scalar_one_or_none.return_value = sub
-    mock_user_result = MagicMock()
-    mock_user_result.scalar_one_or_none.return_value = user
-
-    async def mock_execute(query):
-        s = str(query).lower()
-        if "from subscriptions" in s:
-            return mock_sub_result
-        return mock_user_result
-
-    mock_session = AsyncMock()
-    mock_session.execute = AsyncMock(side_effect=mock_execute)
-
-    fake_session_local = MagicMock()
-    fake_session_local.return_value.__aenter__.return_value = mock_session
-    fake_session_local.return_value.__aexit__.return_value = None
-
-    with patch('app.services.payments.yookassa.SessionLocal', fake_session_local), \
-         patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock, return_value="https://x"), \
-         patch('app.services.payments.yookassa._verify_remnawave_synced',
-               new_callable=AsyncMock, return_value=(True, sub.valid_until, None)):
-        ok = await resync_subscription_to_remnawave(42)
-
-    assert ok is True
-    assert sub.provisioning_state == "synced"
-    assert sub.remnawave_synced_at is not None
+# test_resync_subscription_to_remnawave_success: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_resync_subscription_skips_inactive():
-    """resync для не-active sub возвращает False, ничего не меняет"""
-    from app.services.payments.yookassa import resync_subscription_to_remnawave
-
-    sub = Subscription(
-        id=42,
-        telegram_user_id=123456789,
-        plan_code="basic",
-        active=False,
-        is_lifetime=False,
-        provisioning_state="failed",
-    )
-    mock_sub_result = MagicMock()
-    mock_sub_result.scalar_one_or_none.return_value = sub
-    mock_session = AsyncMock()
-    mock_session.execute = AsyncMock(return_value=mock_sub_result)
-    fake_session_local = MagicMock()
-    fake_session_local.return_value.__aenter__.return_value = mock_session
-    fake_session_local.return_value.__aexit__.return_value = None
-
-    with patch('app.services.payments.yookassa.SessionLocal', fake_session_local):
-        ok = await resync_subscription_to_remnawave(42)
-    assert ok is False
-    assert sub.provisioning_state == "failed"  # не изменилось
+# test_resync_subscription_skips_inactive: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
 
 
 @pytest.mark.asyncio
@@ -403,70 +233,4 @@ async def test_webhook_returns_503_on_provisioning_pending():
     assert body.get("status") == "retry"
 
 
-@pytest.mark.asyncio
-async def test_subscription_extension_keeps_old_active_during_phase_b():
-    """Existing active sub: Phase A не сбрасывает active/valid_until до подтверждения"""
-    from app.services.payments.yookassa import handle_successful_payment
-
-    old_expire = datetime.utcnow() + timedelta(days=10)
-    existing_sub = Subscription(
-        id=99,
-        telegram_user_id=123456789,
-        plan_code="basic",
-        active=True,
-        valid_until=old_expire,
-        provisioning_state="synced",
-        remna_user_id="ru1",
-    )
-    user = TelegramUser(telegram_id=123456789, remna_user_id="ru1")
-    payment_db = PaymentModel(
-        id=1,
-        telegram_user_id=123456789,
-        external_id="ext-1",
-        amount=99.0,
-        currency="RUB",
-        status="succeeded",
-        payment_metadata={},
-    )
-
-    mock_user_result = MagicMock()
-    mock_user_result.scalar_one_or_none.return_value = user
-    mock_sub_result = MagicMock()
-    mock_sub_result.scalar_one_or_none.return_value = existing_sub
-    mock_payment_result = MagicMock()
-    mock_payment_result.scalar_one_or_none.return_value = payment_db
-
-    async def mock_execute(query):
-        s = str(query).lower()
-        if "from subscriptions" in s:
-            return mock_sub_result
-        if "from telegram_users" in s:
-            return mock_user_result
-        return mock_payment_result
-
-    mock_session = AsyncMock()
-    mock_session.execute = AsyncMock(side_effect=mock_execute)
-
-    # Phase B fails → Phase C never runs → existing_sub.valid_until должен остаться old_expire
-    with patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url',
-               new_callable=AsyncMock,
-               side_effect=ConnectionError("timeout")):
-        mock_bot = AsyncMock()
-        with pytest.raises(ProvisioningPendingError):
-            await handle_successful_payment(
-                session=mock_session,
-                payment_id=1,
-                telegram_user_id=123456789,
-                amount=99.0,
-                description="CRS VPN",
-                bot=mock_bot,
-            )
-
-    # Subscription осталась active (не сбросилась) — для extension важно, чтобы юзер
-    # не потерял доступ во время сбоя Remnawave. valid_until тоже не обновлено
-    # (новое значение пишется только после verify ok).
-    assert existing_sub.active is True
-    assert existing_sub.valid_until == old_expire
-    assert existing_sub.provisioning_state == "failed"
-    assert existing_sub.remnawave_expected_expire_at is not None
-    assert existing_sub.remnawave_expected_expire_at != old_expire
+# test_subscription_extension_keeps_old_active_during_phase_b: removed in 3.0 with the 2.x provisioning (tests/panel (grant phases) and tests/money)
