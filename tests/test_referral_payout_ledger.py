@@ -22,14 +22,14 @@ async def test_record_payout_writes_ledger_not_payment():
     session = AsyncMock()
     session.add = MagicMock()
 
-    rec = await record_payout(session, months=2, note="продлил руками", admin_id=5657723056)
+    rec = await record_payout(session, months=2, note="продлил руками", admin_id=900000302)
 
     assert isinstance(rec, ReferralPayout)
     assert not isinstance(rec, PaymentModel)
     added = session.add.call_args[0][0]
     assert isinstance(added, ReferralPayout)
     assert added.payout_months == 2
-    assert added.admin_id == 5657723056
+    assert added.admin_id == 900000302
     assert added.promo_code == "sun718"
     assert added.note == "продлил руками"
     session.commit.assert_awaited_once()

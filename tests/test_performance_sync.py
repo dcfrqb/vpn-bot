@@ -220,7 +220,7 @@ async def test_force_sync_should_ignore_cache(sync_service, mock_remna_client):
 @pytest.mark.slow
 async def test_get_user_by_telegram_id_performance(mock_remna_client):
     """Тест: поиск пользователя должен быть быстрым"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
     
     # Мокаем ответ API - пользователь на первой странице
     mock_response = {
@@ -236,7 +236,7 @@ async def test_get_user_by_telegram_id_performance(mock_remna_client):
                 {
                     'uuid': 'user-found',
                     'telegramId': target_telegram_id,
-                    'username': 'dukrmv638'
+                    'username': 'tg_test_user'
                 }
             ]
         }

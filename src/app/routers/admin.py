@@ -898,14 +898,14 @@ async def cmd_whois(message: types.Message):
 
 @router.message(Command("referral_payout"))
 async def cmd_referral_payout(message: types.Message):
-    """Фиксирует ручную выплату бонуса Жукову.
+    """Фиксирует ручную выплату бонуса партнеру по sun718.
 
     Использование:
         /referral_payout sun718 <месяцев> [комментарий]
     Пример:
         /referral_payout sun718 3 продлил в Remna на 3 мес
 
-    Вычитается из available_months в /referral_stats. Шлёт алерт Жукову.
+    Вычитается из available_months в /referral_stats. Шлет алерт партнеру.
     """
     if not is_admin(message.from_user.id):
         await message.answer("❌ Нет прав")

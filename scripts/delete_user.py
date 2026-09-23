@@ -11,7 +11,7 @@ delete_user.py — безопасное полное удаление польз
   python scripts/delete_user.py <telegram_id>
 
 Пример:
-  docker compose exec bot python /app/scripts/delete_user.py 5628460233
+  docker compose exec bot python /app/scripts/delete_user.py 900000301
 
 Безопасность:
   - Требует явного подтверждения (введи telegram_id ещё раз)

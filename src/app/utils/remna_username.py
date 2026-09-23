@@ -100,8 +100,8 @@ def build_remna_username(
         Строка вида tg_<...>, пригодная для Remnawave username.
 
     Examples:
-        >>> build_remna_username(123, username="kozlova_olga")
-        'tg_kozlova_olga'
+        >>> build_remna_username(123, username="test_user")
+        'tg_test_user'
         >>> build_remna_username(123, first_name="Ольга", last_name="Козлова")
         'tg_Olga_Kozlova'
         >>> build_remna_username(123, first_name="Иван")
@@ -146,8 +146,8 @@ def build_remna_display_name(
     Examples:
         >>> build_remna_display_name(123, first_name="Ольга", last_name="Козлова")
         'Ольга Козлова'
-        >>> build_remna_display_name(123, username="kozlova_olga")
-        '@kozlova_olga'
+        >>> build_remna_display_name(123, username="test_user")
+        '@test_user'
         >>> build_remna_display_name(123)
         'User 123'
     """

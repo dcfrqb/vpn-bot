@@ -19,15 +19,15 @@ def mock_remna_client():
 @pytest.mark.asyncio
 async def test_get_user_by_telegram_id_found(mock_remna_client):
     """Тест: пользователь найден через прямой эндпоинт"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
 
     # Мокаем ответ API - прямой эндпоинт возвращает одного пользователя
     mock_response = {
         'response': {
             'uuid': 'user-456',
             'telegramId': target_telegram_id,
-            'username': 'dukrmv638',
-            'name': 'HDT6N93B'
+            'username': 'tg_test_user',
+            'name': 'TESTNAME'
         }
     }
 
@@ -39,7 +39,7 @@ async def test_get_user_by_telegram_id_found(mock_remna_client):
     assert isinstance(result, RemnaUser)
     assert result.uuid == 'user-456'
     assert result.telegram_id == target_telegram_id
-    assert result.username == 'dukrmv638'
+    assert result.username == 'tg_test_user'
     # Проверяем, что вызван правильный эндпоинт
     # Remnawave 3.x: /users/by-telegram-id удален, поиск через /users/stream
     mock_remna_client.request.assert_called_once_with(
@@ -71,7 +71,7 @@ async def test_get_user_by_telegram_id_not_found(mock_remna_client):
 @pytest.mark.asyncio
 async def test_get_user_by_telegram_id_empty_response(mock_remna_client):
     """Тест: пустой ответ от API"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
 
     mock_remna_client.request.return_value = {}
 
@@ -83,7 +83,7 @@ async def test_get_user_by_telegram_id_empty_response(mock_remna_client):
 @pytest.mark.asyncio
 async def test_get_user_by_telegram_id_list_response(mock_remna_client):
     """Тест: API возвращает список (берем первого)"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
 
     # Некоторые API могут возвращать список даже для одного пользователя
     mock_response = {
@@ -91,8 +91,8 @@ async def test_get_user_by_telegram_id_list_response(mock_remna_client):
             {
                 'uuid': 'user-456',
                 'telegramId': target_telegram_id,
-                'username': 'dukrmv638',
-                'name': 'HDT6N93B'
+                'username': 'tg_test_user',
+                'name': 'TESTNAME'
             }
         ]
     }
@@ -109,7 +109,7 @@ async def test_get_user_by_telegram_id_list_response(mock_remna_client):
 @pytest.mark.asyncio
 async def test_get_user_by_telegram_id_without_uuid(mock_remna_client):
     """Тест: пользователь найден, но без uuid"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
 
     mock_response = {
         'response': {
@@ -129,13 +129,13 @@ async def test_get_user_by_telegram_id_without_uuid(mock_remna_client):
 @pytest.mark.asyncio
 async def test_get_user_by_telegram_id_direct_response(mock_remna_client):
     """Тест: API возвращает объект напрямую без 'response' обертки"""
-    target_telegram_id = 5628460233
+    target_telegram_id = 900000301
 
     mock_response = {
         'uuid': 'user-456',
         'telegramId': target_telegram_id,
-        'username': 'dukrmv638',
-        'name': 'HDT6N93B'
+        'username': 'tg_test_user',
+        'name': 'TESTNAME'
     }
 
     mock_remna_client.request.return_value = mock_response
