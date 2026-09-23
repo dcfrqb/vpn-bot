@@ -114,7 +114,8 @@ async def test_first_payment_with_null_remna_id_is_synced_and_stacks_on_trial():
 @pytest.mark.skipif(not PG_URL, reason="HOTFIX_PG_URL не задан")
 @pytest.mark.asyncio
 async def test_start_and_grant_persist_remna_id():
-    """/start (get_or_create_telegram_user) и provision_tariff записывают id панели в БД."""
+    """/start (get_or_create_telegram_user) только ищет аккаунт панели (3.0), выдача создает;
+    оба пути записывают id панели в БД."""
     from sqlalchemy import delete, select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -135,17 +136,33 @@ async def test_start_and_grant_persist_remna_id():
             await fake.create_user(f"tg_{telegram_id}", telegram_id=telegram_id)
             return await fake.get_user_by_telegram_id(telegram_id)
 
+        async def get_user_by_telegram_id(self, telegram_id, strict=False):
+            return await fake.get_user_by_telegram_id(telegram_id, strict=strict)
+
         async def close(self):
             return None
 
     try:
+        # 3.0 (stream B): /start only looks up, it never creates a panel account.
+        with patch("app.db.session.SessionLocal", Session), \
+             patch.object(remna_service, "RemnaClient", return_value=_Client()):
+            await users_service.get_or_create_telegram_user(uid, username=None, first_name="Test")
+        async with Session() as s:
+            tg = (await s.execute(select(TelegramUser).where(TelegramUser.telegram_id == uid))).scalar_one()
+        assert tg.remna_user_id is None and not fake.created
+
+        # A grant path creates it and stores the link.
+        with patch("app.db.session.SessionLocal", Session), \
+             patch.object(remna_service, "RemnaClient", return_value=_Client()):
+            await remna_service.ensure_user_in_remnawave(uid)
+        # A later /start finds the existing account and keeps the link.
         with patch("app.db.session.SessionLocal", Session), \
              patch.object(remna_service, "RemnaClient", return_value=_Client()):
             await users_service.get_or_create_telegram_user(uid, username=None, first_name="Test")
         async with Session() as s:
             tg = (await s.execute(select(TelegramUser).where(TelegramUser.telegram_id == uid))).scalar_one()
             rid = tg.remna_user_id
-        assert rid is not None and int(rid) in fake.users
+        assert rid is not None and int(rid) in fake.users and len(fake.created) == 1
 
         # Существующую привязку не перезаписываем
         with patch("app.db.session.SessionLocal", Session):
