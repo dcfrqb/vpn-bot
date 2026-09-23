@@ -11,7 +11,7 @@ from app.db.models import TelegramUser, Subscription, Payment
 @pytest.mark.asyncio
 async def test_get_statistics():
     """Тест получения статистики"""
-    with patch('app.services.stats.SessionLocal') as mock_session_local:
+    with patch('app.db.session.SessionLocal') as mock_session_local:
         mock_session = AsyncMock()
         mock_session_local.return_value.__aenter__.return_value = mock_session
         
@@ -40,7 +40,7 @@ async def test_get_statistics():
 @pytest.mark.asyncio
 async def test_get_users_list():
     """Тест получения списка пользователей"""
-    with patch('app.services.stats.SessionLocal') as mock_session_local:
+    with patch('app.db.session.SessionLocal') as mock_session_local:
         mock_session = AsyncMock()
         mock_session_local.return_value.__aenter__.return_value = mock_session
         
@@ -80,7 +80,7 @@ async def test_get_users_list():
 @pytest.mark.asyncio
 async def test_get_payments_list():
     """Тест получения списка платежей"""
-    with patch('app.services.stats.SessionLocal') as mock_session_local:
+    with patch('app.db.session.SessionLocal') as mock_session_local:
         mock_session = AsyncMock()
         mock_session_local.return_value.__aenter__.return_value = mock_session
         
@@ -136,7 +136,7 @@ async def test_get_payments_list():
 @pytest.mark.asyncio
 async def test_get_payments_list_with_filter():
     """Тест получения списка платежей с фильтром по статусу"""
-    with patch('app.services.stats.SessionLocal') as mock_session_local:
+    with patch('app.db.session.SessionLocal') as mock_session_local:
         mock_session = AsyncMock()
         mock_session_local.return_value.__aenter__.return_value = mock_session
         

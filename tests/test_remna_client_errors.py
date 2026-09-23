@@ -200,7 +200,8 @@ async def test_update_user_uses_endpoint_constant(remna_client):
     
     remna_client._own_client.request = AsyncMock(return_value=success_response)
 
-    await remna_client.update_user("test-uuid", username="new_username")
+    # Remnawave 3.x: числовой id в теле PATCH /api/users (в 2.x был uuid)
+    await remna_client.update_user("42", username="new_username")
 
     # Должен быть только один вызов (не перебор endpoint'ов)
     assert remna_client._own_client.request.call_count == 1
@@ -212,9 +213,9 @@ async def test_update_user_uses_endpoint_constant(remna_client):
     url_arg = call_args[0][1] if len(call_args[0]) > 1 else str(call_args)
     assert method_arg == "PATCH"
     assert "/api/users" in url_arg
-    # uuid должен быть в json payload
+    # id должен быть в json payload (числом)
     json_payload = call_args[1].get("json", {})
-    assert json_payload.get("uuid") == "test-uuid"
+    assert json_payload.get("id") == 42
 
 
 # --- Тесты expireAt / normalize_expire_at / build_user_payload ---
@@ -287,7 +288,7 @@ async def test_update_user_with_expire_at_sends_expireAt(remna_client):
     success_response.raise_for_status = MagicMock(return_value=None)
     remna_client._own_client.request = AsyncMock(return_value=success_response)
 
-    await remna_client.update_user("test-uuid", expire_at=datetime(2025, 12, 31, 23, 59, 59, tzinfo=timezone.utc))
+    await remna_client.update_user("42", expire_at=datetime(2025, 12, 31, 23, 59, 59, tzinfo=timezone.utc))
 
     call_args = remna_client._own_client.request.call_args
     assert call_args is not None
@@ -314,3 +315,12 @@ async def test_create_user_lifetime_sends_2099(remna_client):
     call_args = remna_client._own_client.request.call_args
     json_payload = call_args[1].get("json", {})
     assert json_payload["expireAt"] == LIFETIME_EXPIRE_AT
+
+
+@pytest.mark.asyncio
+async def test_update_user_rejects_non_numeric_id(remna_client):
+    """Remnawave 3.x принимает только числовой id: UUID из 2.x -> понятная ValueError до запроса."""
+    remna_client._own_client.request = AsyncMock()
+    with pytest.raises(ValueError):
+        await remna_client.update_user("test-uuid", username="x")
+    remna_client._own_client.request.assert_not_called()

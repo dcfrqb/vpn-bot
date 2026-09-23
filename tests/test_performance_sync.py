@@ -55,7 +55,7 @@ async def test_sync_with_cache_should_be_fast(sync_service, mock_remna_client):
     session_local_factory = SessionLocalFactory()
     
     # Мокаем кэш - возвращает результат
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
+    with patch('app.services.sync_service.SessionLocal', session_local_factory, create=True), \
          patch('app.services.cache.get_cached_sync_result') as mock_cache:
         mock_cache.return_value = {
             'status': 'active',
@@ -107,9 +107,9 @@ async def test_sync_without_cache_should_use_remna(sync_service, mock_remna_clie
     session_local_factory = SessionLocalFactory()
     
     # Мокаем кэш - возвращает None (кэш промах)
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
-         patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class, \
+    with patch('app.services.sync_service.SessionLocal', session_local_factory, create=True), \
+         patch('app.services.sync_service.UserRepo', create=True) as mock_user_repo_class, \
+         patch('app.services.sync_service.SubscriptionRepo', create=True) as mock_sub_repo_class, \
          patch('app.services.cache.get_cached_sync_result') as mock_cache:
         mock_cache.return_value = None
         
@@ -184,9 +184,9 @@ async def test_force_sync_should_ignore_cache(sync_service, mock_remna_client):
     session_local_factory = SessionLocalFactory()
     
     # Мокаем кэш - возвращает результат
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
-         patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class, \
+    with patch('app.services.sync_service.SessionLocal', session_local_factory, create=True), \
+         patch('app.services.sync_service.UserRepo', create=True) as mock_user_repo_class, \
+         patch('app.services.sync_service.SubscriptionRepo', create=True) as mock_sub_repo_class, \
          patch('app.services.cache.get_cached_sync_result') as mock_cache:
         mock_cache.return_value = {
             'status': 'active',
@@ -290,9 +290,9 @@ async def test_multiple_sync_calls_should_use_cache():
     session_local_factory = SessionLocalFactory()
     
     # Первый вызов - кэш промах, обращение к Remna
-    with patch('app.services.sync_service.SessionLocal', session_local_factory), \
-         patch('app.services.sync_service.UserRepo') as mock_user_repo_class, \
-         patch('app.services.sync_service.SubscriptionRepo') as mock_sub_repo_class, \
+    with patch('app.services.sync_service.SessionLocal', session_local_factory, create=True), \
+         patch('app.services.sync_service.UserRepo', create=True) as mock_user_repo_class, \
+         patch('app.services.sync_service.SubscriptionRepo', create=True) as mock_sub_repo_class, \
          patch('app.services.cache.get_cached_sync_result') as mock_cache:
         mock_cache.return_value = None
         

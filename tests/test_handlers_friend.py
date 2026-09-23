@@ -68,8 +68,7 @@ async def test_friend_handler_always_uses_force_remna(mock_message):
         source="remna"
     )
     
-    with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.services.access_request.can_create_request', new_callable=AsyncMock, return_value=(True, None)):
+    with patch('app.routers.start.SyncService') as mock_sync_service_class:
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)
@@ -127,8 +126,7 @@ async def test_friend_handler_without_subscription_allowed(mock_message):
         source="remna"
     )
     
-    with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.services.access_request.can_create_request', return_value=(True, None)):
+    with patch('app.routers.start.SyncService') as mock_sync_service_class:
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)
@@ -166,87 +164,6 @@ async def test_friend_handler_remna_unavailable_shows_error(mock_message):
 
 
 @pytest.mark.asyncio
-async def test_friend_request_yes_with_active_subscription_forbidden(mock_callback):
-    """Тест: friend_request_yes при активной подписке -> запрос запрещён"""
-    from app.routers.start import friend_request_yes
-    
-    expires_at = datetime.utcnow() + timedelta(days=30)
-    sync_result = SyncResult(
-        is_new_user_created=False,
-        user_remna_uuid="remna-uuid-123",
-        subscription_status="active",
-        expires_at=expires_at,
-        source="remna"
-    )
-    
-    with patch('app.routers.start.SyncService') as mock_sync_service_class:
-        
-        mock_sync_service = AsyncMock()
-        mock_sync_service.sync_user_and_subscription = AsyncMock(
-            return_value=sync_result
-        )
-        mock_sync_service_class.return_value = mock_sync_service
-        
-        await friend_request_yes(mock_callback)
-        
-        # Проверяем, что было показано сообщение о запрете
-        mock_callback.message.edit_text.assert_called_once()
-        call_args = mock_callback.message.edit_text.call_args
-        text = call_args[0][0]
-        assert "активная подписка" in text.lower() or "не может быть создан" in text.lower()
-        
-        # Проверяем, что sync был вызван с force_remna=True
-        call_kwargs = mock_sync_service.sync_user_and_subscription.call_args[1]
-        assert call_kwargs['force_remna'] is True
-
-
-@pytest.mark.asyncio
-async def test_friend_request_yes_without_subscription_allowed(mock_callback):
-    """Тест: friend_request_yes без подписки -> запрос разрешён"""
-    from app.routers.start import friend_request_yes
-    
-    sync_result = SyncResult(
-        is_new_user_created=False,
-        user_remna_uuid="remna-uuid-123",
-        subscription_status="none",
-        expires_at=None,
-        source="remna"
-    )
-    
-    with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.services.access_request.can_create_request', return_value=(True, None)), \
-         patch('app.services.access_request.create_access_request') as mock_create_request, \
-         patch('app.keyboards.get_admin_access_request_keyboard') as mock_admin_keyboard, \
-         patch('app.config.settings') as mock_settings:
-        
-        mock_sync_service = AsyncMock()
-        mock_sync_service.sync_user_and_subscription = AsyncMock(
-            return_value=sync_result
-        )
-        mock_sync_service_class.return_value = mock_sync_service
-        
-        # Мок созданного запроса
-        from app.db.models import AccessRequest
-        mock_request = MagicMock(spec=AccessRequest)
-        mock_request.id = 1
-        mock_create_request.return_value = mock_request
-        
-        mock_admin_keyboard.return_value = MagicMock()
-        mock_settings.ADMINS = [99999]  # Мок админа
-        
-        await friend_request_yes(mock_callback)
-        
-        # Проверяем, что запрос был создан
-        mock_create_request.assert_called_once()
-        
-        # Проверяем, что было отправлено сообщение пользователю
-        mock_callback.message.edit_text.assert_called_once()
-        call_args = mock_callback.message.edit_text.call_args
-        text = call_args[0][0]
-        assert "отправлен" in text.lower() or "ожидайте" in text.lower()
-
-
-@pytest.mark.asyncio
 async def test_friend_handler_does_not_use_cache(mock_message):
     """Тест: /friend НЕ использует кэш"""
     from app.routers.start import cmd_friend
@@ -259,8 +176,7 @@ async def test_friend_handler_does_not_use_cache(mock_message):
         source="remna"
     )
     
-    with patch('app.routers.start.SyncService') as mock_sync_service_class, \
-         patch('app.services.access_request.can_create_request', return_value=(True, None)):
+    with patch('app.routers.start.SyncService') as mock_sync_service_class:
         
         mock_sync_service = AsyncMock()
         mock_sync_service.sync_user_and_subscription = AsyncMock(return_value=sync_result)
@@ -299,3 +215,7 @@ async def test_friend_handler_does_not_use_fallback(mock_message):
         call_args = mock_message.answer.call_args
         text = call_args[0][0]
         assert "не удалось" in text.lower() or "попробуйте позже" in text.lower() or "ошибка" in text.lower()
+
+
+# Удалены тесты friend_request_yes: кнопка давно заглушка («Используйте /friend»),
+# модуля app.services.access_request больше нет (хотфикс 2.1, чистка по 08 §3c).

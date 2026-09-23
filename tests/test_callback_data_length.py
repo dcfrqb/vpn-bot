@@ -24,18 +24,12 @@ class TestCallbackDataLength:
         assert len(callback.encode('utf-8')) <= 64
     
     def test_pagination_payload_no_total(self):
-        """Pagination payload НЕ должен содержать total"""
+        """Pagination payload НЕ должен содержать total (компактный формат p{page}s{size})"""
         pagination = Pagination(page=2, page_size=10, total=100)
         payload = pagination.to_payload()
-        payload_dict = json.loads(payload)
-        
-        # Проверяем что total НЕ в payload
-        assert "total" not in payload_dict
-        assert "p" in payload_dict  # page → p
-        assert "s" in payload_dict  # page_size → s
-        assert payload_dict["p"] == 2
-        assert payload_dict["s"] == 10
-    
+        assert payload == "p2s10"
+        assert "100" not in payload
+
     def test_pagination_with_filter_under_limit(self):
         """Pagination с фильтром должен быть под лимитом"""
         pagination = Pagination(page=2, page_size=10, total=0)

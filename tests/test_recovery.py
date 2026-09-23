@@ -33,9 +33,14 @@ async def test_retry_needs_provisioning_with_flag():
         mock_session = AsyncMock()
         mock_sl.return_value.__aenter__.return_value = mock_session
 
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = [payment]
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        # 3 запроса recovery: Case 1 (без subscription_id) находит платеж,
+        # Case 2 (с subscription_id) и Case 3 (без remna_user_id) — пусто.
+        # Раньше мок отдавал платеж на все три запроса, и он считался дважды.
+        def _rows(items):
+            r = MagicMock()
+            r.scalars.return_value.all.return_value = items
+            return r
+        mock_session.execute = AsyncMock(side_effect=[_rows([payment]), _rows([]), _rows([]), _rows([])])
 
         mock_bot = AsyncMock()
         result = await retry_needs_provisioning(mock_bot)

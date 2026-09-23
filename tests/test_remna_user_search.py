@@ -41,7 +41,10 @@ async def test_get_user_by_telegram_id_found(mock_remna_client):
     assert result.telegram_id == target_telegram_id
     assert result.username == 'dukrmv638'
     # Проверяем, что вызван правильный эндпоинт
-    mock_remna_client.request.assert_called_once_with("GET", f"/api/users/by-telegram-id/{target_telegram_id}")
+    # Remnawave 3.x: /users/by-telegram-id удален, поиск через /users/stream
+    mock_remna_client.request.assert_called_once_with(
+        "GET", f"/api/users/stream?telegramId={target_telegram_id}&size=25"
+    )
 
 
 @pytest.mark.asyncio

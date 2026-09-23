@@ -3,6 +3,11 @@ import pytest
 import asyncio
 import os
 
+# Порядок импорта как в приложении (сначала роутеры): прямой первый импорт
+# app.ui.screen_manager ловит циклический импорт ui.screens <-> ui.helpers, и
+# отдельные тест-файлы падали только при запуске поодиночке.
+import app.routers.start  # noqa: F401,E402
+
 
 @pytest.fixture(scope="function")
 def mock_bot():

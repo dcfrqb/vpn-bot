@@ -58,6 +58,8 @@ class TestPreflight:
             os.environ["REMNA_API_BASE"] = "https://api.example.com"
             os.environ["REMNA_API_KEY"] = "remna_key"
             os.environ["DATABASE_URL"] = "postgresql://user:pass@localhost/db"
+            # в docker-режиме preflight требует и секрет вебхука
+            os.environ["YOOKASSA_WEBHOOK_SECRET"] = "secret"
 
             run_preflight(in_docker=True)
         finally:

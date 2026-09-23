@@ -12,106 +12,62 @@ from app.services.users import (
 from app.db.models import TelegramUser, Subscription
 
 
+# Хотфикс 2.1 (чистка тестов по 08 §3): прежние 4 теста патчили
+# app.services.users.SessionLocal и проверяли ORM-версию функций (session.add,
+# чтение подписки из БД). Сейчас get_or_create_telegram_user делает upsert
+# (ON CONFLICT) через app.db.session.SessionLocal, а get_user_active_subscription
+# читает Remnawave. Тесты переписаны под текущее поведение.
+
+
+def _session_factory():
+    session = AsyncMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm), session
+
+
 @pytest.mark.asyncio
-async def test_get_or_create_telegram_user_new():
-    """Тест создания нового пользователя"""
-    with patch('app.services.users.SessionLocal') as mock_session_local:
-        mock_session = AsyncMock()
-        mock_session_local.return_value.__aenter__.return_value = mock_session
-        
-        # Мокируем отсутствие пользователя
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_session.execute.return_value = mock_result
-        
-        # Мокируем refresh
-        mock_session.refresh = AsyncMock()
-        
+async def test_get_or_create_telegram_user_upserts_and_returns_remna_id():
+    factory, session = _session_factory()
+    with patch("app.services.users.ensure_user_in_remnawave", AsyncMock(return_value="42")), \
+         patch("app.db.session.SessionLocal", factory):
         user = await get_or_create_telegram_user(
-            telegram_id=123456789,
-            username="test_user",
-            first_name="Test",
-            last_name="User"
+            telegram_id=123456789, username="test_user", first_name="Test", last_name="User",
         )
-        
-        assert user is not None
-        mock_session.add.assert_called_once()
-        mock_session.commit.assert_called_once()
+    assert user.telegram_id == 123456789
+    assert user.remna_user_id == "42"
+    session.execute.assert_awaited_once()
+    sql = str(session.execute.await_args.args[0])
+    assert "ON CONFLICT" in sql.upper()
+    session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_telegram_user_existing():
-    """Тест обновления существующего пользователя"""
-    with patch('app.services.users.SessionLocal') as mock_session_local:
-        mock_session = AsyncMock()
-        mock_session_local.return_value.__aenter__.return_value = mock_session
-        
-        # Мокируем существующего пользователя
-        existing_user = TelegramUser(
-            telegram_id=123456789,
-            username="old_username",
-            first_name="Old",
-            last_name="Name"
-        )
-        
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = existing_user
-        mock_session.execute.return_value = mock_result
-        
-        mock_session.refresh = AsyncMock()
-        
-        user = await get_or_create_telegram_user(
-            telegram_id=123456789,
-            username="new_username",
-            first_name="New",
-            last_name="Name"
-        )
-        
-        assert user is not None
-        assert user.username == "new_username"
-        mock_session.add.assert_not_called()
-        mock_session.commit.assert_called_once()
+async def test_get_user_active_subscription_from_remnawave():
+    from app.remnawave.client import RemnaSubscription, RemnaUser
 
-
-@pytest.mark.asyncio
-async def test_get_user_active_subscription():
-    """Тест получения активной подписки"""
-    with patch('app.services.users.SessionLocal') as mock_session_local:
-        mock_session = AsyncMock()
-        mock_session_local.return_value.__aenter__.return_value = mock_session
-        
-        subscription = Subscription(
-            id=1,
-            telegram_user_id=123456789,
-            active=True,
-            valid_until=datetime.utcnow() + timedelta(days=30),
-            plan_code="premium"
-        )
-        sub_result = MagicMock()
-        sub_result.scalar_one_or_none.return_value = subscription
-        mock_session.execute.return_value = sub_result
-        
-        result = await get_user_active_subscription(123456789, use_cache=False)
-        
-        assert result is not None
-        assert result.id == 1
-        assert result.active is True
+    client = MagicMock()
+    client.get_user_with_subscription_by_telegram_id = AsyncMock(return_value=(
+        RemnaUser(uuid="7", telegram_id=1, username="u", name="u", raw_data={}),
+        RemnaSubscription(active=True, expires_at=datetime.utcnow() + timedelta(days=30), plan=None, raw_data={}),
+    ))
+    client.close = AsyncMock()
+    with patch("app.services.users.RemnaClient", return_value=client):
+        result = await get_user_active_subscription(1, use_cache=False)
+    assert result is not None and result.active is True
+    assert result.remna_user_id == "7"
 
 
 @pytest.mark.asyncio
 async def test_get_user_active_subscription_no_user():
-    """Тест получения подписки для несуществующего пользователя"""
-    with patch('app.services.users.SessionLocal') as mock_session_local:
-        mock_session = AsyncMock()
-        mock_session_local.return_value.__aenter__.return_value = mock_session
-
-        user_result = MagicMock()
-        user_result.scalar_one_or_none.return_value = None
-        mock_session.execute.return_value = user_result
-
-        result = await get_user_active_subscription(999999999)
-
-        assert result is None
+    client = MagicMock()
+    client.get_user_with_subscription_by_telegram_id = AsyncMock(return_value=None)
+    client.close = AsyncMock()
+    with patch("app.services.users.RemnaClient", return_value=client):
+        assert await get_user_active_subscription(999999999, use_cache=False) is None
 
 
 # =============================================================================

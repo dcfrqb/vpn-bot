@@ -4,6 +4,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiogram import types
+# Порядок импорта как в приложении: прямой первый импорт app.ui.screen_manager
+# ловит циклический импорт ui.screens <-> ui.helpers (в проде роутеры грузятся раньше).
+import app.routers.start  # noqa: F401
 from app.ui.screen_manager import ScreenManager
 from app.ui.screens import ScreenID
 from app.ui.viewmodels.base import BaseViewModel
@@ -25,6 +28,7 @@ def mock_callback():
     callback.message.chat.id = 12345
     callback.message.message_id = 100
     callback.message.edit_text = AsyncMock()
+    callback.message.answer = AsyncMock()  # fallback «сообщение удалено -> отправить новое»
     callback.message.delete = AsyncMock()
     callback.answer = AsyncMock()
     callback.bot = MagicMock()
@@ -79,7 +83,7 @@ async def test_help_screen_from_payment_screen(mock_callback, screen_manager):
                 # Проверяем, что сообщение было отредактировано (edit_text вызван)
                 # ИЛИ отправлено новое (send_message вызван)
                 edit_called = mock_callback.message.edit_text.called
-                send_called = mock_callback.bot.send_message.called
+                send_called = mock_callback.bot.send_message.called or mock_callback.message.answer.called
                 
                 assert edit_called or send_called, (
                     f"Сообщение должно быть либо отредактировано (edit_text), "
@@ -131,7 +135,7 @@ async def test_help_screen_from_deleted_payment_message(mock_callback, screen_ma
                 
                 # Проверяем, что было попытка отредактировать или отправить новое
                 edit_called = mock_callback.message.edit_text.called
-                send_called = mock_callback.bot.send_message.called
+                send_called = mock_callback.bot.send_message.called or mock_callback.message.answer.called
                 
                 assert edit_called or send_called, (
                     f"Должна быть попытка отредактировать или отправить новое сообщение. "
@@ -161,7 +165,7 @@ async def test_help_screen_navigation_logic(mock_callback, screen_manager):
         mock_create_vm.return_value = mock_viewmodel
         
         # Мокаем render и build_keyboard
-        with patch('app.ui.screens.help.HelpScreen.render', new_callable=AsyncMock):
+        with patch('app.ui.screens.help.HelpScreen.render', new_callable=AsyncMock, return_value="help"):
             with patch('app.ui.screens.help.HelpScreen.build_keyboard', new_callable=AsyncMock) as mock_keyboard:
                 from aiogram.types import InlineKeyboardMarkup
                 mock_keyboard.return_value = InlineKeyboardMarkup(inline_keyboard=[])

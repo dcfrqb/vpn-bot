@@ -33,11 +33,15 @@ def test_obhod_base_limit_bytes():
     assert plans.obhod_base_limit_bytes() == 100 * 1024 * 1024 * 1024
 
 
-def test_obhod_packages_have_placeholder_prices_not_purchasable():
-    # Пока заказчик не проставил цены — пакеты НЕ продаются.
+def test_obhod_packages_purchasable_only_with_real_price():
+    # Цены проставлены заказчиком 2026-07-01 (599/1199): пакеты продаются.
     for code in plans.OBHOD_PACKAGE_CODES:
         assert plans.is_obhod_package_code(code) is True
-        assert plans.is_obhod_package_purchasable(code) is False  # price=0
+        assert plans.is_obhod_package_purchasable(code) is True
+    # Плейсхолдер-цена 0 по-прежнему блокирует продажу.
+    with patch.dict(plans.OBHOD_PACKAGE_CATALOG,
+                    {"obhod_250": {**plans.OBHOD_PACKAGE_CATALOG["obhod_250"], "price": 0}}):
+        assert plans.is_obhod_package_purchasable("obhod_250") is False
 
 
 def test_obhod_package_limit_bytes():
@@ -532,9 +536,12 @@ async def test_buy_obhod_without_active_pro_no_payment():
             user_id=555,
         )
 
-    assert result is False
+    # callback уже отвечен роутером, поэтому отказ показывается редактированием
+    # сообщения, а handle_action возвращает True (действие обработано).
+    assert result is True
     mock_create.assert_not_called()  # платёж НЕ создан
-    cb.answer.assert_awaited()  # юзеру показано сообщение
+    cb.message.edit_text.assert_awaited()
+    assert "Pro" in cb.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -581,7 +588,7 @@ async def test_deactivate_obhod():
     )
     session, _ = _fake_session(existing_obhod=existing)
     mock_client = AsyncMock()
-    mock_client.update_user = AsyncMock(return_value={})
+    mock_client.disable_user = AsyncMock(return_value={})
     mock_client.close = AsyncMock()
 
     with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
@@ -589,8 +596,8 @@ async def test_deactivate_obhod():
 
     assert changed is True
     assert existing.active is False
-    # Истечён в Remnawave (expireAt в прошлом).
-    mock_client.update_user.assert_awaited()
+    # Отключен в Remnawave через disable (прошлый expireAt панель отклоняет 400).
+    mock_client.disable_user.assert_awaited_once_with("obhod-existing-uuid")
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +702,7 @@ async def test_connect_renderer_pro_two_links():
     assert "https://sub/main" in text
     assert "https://sub/obhod" in text
     assert "Обход блокировок" in text
-    assert "Осталось" in text  # остаток показан
+    # Остаток трафика обхода рендерер пока не показывает (04 M7, план 3.0).
 
 
 @pytest.mark.asyncio

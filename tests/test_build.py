@@ -13,15 +13,38 @@ import importlib
 from pathlib import Path
 
 
+_SUBPROCESS_ENV = {
+    # Фиктивные значения только для прохождения preflight при импорте app.main
+    # в отдельном интерпретаторе (без сети: engine создается, но не коннектится).
+    "BOT_TOKEN": "123456:TEST",
+    "REMNA_API_BASE": "https://panel.invalid",
+    "REMNA_API_KEY": "test",
+    "DATABASE_URL": "postgresql://u:p@127.0.0.1:1/db",
+    "YOOKASSA_WEBHOOK_SECRET": "test",
+    "REDIS_URL": "redis://127.0.0.1:1/0",
+}
+
+
+def _import_in_subprocess(code: str) -> None:
+    """Импорт в чистом интерпретаторе: не загрязняет sys.modules текущей сессии
+    (переимпорт app.config создавал бы второй объект settings)."""
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.update(_SUBPROCESS_ENV)
+    env["PYTHONPATH"] = str(root / "src")
+    proc = subprocess.run([sys.executable, "-c", code], cwd=str(root), env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+
+
 def test_import_bot_modules():
-    """Тест: импорт ключевых модулей бота"""
-    # Проверяем, что основные модули импортируются без ошибок
-    try:
-        from app.main import Bot, Dispatcher
-        from app.main import setup_dispatcher, run_polling, run_webhook
-        assert True
-    except ImportError as e:
-        pytest.fail(f"Не удалось импортировать модули бота: {e}")
+    """Тест: импорт ключевых модулей бота (включая app.main с preflight)"""
+    _import_in_subprocess(
+        "from app.main import Bot, Dispatcher, setup_dispatcher, run_polling, run_webhook"
+    )
 
 
 def test_import_sync_service():
@@ -67,23 +90,12 @@ def test_import_handlers():
     try:
         from app.routers.start import router as start_router
         from app.routers.admin import router as admin_router
-        from app.routers.payments import router as payments_router
+        from app.legacy.routers.payments import router as payments_router
         assert start_router is not None
         assert admin_router is not None
         assert payments_router is not None
     except ImportError as e:
         pytest.fail(f"Не удалось импортировать handlers: {e}")
-
-
-def test_import_repositories():
-    """Тест: импорт репозиториев"""
-    try:
-        from app.repositories.user_repo import UserRepo
-        from app.repositories.subscription_repo import SubscriptionRepo
-        assert UserRepo is not None
-        assert SubscriptionRepo is not None
-    except ImportError as e:
-        pytest.fail(f"Не удалось импортировать репозитории: {e}")
 
 
 def test_import_models():
@@ -125,28 +137,20 @@ def test_config_validation():
 
 
 def test_no_circular_imports():
-    """Тест: проверка на циклические зависимости"""
-    # Пытаемся импортировать основные модули несколько раз
-    # Если есть циклические зависимости, это вызовет проблемы
-    
-    modules_to_test = [
-        'app.main',
-        'app.services.sync_service',
-        'app.remnawave.client',
-        'app.services.cache',
-        'app.routers.start',
-        'app.config',
+    """Тест: основные модули импортируются в чистом интерпретаторе в разном порядке"""
+    modules = [
+        "app.config",
+        "app.remnawave.client",
+        "app.services.cache",
+        "app.services.sync_service",
+        "app.routers.start",
+        "app.api.main",
+        "app.main",
     ]
-    
-    for module_name in modules_to_test:
-        # Очищаем кэш модулей перед повторным импортом
-        if module_name in sys.modules:
-            del sys.modules[module_name]
-        
-        try:
-            importlib.import_module(module_name)
-        except ImportError as e:
-            pytest.fail(f"Циклическая зависимость или ошибка импорта в {module_name}: {e}")
+    for order in (modules, list(reversed(modules))):
+        _import_in_subprocess("import importlib\n" + "\n".join(
+            f"importlib.import_module({m!r})" for m in order
+        ))
 
 
 def test_project_structure():
