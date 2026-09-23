@@ -67,7 +67,7 @@ async def test_disabled_job_never_runs_and_flag_is_rechecked():
     s.stop()
 
 
-async def test_not_leader_runs_nothing_including_once_jobs():
+async def test_not_leader_runs_nothing_then_once_job_runs_when_leadership_comes():
     once, periodic = AsyncMock(), AsyncMock()
     s = make([Job("o", once, 0, enabled=lambda: True, once=True),
               Job("p", periodic, 60, enabled=lambda: True)], leader=False)
@@ -75,6 +75,11 @@ async def test_not_leader_runs_nothing_including_once_jobs():
     assert await s.tick() == []
     once.assert_not_awaited()
     periodic.assert_not_awaited()
+    s.leader.value = True  # the stale lock of a dead process expired
+    assert sorted(await s.tick()) == ["o", "p"]
+    await _drain()
+    once.assert_awaited_once()
+    assert await s.tick() == []  # once means once
     s.stop()
 
 

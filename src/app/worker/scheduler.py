@@ -11,7 +11,9 @@ Gates, checked on every tick (so a flag flip needs no code change):
     and no lock; a debug bot must be started with BACKGROUND_TASKS_ENABLED=false).
 
 Jobs:
-  - ``once=True``   : awaited inside ``start()`` (startup only), before the loop.
+  - ``once=True``   : awaited inside ``start()`` before the loop; if this process
+                      is not the leader yet, it runs once on the first tick
+                      where it becomes leader.
   - ``run_at_start``: first run on the first tick, then every ``interval_s``.
 
 2.x difference: legacy tasks slept ``interval`` AFTER each run; here the next
@@ -157,7 +159,11 @@ class Scheduler:
             if job.once:
                 if leader and job.is_enabled():
                     await self._run_job(job, "startup")
-                st.next_run = float("inf")
+                    st.next_run = float("inf")
+                else:
+                    # Not leader yet (e.g. the previous process died holding the
+                    # lock): run it on the first tick where we become leader.
+                    st.next_run = now
             else:
                 st.next_run = now if job.run_at_start else now + job.interval_s
         self._running = True
@@ -173,14 +179,14 @@ class Scheduler:
         now = self.clock()
         for job in self.jobs:
             st = self.state[job.name]
-            if job.once or now < st.next_run:
+            if now < st.next_run:
                 continue
             if st.task is not None and not st.task.done():
                 continue  # still running: never overlap a job with itself
             if not job.is_enabled():
                 continue  # re-checked every tick; runs as soon as it is enabled
             label = "startup" if st.runs == 0 else "periodic"
-            st.next_run = now + job.interval_s
+            st.next_run = float("inf") if job.once else now + job.interval_s
             st.task = asyncio.create_task(self._run_job(job, label), name=f"job:{job.name}")
             started.append(job.name)
         return started
