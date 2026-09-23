@@ -559,6 +559,28 @@ async def plan_premium(callback: types.CallbackQuery):
         edit=True
     )
 
+async def _legacy_plan_amount_or_refuse(callback: types.CallbackQuery, plan_code: str, months: int):
+    """Цена legacy-тарифа для этого юзера или None (тариф ему не продается,
+    вместо экрана с кнопкой «Оплатить» показан отказ)."""
+    from app.services.checkout import resolve_purchase_amount
+    from app.keyboards import get_back_to_plans_keyboard
+
+    amount = await resolve_purchase_amount(plan_code, months, callback.from_user.id)
+    # UI EXCEPTION: прямой вызов UI метода
+    await callback.answer()
+    if amount > 0:
+        return amount
+    logger.info(
+        f"legacy plan screen refused: user={callback.from_user.id} plan={plan_code} months={months}"
+    )
+    # UI EXCEPTION: прямой вызов UI метода
+    await callback.message.edit_text(
+        "❌ Этот тариф сейчас недоступен для покупки. Выберите тариф из меню.",
+        reply_markup=get_back_to_plans_keyboard(),
+    )
+    return None
+
+
 # Обработчики выбора периода для базового тарифа
 @router.callback_query(lambda c: c.data.startswith("plan_basic_"))
 async def plan_basic_period(callback: types.CallbackQuery):
@@ -571,10 +593,14 @@ async def plan_basic_period(callback: types.CallbackQuery):
         await callback.answer("Неверный период")
         return
     
-    amount, months = periods[period]
+    _, months = periods[period]
+    # Фикс-раунд 1: цена и право на покупку — тот же серверный резолвер, что у
+    # кнопки оплаты. Чужому legacy-тариф не показываем с кнопкой «Оплатить»,
+    # которая потом откажет; цена — всегда из каталога.
+    amount = await _legacy_plan_amount_or_refuse(callback, "basic", months)
+    if amount is None:
+        return
     logger.info(f"Пользователь {callback.from_user.id} выбрал базовый тариф на {months} месяц(а/ев), сумма: {amount}₽")
-    # UI EXCEPTION: прямой вызов UI метода
-    await callback.answer()
     
     # Создаем ViewModel для детального экрана тарифа
     # UI EXCEPTION: импорт для передачи в ScreenManager
@@ -617,10 +643,14 @@ async def plan_premium_period(callback: types.CallbackQuery):
         await callback.answer("Неверный период")
         return
     
-    amount, months = periods[period]
+    _, months = periods[period]
+    # Фикс-раунд 1: цена и право на покупку — тот же серверный резолвер, что у
+    # кнопки оплаты. Чужому legacy-тариф не показываем с кнопкой «Оплатить»,
+    # которая потом откажет; цена — всегда из каталога.
+    amount = await _legacy_plan_amount_or_refuse(callback, "premium", months)
+    if amount is None:
+        return
     logger.info(f"Пользователь {callback.from_user.id} выбрал премиум тариф на {months} месяц(а/ев), сумма: {amount}₽")
-    # UI EXCEPTION: прямой вызов UI метода
-    await callback.answer()
     
     # Создаем ViewModel для детального экрана тарифа
     # UI EXCEPTION: импорт для передачи в ScreenManager

@@ -16,6 +16,7 @@ from app.keyboards import (
     get_back_to_plans_keyboard,
     get_payment_keyboard,
     get_new_payment_keyboard,
+    get_support_keyboard,
 )
 from app.db.session import SessionLocal
 from app.db.models import Payment as PaymentModel
@@ -262,12 +263,36 @@ async def handle_check_payment(callback: types.CallbackQuery):
             )
             return
 
-        if recheck_result.get("status") == "review":
+        status = recheck_result.get("status")
+        if status == "review":
             await callback.message.edit_text(
                 "⏳ <b>Оплата получена</b>\n\n"
-                "Платеж на ручной проверке у администратора. Мы свяжемся с вами.",
-                reply_markup=get_back_to_plans_keyboard(),
+                "Платеж на ручной проверке у администратора. Мы свяжемся с вами. "
+                "Если есть вопросы, напишите в поддержку.",
+                reply_markup=get_support_keyboard(),
                 parse_mode="HTML"
+            )
+            return
+
+        # Статусы без выдачи: человеческий текст вместо «Статус платежа: refunded».
+        _final_texts = {
+            "refunded": "↩️ <b>Платеж возвращен</b>\n\n"
+                        "Деньги по этому платежу вернули, доступ по нему не действует. "
+                        "Если это ошибка, напишите в поддержку.",
+            "canceled": "❌ <b>Платеж отменен</b>\n\n"
+                        "Оплата не прошла или была отменена, деньги не списаны. "
+                        "Можно создать новый платеж.",
+            "review_rejected": "⚠️ <b>Платеж не подтвержден</b>\n\n"
+                               "Администратор проверил платеж и не подтвердил его. "
+                               "Напишите в поддержку, чтобы разобраться с возвратом.",
+        }
+        if status in _final_texts:
+            await callback.message.edit_text(
+                _final_texts[status],
+                reply_markup=(
+                    get_new_payment_keyboard() if status == "canceled" else get_support_keyboard()
+                ),
+                parse_mode="HTML",
             )
             return
 
@@ -305,9 +330,9 @@ async def handle_check_payment(callback: types.CallbackQuery):
             return
 
         await callback.message.edit_text(
-            f"ℹ️ Статус платежа: {recheck_result.get('status', 'unknown')}.\n\n"
-            "Если есть вопросы — обратитесь в поддержку.",
-            reply_markup=get_back_to_plans_keyboard()
+            "ℹ️ Статус платежа пока не определен.\n\n"
+            "Попробуйте проверить позже или напишите в поддержку.",
+            reply_markup=get_support_keyboard()
         )
 
     except Exception as e:
