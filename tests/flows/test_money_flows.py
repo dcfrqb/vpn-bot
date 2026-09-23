@@ -294,3 +294,24 @@ async def test_2x_plan_screen_buttons_land_on_3_0_screens(money_flow, legacy, ki
         assert "pl:pro" in datas
     else:
         assert "pe:pro:12" in datas
+
+
+async def test_o3_legacy_select_period_opens_checkout_not_plans(money_flow):
+    """O3: ui:subscription_plan_detail:select_period:<plan>_<months> used to fall through
+    to the plans list; it must open checkout for that exact plan/period."""
+    f = money_flow
+    await f.press("ui:subscription_plan_detail:select_period:pro_3")
+    rec = next(iter(f.store.payments.values()))
+    assert rec.kind == "subscription" and rec.plan_code == "pro" and rec.period_months == 3
+    screen = _last_screen(f)
+    datas = [b["data"] for b in _buttons(screen)]
+    assert not any((d or "").startswith("pe:") for d in datas)  # not the periods list either
+    assert [b for b in _buttons(screen) if b["url"]]  # the pay button is there
+    assert "Pro, 3" in screen.text
+
+
+async def test_o3_legacy_select_period_bad_payload_falls_back_to_plans(money_flow):
+    f = money_flow
+    await f.press("ui:subscription_plan_detail:select_period:garbage")
+    assert not f.store.payments
+    assert "pl:pro" in [b["data"] for b in _buttons(_last_screen(f))]

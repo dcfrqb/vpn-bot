@@ -116,6 +116,14 @@ async def on_legacy_plans_screen(cb: CallbackQuery, callback_data: Nav, containe
             await _checkout(cb, container, plan, int(months), kind="subscription")
         else:
             await _show_periods(cb, container, plan, gift=False)
+    elif action == "select_period" and payload:
+        # 2.x subscription_plan_detail screen: payload is "<plan>_<months>"
+        # (rsplit: obhod plan codes like "obhod_250" carry their own underscore)
+        plan, _, months = payload.rpartition("_")
+        if plan and months.isdigit():
+            await _checkout(cb, container, plan, int(months), kind="subscription")
+        else:
+            await _show_plans(cb, container, gift=False)
     else:  # open, back, extend and the other 2.x screens: the plans list
         await _show_plans(cb, container, gift=False)
 

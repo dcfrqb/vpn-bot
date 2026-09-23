@@ -72,6 +72,8 @@ LEGACY_SAMPLES = {
     "ui:subscription_plans:select:pro&12": ("ui", "n:subscription_plans:select.pro&12"),
     "ui:subscription_plans:obhod:-": ("ui", "n:subscription_plans:obhod"),
     "ui:subscription_plan_detail:back:-": ("ui", "n:subscription_plan_detail:back"),
+    "ui:subscription_plan_detail:select_period:pro_3": (
+        "ui", "n:subscription_plan_detail:select_period.pro_3"),
     "ui:connect:open:-": ("ui", "n:connect:open"),
     "ui:help:open:-": ("ui", "n:help:open"),
     "ui:admin_panel:open:-": ("ui", "n:admin_panel:open"),
