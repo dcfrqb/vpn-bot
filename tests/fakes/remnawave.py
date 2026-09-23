@@ -36,6 +36,7 @@ class FakeRemna:
         self.patches: List[Dict[str, Any]] = []
         self.created: List[Dict[str, Any]] = []
         self.disabled: List[int] = []
+        self.enabled: List[int] = []
         self.fail_get_user = False
         self.fail_squads = False
         self.fail_lookup_tg = False
@@ -93,6 +94,16 @@ class FakeRemna:
                 user[k] = [{"uuid": u, "name": by_uuid.get(u)} for u in v]
             elif k != "id":
                 user[k] = v
+        # Как панель: EXPIRED с expireAt в будущем снова ACTIVE; DISABLED так
+        # не снимается (только /actions/enable).
+        if "expireAt" in payload and user.get("status") == "EXPIRED":
+            from datetime import datetime, timezone
+            try:
+                exp = datetime.fromisoformat(str(payload["expireAt"]).replace("Z", "+00:00"))
+                if exp > datetime.now(timezone.utc):
+                    user["status"] = "ACTIVE"
+            except ValueError:
+                pass
         return {"response": dict(user)}
 
     async def create_user(self, username, password=None, expire_at=None, telegram_id=None,
@@ -140,5 +151,6 @@ class FakeRemna:
         return {}
 
     async def enable_user(self, user_id):
+        self.enabled.append(int(user_id))
         self.users[int(user_id)]["status"] = "ACTIVE"
         return {}

@@ -592,6 +592,7 @@ async def _verify_remnawave_synced(
     expected_expire_at: Optional[datetime],
     trace_id: str,
     plan_code: Optional[str] = None,
+    allow_disabled: bool = False,
 ) -> tuple[bool, Optional[datetime], Optional[str]]:
     """Перечитывает юзера из Remnawave и проверяет, что expireAt близок к expected.
 
@@ -625,6 +626,11 @@ async def _verify_remnawave_synced(
 
         if status == "EXPIRED":
             return False, actual, f"remnawave status={status} (expected ACTIVE/LIMITED)"
+        # Ревью M1: DISABLED юзер не пускается нодами. Для оплаты это «не выдано»
+        # (выдача сама включает юзера, см. remna_tariff). Resync реконсилера
+        # (allow_disabled=True) ручное отключение админом не оспаривает.
+        if status == "DISABLED" and not allow_disabled:
+            return False, actual, "remnawave status=DISABLED (expected ACTIVE/LIMITED)"
 
         # Хотфикс 2.1: «synced» только если сквад тарифа реально стоит у юзера.
         # Иначе оплаченный юзер без сквада не видит ни одной ноды, а подписка
@@ -750,7 +756,8 @@ async def resync_subscription_to_remnawave(
             return False
 
         ok, actual, err = await _verify_remnawave_synced(
-            remna_user_id, expected_expire, trace_id, plan_code=subscription.plan_code
+            remna_user_id, expected_expire, trace_id, plan_code=subscription.plan_code,
+            allow_disabled=True,
         )
         if not ok:
             await _mark_provisioning_failed(session, subscription.id, f"resync verify: {err}", trace_id)
@@ -1800,6 +1807,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     await apply_tariff_to_remna_user(
                         client, remna_user_id, subscription.plan_code, expire_at=new_expire_str,
                         user_data=stored_user_data,
+                        enable_if_disabled=period_months is not None,
                     )
 
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
@@ -1848,6 +1856,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     from app.services.remna_tariff import apply_tariff_to_remna_user
                     await apply_tariff_to_remna_user(
                         client, remna_user_id, subscription.plan_code, expire_at=_new_expire,
+                        enable_if_disabled=period_months is not None,
                     )
                     # Получаем subscription URL и сохраняем
                     subscription_url = await client.get_user_subscription_url(remna_user_id)
@@ -2047,6 +2056,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     client, str(remna_user_id), subscription.plan_code,
                     # свой юзер после сбоя: create не выполнялся, дату ставим здесь
                     expire_at=normalize_expire_at(expire_at) if adopted else None,
+                    enable_if_disabled=period_months is not None,
                 )
 
                 return subscription_url

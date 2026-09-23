@@ -25,6 +25,12 @@
   Следствие: при даунгрейде (Pro 10 -> Lite 2) лимит остается 10. Это
   осознанная цена за то, чтобы не резать ручные лимиты; решать в 3.0.
 
+Статус DISABLED (фикс-раунд 1, ревью M1): Remnawave не снимает DISABLED при
+переносе expireAt. Явная выдача (оплата, промо, админ-грант) вызывается с
+enable_if_disabled=True и после PATCH включает такого юзера обратно, иначе
+«оплата подтверждена», а ноды юзера не пускают. Resync реконсилера и откат
+sun718 юзера не включают: ручное отключение админом они не отменяют.
+
 Все изменения уходят ОДНИМ PATCH (expireAt + сквады + лимит), чтобы не было
 полуприменного состояния. Любая ошибка (юзер не читается, сквад не найден,
 PATCH упал) -> RemnaTariffError; вызывающий код обязан считать выдачу
@@ -98,11 +104,14 @@ async def apply_tariff_to_remna_user(
     set_device_limit: bool = True,
     user_data: Optional[Dict[str, Any]] = None,
     trace_id: Optional[str] = None,
+    enable_if_disabled: bool = False,
 ) -> Dict[str, Any]:
     """Применяет тариф к основному юзеру Remnawave одним PATCH.
 
     expire_at — новое значение expireAt (str/datetime) или None (не менять).
     set_device_limit=False — не трогать лимит устройств (sun718 revert).
+    enable_if_disabled=True — явная выдача: юзер в статусе DISABLED включается
+    (enable_user) после PATCH. Работает только вместе с expire_at.
     user_data — уже прочитанный ответ GET /api/users/{id} (экономим запрос).
 
     Возвращает payload, который ушел в PATCH ({} если менять было нечего).
@@ -151,16 +160,30 @@ async def apply_tariff_to_remna_user(
         if new_limit is not None and new_limit != current_limit:
             payload["hwid_device_limit"] = new_limit
 
-    if not payload:
+    needs_enable = (
+        enable_if_disabled and expire_at is not None and str(raw.get("status") or "").upper() == "DISABLED"
+    )
+
+    if not payload and not needs_enable:
         logger.info(
             f"[{trace_id}] remna_tariff: nothing to change remna_user_id={remna_user_id} plan={plan_code}"
         )
         return {}
 
-    try:
-        await client.update_user(str(remna_user_id), **payload)
-    except Exception as e:
-        raise RemnaTariffError(f"update_user({remna_user_id}) failed: {e}") from e
+    if payload:
+        try:
+            await client.update_user(str(remna_user_id), **payload)
+        except Exception as e:
+            raise RemnaTariffError(f"update_user({remna_user_id}) failed: {e}") from e
+
+    if needs_enable:
+        try:
+            await client.enable_user(str(remna_user_id))
+        except Exception as e:
+            raise RemnaTariffError(f"enable_user({remna_user_id}) failed: {e}") from e
+        logger.warning(
+            f"[{trace_id}] remna_tariff: user {remna_user_id} was DISABLED, re-enabled for grant plan={plan_code}"
+        )
 
     logger.info(
         f"[{trace_id}] remna_tariff applied: remna_user_id={remna_user_id} plan={plan_code} "

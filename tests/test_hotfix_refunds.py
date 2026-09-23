@@ -88,12 +88,18 @@ async def _call(fake, session, refund, api_payment, bot, redis=None):
 
 
 @pytest.mark.asyncio
-async def test_full_refund_of_first_purchase_disables_access():
+async def test_full_refund_of_first_purchase_expires_access_without_disable():
+    """Фикс-раунд 1 (M1): не DISABLED, а expireAt = сейчас (+5 мин), чтобы
+    следующая оплата/выдача штатно оживила юзера."""
     fake, payment, sub, session, refund, api_payment = _setup(expire_in_days=25)
     bot = AsyncMock()
     assert await _call(fake, session, refund, api_payment, bot) is True
-    assert fake.disabled == [9]
+    assert fake.disabled == []
+    assert fake.users[9]["status"] != "DISABLED"
+    new_exp = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
+    assert timedelta(0) < new_exp - datetime.now(timezone.utc) <= timedelta(minutes=6)
     assert sub.active is False
+    assert sub.provisioning_state == "expired"
     assert payment.status == "refunded"
     assert payment.payment_metadata["refunds"]["rf-1"]["state"] == "done"
     assert payment.payment_metadata["refunded_amount"] == 129.0

@@ -215,6 +215,7 @@ async def provision_tariff(
         await asyncio.wait_for(
             apply_tariff_to_remna_user(
                 client, remna_user_id, plan_code, expire_at=valid_until_str, trace_id=req_id,
+                enable_if_disabled=True,
             ),
             timeout=REMNAWAVE_CALL_TIMEOUT * 2,
         )
