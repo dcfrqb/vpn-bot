@@ -107,7 +107,7 @@ async def test_forged_legacy_plan_not_sold_to_stranger():
 @pytest.mark.asyncio
 async def test_create_payment_rejects_wrong_amount():
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
-         patch.object(yk.Payment, "create") as yk_create:
+         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as yk_create:
         with pytest.raises(ValueError):
             await yk.create_payment(amount_rub=1, description="x", user_id=1, plan_code="pro", period_months=12)
         with pytest.raises(ValueError):
@@ -271,25 +271,16 @@ async def test_create_payment_computes_amount_without_caller_amount():
 
     created = {}
 
-    class _P:
-        id = "pay-900000001"
-        status = "pending"
-
-        class confirmation:
-            confirmation_url = "https://pay.example/1"
-
-        def dict(self):
-            return {}
-
-    def _create(data, key):
+    async def _create(data, key):
         created["data"] = data
-        return _P()
+        return {"id": "pay-900000001", "status": "pending",
+                "confirmation": {"confirmation_url": "https://pay.example/1"}}
 
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
          patch.object(yk.settings, "YOOKASSA_SHOP_ID", "shop"), \
          patch.object(yk.settings, "YOOKASSA_API_KEY", "key"), \
          patch.object(yk.settings, "YOOKASSA_RETURN_URL", "https://example.com/r"), \
-         patch.object(yk.Payment, "create", side_effect=_create), \
+         patch.object(yk, "_create_yookassa_payment", side_effect=_create), \
          patch.object(yk, "SessionLocal", None):
         with pytest.raises(ValueError, match="БД не настроена"):
             await yk.create_payment(description="x", user_id=900000001, plan_code="standard", period_months=3)
@@ -302,7 +293,7 @@ async def test_create_payment_refuses_legacy_plan_to_stranger():
 
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
          patch("app.services.users.get_user_last_plan", AsyncMock(return_value="lite")), \
-         patch.object(yk.Payment, "create") as create:
+         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as create:
         with pytest.raises(ValueError, match="недоступен"):
             await yk.create_payment(description="x", user_id=900000001, plan_code="basic", period_months=1)
     create.assert_not_called()

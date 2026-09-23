@@ -36,6 +36,11 @@ def mock_payment_object():
     return payment
 
 
+def _payment_json(p) -> dict:
+    return {"id": p.id, "status": p.status,
+            "confirmation": {"type": "redirect", "confirmation_url": p.confirmation.confirmation_url}}
+
+
 @pytest.fixture
 def mock_succeeded_payment():
     """Мок успешного платежа"""
@@ -103,7 +108,7 @@ def webhook_data_succeeded():
 @pytest.mark.asyncio
 async def test_create_payment_success(mock_payment_object):
     """Тест успешного создания платежа"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+    with patch('app.services.payments.yookassa._create_yookassa_payment', new_callable=AsyncMock) as mock_create, \
          patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
          patch('app.services.payments.yookassa.settings') as mock_settings:
         
@@ -112,8 +117,8 @@ async def test_create_payment_success(mock_payment_object):
         mock_settings.YOOKASSA_API_KEY = "test_api_key"
         mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
         
-        # Настройка моков
-        mock_payment_class.create.return_value = mock_payment_object
+        # Настройка моков (3.0: async-клиент возвращает JSON YooKassa)
+        mock_create.return_value = _payment_json(mock_payment_object)
         
         mock_session = AsyncMock()
         mock_session_local.return_value.__aenter__.return_value = mock_session
@@ -136,7 +141,7 @@ async def test_create_payment_success(mock_payment_object):
         # Проверки
         assert payment_url == "https://yookassa.ru/checkout/payments/test_payment_123"
         assert external_id == "test_payment_123"
-        mock_payment_class.create.assert_called_once()
+        mock_create.assert_awaited_once()
         mock_session.add.assert_called_once()
         mock_session.commit.assert_called_once()
 
@@ -144,7 +149,7 @@ async def test_create_payment_success(mock_payment_object):
 @pytest.mark.asyncio
 async def test_create_payment_without_db(mock_payment_object):
     """Тест создания платежа без БД — теперь должен вызывать исключение"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+    with patch('app.services.payments.yookassa._create_yookassa_payment', new_callable=AsyncMock) as mock_create, \
          patch('app.services.payments.yookassa.SessionLocal', None), \
          patch('app.services.payments.yookassa.settings') as mock_settings:
         
@@ -152,7 +157,7 @@ async def test_create_payment_without_db(mock_payment_object):
         mock_settings.YOOKASSA_API_KEY = "test_api_key"
         mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
         
-        mock_payment_class.create.return_value = mock_payment_object
+        mock_create.return_value = _payment_json(mock_payment_object)
         
         with pytest.raises(ValueError, match="БД не настроена"):
             await create_payment(
@@ -509,20 +514,35 @@ async def test_process_payment_webhook_empty_data():
     assert result is False
 
 
+def _gateway_with(handler):
+    import httpx
+
+    from app.infra.yookassa import YooKassaClient, YooKassaGateway
+
+    return YooKassaGateway(client_factory=lambda: YooKassaClient(
+        "shop", "key", transport=httpx.MockTransport(handler), sleep=AsyncMock()))
+
+
 @pytest.mark.asyncio
-async def test_check_payment_status_success(mock_succeeded_payment):
-    """Тест проверки статуса платежа"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+async def test_check_payment_status_success():
+    """Статус платежа через async-шлюз (3.0: без SDK)"""
+    import httpx
+
+    def handler(request):
+        assert request.url.path == "/v3/payments/test_payment_456"
+        return httpx.Response(200, json={
+            "id": "test_payment_456", "status": "succeeded", "paid": True,
+            "amount": {"value": "249.00", "currency": "RUB"},
+            "description": "CRS VPN", "metadata": {"tg_user_id": "123456789"},
+        })
+
+    with patch('app.infra.yookassa.default_gateway', return_value=_gateway_with(handler)), \
          patch('app.services.payments.yookassa.settings') as mock_settings:
-        
-        # Мокируем настройки YooKassa
         mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
         mock_settings.YOOKASSA_API_KEY = "test_api_key"
-        
-        mock_payment_class.find_one.return_value = mock_succeeded_payment
-        
+
         result = await check_payment_status("test_payment_456")
-        
+
         assert result is not None
         assert result["id"] == "test_payment_456"
         assert result["status"] == "succeeded"
@@ -533,15 +553,17 @@ async def test_check_payment_status_success(mock_succeeded_payment):
 
 @pytest.mark.asyncio
 async def test_check_payment_status_not_found():
-    """Тест проверки статуса несуществующего платежа — возвращает {"error": "not_found"}"""
-    with patch('app.services.payments.yookassa.Payment') as mock_payment_class, \
+    """Несуществующий платеж -> {"error": "not_found"}"""
+    import httpx
+
+    with patch('app.infra.yookassa.default_gateway',
+               return_value=_gateway_with(lambda r: httpx.Response(404, json={"type": "error"}))), \
          patch('app.services.payments.yookassa.settings') as mock_settings:
         mock_settings.YOOKASSA_SHOP_ID = "test"
         mock_settings.YOOKASSA_API_KEY = "test"
-        mock_payment_class.find_one.return_value = None
-        
+
         result = await check_payment_status("non_existent_payment")
-        
+
         assert result is not None
         assert result.get("error") == "not_found"
 
