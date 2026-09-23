@@ -1,0 +1,201 @@
+# Architecture of release 3.0
+
+Read this before touching the code in a 3.0 stream. The authoritative plan is
+`Servers/docs/РЕВЬЮ_БОТА_2026-09-23/ПЛАН_3.0_ТЕХ.md`; this file describes what
+Foundation actually built and how to extend it.
+
+## Layers
+
+```
+app/
+  domain/        pure rules and DTOs, no I/O, no aiogram
+    plans.py     plan catalog; the ONLY source of prices (core/plans.py is an alias)
+    models.py    DTOs: Quote, Entitlement, SubscriptionState, DeviceInfo, PanelUser,
+                 PromoReward, PaymentIntent, AdminTopic, SubKind, Payment* enums
+    texts/       helpers h, plural_ru, n_plural, fmt_date_msk, fmt_rub, fmt_gb
+                 + one text module per area (common, menu, checkout, connect, devices,
+                 promo, admin, notify)
+  infra/         adapters to the outside world
+    redis/       flags (set_once, counters, once-markers), locks (user lock,
+                 LeaderLock), cache (JSON)
+    remnawave/   stream B moves the panel client here
+    yookassa/    stream A adds the async client here
+    telegram_stars.py
+  services/
+    ports.py     Protocols every consumer depends on
+    shims.py     ports over 2.1.1 code (replaced stream by stream)
+    notifications.py  TelegramNotifier (admin topics + DM fallback)
+    ...          2.x services, unchanged
+  bot/
+    callbacks.py       every CallbackData class
+    legacy_aliases.py  2.x callback strings -> packed callbacks
+    dispatcher.py      build_dispatcher (no I/O)
+    middlewares/       di, errors, maintenance
+    routers/           one module per area, ordered by routers/__init__.py
+    views/             btn, url_btn, kb, render
+  worker/
+    scheduler.py       one loop, leader lock, JOBS registry (build_jobs)
+    jobs/              one module per job (legacy.py wraps 2.x tasks)
+  api/
+    app.py             FastAPI assembly; api/main.py and api/server.py are shims
+    routes/            yookassa (moved verbatim), remnawave (501 stub), health
+    internal_site.py   /internal/site/* for the site, contract frozen
+  container.py         composition root (the only place that picks implementations)
+```
+
+Dependency direction: `bot`, `api`, `worker` -> `services.ports` -> `domain`.
+Implementations (`services/*`, `infra/*`) are wired only in `container.py`.
+Nothing in `domain` or `services` imports aiogram or FastAPI.
+
+## Ports (`app/services/ports.py`)
+
+| Port | Owner | Foundation implementation |
+|---|---|---|
+| RemnaGateway | B | `shims.LegacyRemnaGateway` over RemnaClient (devices raise) |
+| PaymentGateway | A | `shims.LegacyPaymentGateway` (create/get real) |
+| StarsGateway | A | `shims.DisabledStarsGateway` (raises) |
+| ProvisioningService | B | placeholder (raises) |
+| StatusService | B | `shims.LegacyStatusService` over services.users |
+| DevicesService | B | `shims.UnavailableDevicesService` (empty) |
+| CheckoutService | A | `shims.LegacyCheckoutService` (quote/start real) |
+| PromoService | E | placeholder (raises) |
+| Notifier | Foundation | `notifications.TelegramNotifier` |
+| MaintenanceGuard | C | `shims.RedisMaintenanceGuard` (manual flag) |
+
+Handlers get ports from DI by name: `container, remna, payments, stars,
+provisioning, status_service, devices, checkout, promo, notifier, maintenance`.
+Jobs get `ctx.container`; API routes call `app.container.get_container()`.
+
+To ship a real implementation: add the class in your area, change ONE line in
+`container.build_container`, keep the signature. Tests build containers with
+fakes: `build_container(bot, remna=FakeRemnaGateway(), notifier=RecordingNotifier())`.
+
+## Frozen files
+
+Change only through an orchestrator commit on `release/3.0` (then everyone rebases):
+`bot/callbacks.py`, `services/ports.py`, `domain/models.py`, `container.py`,
+`bot/routers/__init__.py`, `worker/scheduler.py`, `api/app.py`, section headers
+of `config.py`, `requirements.txt`.
+
+Do not edit 2.x UI files in streams (`routers/start.py`, `routers/admin.py`,
+`ui/*`, `navigation/*`, `keyboards/*`, `legacy/*`, `payments/ui/*`,
+`routers/ui.py`, `routers/legacy_callbacks.py`, `routers/menu_builder.py`,
+`routers/subscription_view.py`). The cutover agent deletes them.
+
+## Router order
+
+```
+site_login                     2.x, first: /start login_* and sitelogin: never reach others
+r3_promo_deeplink  (E)         /start <code>, /start g_<code>
+r3_start           (D)
+r3_menu            (D)
+r3_checkout        (A)
+r3_connect         (D)
+r3_devices         (D over B)
+r3_support         (D)
+r3_refund          (A)
+r3_admin_payments  (A)
+r3_admin_promo     (E)
+r3_admin_broadcast (E)
+r3_admin_obhod     (E)
+r3_admin_panel     (C)
+ui, start, legacy_payments, admin_broadcast, admin, legacy_callbacks   2.x, 2.1.1 order
+tg_errors_global               Telegram API errors
+```
+
+New routers get `ErrorsMiddleware`: the user sees a generic text, the admin
+ERRORS topic gets the details (dedup 10 min), Telegram API errors go to
+`tg_errors_global` as before.
+
+Outer middlewares: `dp.update` DI; `dp.message` and `dp.callback_query`
+maintenance (no-op unless `maintenance:state` is set in Redis; admins pass);
+`dp.callback_query` legacy aliases.
+
+## Legacy aliases
+
+`bot/legacy_aliases.py` maps every 2.x callback string to a packed callback
+(ordered table `ALIASES`). For each old button press it increments
+`legacy_hits:<alias key>` in Redis, builds the packed callback and checks
+whether any handler of the NEW routers accepts it. If yes, the event continues
+with the new data (a `model_copy`, still bound to the Bot); if no, the original
+event goes to the 2.x handler unchanged. So retargeting an alias needs no edit
+of the alias table: register a handler for the target (e.g. `Nav.filter(F.s == "main")`)
+and old `back_to_main` buttons start landing there.
+
+`pay_yookassa_<plan>_<months>_<amount>` becomes `Period(plan, months)`; the
+amount is ignored. `bc:unsub` / `bc:close` are already valid `Bc` callbacks.
+`sitelogin:*` is never rewritten nor counted. Hit counts for an admin screen:
+`await legacy_aliases.alias_hit_counts()`. Keep aliases at least 3 months
+after 3.0.
+
+## Flags
+
+All in `app/config.py`, one section per stream, every new behaviour default
+OFF (except new menu/checkout screens). Background jobs have
+`TASK_<NAME>_ENABLED` (typo = OFF) under the master `BACKGROUND_TASKS_ENABLED`.
+3.0 flags: `AUTOPAY_ENABLED, STARS_ENABLED, STARS_RATE, GIFTS_ENABLED,
+REFUND_24H_ENABLED, PROMO_CODES_ENABLED, DEVICES_UNLINK_ENABLED,
+PANEL_WEBHOOK_SECRET, MAINTENANCE_AUTO_ENABLED, GRACE_ENABLED, GRACE_SQUAD,
+GRACE_DAYS, GRACE_DAILY_GB, DEVICE_CLEANUP_DAYS, DEVICE_CLEANUP_DRY_RUN,
+RECONCILER_INTERVAL_S, ADMIN_CHAT_ID, ADMIN_TOPIC_*, CONNECT_ARTICLE_URL,
+PRIVACY_URL, SUPPORT_HANDLE, TASK_{DEVICE_CLEANUP, OBHOD_LIFECYCLE, AUTOPAY,
+GRACE, PANEL_HEALTH, REMINDERS, PANEL_SYNC}_ENABLED`. Every setting is listed in
+`.env.example`; a test checks that.
+
+## How to add
+
+**A callback.** Use an existing class from `bot/callbacks.py` if its fields fit
+(`Nav(s, p)`, `Adm(s, a, arg)` carry many screens). A new class or field is an
+orchestrator commit: short prefix, no ":" in values, no money, worst case
+added to `tests/test_r3_callbacks.py`, sample added to `PACKED_SAMPLES` in
+`tests/flows/test_callback_matrix.py`. When your handler lands, delete its
+sample from `PENDING_PACKED` (the matrix test fails if you forget).
+
+**A router handler.** Put it in your router module under `bot/routers/`,
+filter on a CallbackData class, take ports from DI, render with
+`bot/views.render`. No SQL, no panel or YooKassa calls, no prices in handlers.
+A new router module is an orchestrator commit to `NEW_ROUTER_MODULES`.
+
+**A job.** Module `worker/jobs/<name>.py` with `async def run(ctx)`, setting
+`TASK_<NAME>_ENABLED: bool = False` in your config section, one
+`Job("<name>", run, interval_s, flag="<NAME>")` line in `scheduler.build_jobs`
+(orchestrator commit). The scheduler never overlaps a job with itself and runs
+jobs only on the leader (`scheduler:leader` in Redis; Redis down = run).
+
+**An API route.** Module `api/routes/<name>.py` with an `APIRouter`, included
+in `api/app.py` (orchestrator commit). Use `get_container()` for ports. The
+`/internal/site/*` contract is frozen (golden files in `tests/contracts/golden`).
+
+**An admin notification.** `await notifier.notify_admins(AdminTopic.X, text)`.
+Plain text is escaped; pass `html=True` only for text built from constants and
+`h()`. Use `dedup_key`/`dedup_ttl` for anything that can repeat.
+
+## Migrations
+
+Naming: file `src/app/db/migrations/versions/r30_NN_<slug>.py`, revision id
+`r30_NN_<slug>` (fits alembic_version varchar(32)), linear chain, exactly one
+head (CI fails otherwise).
+
+- `r30_01_additive` (Foundation): ADD COLUMN IF NOT EXISTS ... NULL and CREATE
+  TABLE only if missing. Safe while 2.1.1 runs.
+- `r30_02_*` constraints (NOT VALID, then VALIDATE), `r30_03_*` data
+  backfills, `r30_04_*` drops (3.0.1), `r30_05+` requests from streams: all
+  written by stream F only. Other streams ask F; they never add revisions.
+- Every migration: model in `db/models.py` updated in the same commit,
+  `alembic upgrade head && alembic check` clean on an empty Postgres 14.
+
+## Tests
+
+- `tests/fakes/`: FakeRemna / FakeRemnaGateway, FakePaymentGateway,
+  FakeStarsGateway, RecordingNotifier, FakeRedis, FakeClock, bot
+  (RecordingSession, make_bot, message_update, callback_update).
+- `tests/flows/`: fixture `flow` feeds updates through the real dispatcher
+  (`flow.send("/start")`, `flow.press("back_to_main")`, `flow.session.calls`).
+- `tests/invariants/`: manual squads, device limit, prices, sub_kind, no
+  exception text to users, no subscription URLs in logs, no letter U+0451.
+  Add your new top-level modules to `NEW_LAYER` there.
+- `tests/contracts/`: golden JSON of the site API; `UPDATE_GOLDEN=1` rewrites
+  (only for an agreed contract change).
+- Per-stream folders: `tests/{money,panel,events,ui,growth,data}/`.
+- CI: `pytest tests/ -m "not integration"`, ruff, single alembic head,
+  upgrade/check/downgrade/upgrade on Postgres, integration tests.
