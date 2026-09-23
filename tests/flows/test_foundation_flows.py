@@ -50,24 +50,21 @@ async def test_sitelogin_callback_passthrough_not_counted(flow, monkeypatch):
 
 
 async def test_alias_rewrites_when_new_handler_exists_and_answers_via_bound_bot(flow):
-    from app.bot.routers import menu
+    # D landed the real "main" screen: the alias rewrite now reaches it
+    # directly (goes through the bound Bot -> RecordingSession).
+    await flow.press("back_to_main")
 
-    seen = {}
-
-    async def on_main(callback: CallbackQuery, callback_data: Nav, legacy_alias: str, notifier):
-        seen.update(data=callback.data, s=callback_data.s, alias=legacy_alias, notifier=notifier)
-        await callback.answer("new main")  # goes through the bound Bot -> RecordingSession
-
-    with temp_handler(menu.router, on_main, Nav.filter(F.s == "main")):
-        await flow.press("back_to_main")
-
-    assert seen["data"] == "n:main:" and seen["s"] == "main" and seen["alias"] == "back_to_main"
-    assert seen["notifier"] is flow.notifier  # DI works in new routers
-    assert [c.params.get("text") for c in flow.answers()] == ["new main"]
+    ans = flow.answers()
+    assert len(ans) == 1  # render() answers the callback (empty text)
+    edited = flow.session.calls_of("EditMessageText") or flow.session.calls_of("SendMessage")
+    assert edited and "Профиль" in edited[-1].text
     assert flow.redis.store["legacy_hits:back_to_main"] == 1
 
 
 async def test_alias_passes_through_to_old_handler_when_no_new_handler(flow, monkeypatch):
+    # "admin_panel" (Nav(s="admin_panel")) has no new-router owner yet: the
+    # alias middleware must still hand the ORIGINAL 2.x string ("ui:admin_panel:open:-")
+    # to the 2.x ui router unchanged.
     calls = []
 
     async def fake_handle_action(self, **kw):
@@ -75,14 +72,16 @@ async def test_alias_passes_through_to_old_handler_when_no_new_handler(flow, mon
         return True
 
     monkeypatch.setattr("app.ui.screen_manager.ScreenManager.handle_action", fake_handle_action)
-    await flow.press("help")
-    assert calls == [("help", "open")]  # 2.x start.help_info answered it
+    await flow.press("ui:admin_panel:open:-")
+    assert calls == [("admin_panel", "open")]
     assert len(flow.answers()) == 1
-    assert flow.redis.store["legacy_hits:help"] == 1
+    assert flow.redis.store["legacy_hits:ui"] == 1
 
 
 async def test_packed_callback_without_handler_falls_to_legacy_catch_all(flow):
-    await flow.press(Nav(s="main").pack())
+    # "plans" is not landed yet (owner: A): a raw packed Nav for it still
+    # falls through to the 2.x catch-all.
+    await flow.press(Nav(s="plans").pack())
     texts = [c.params.get("text") for c in flow.answers()]
     assert texts == ["❌ Устаревший формат запроса"]  # 2.x legacy_callbacks behaviour
 
@@ -111,7 +110,9 @@ async def test_maintenance_blocks_users_but_not_admins(flow, monkeypatch):
         return True
 
     monkeypatch.setattr("app.ui.screen_manager.ScreenManager.handle_action", fake_handle_action)
-    await flow.press("help", u=admin)
+    # "admin_panel" has no new-router owner yet, so this still exercises the
+    # 2.x ScreenManager path (unlike "help", now landed by D).
+    await flow.press("ui:admin_panel:open:-", u=admin)
     assert calls == ["open"]
 
 
@@ -123,8 +124,8 @@ async def test_new_router_errors_are_generic_and_reported(flow):
     async def boom(callback: CallbackQuery):
         raise RuntimeError("secret internals /opt/x password=1")
 
-    with temp_handler(support.router, boom, Nav.filter(F.s == "help")):
-        await flow.press(Nav(s="help").pack())
+    with temp_handler(support.router, boom, Nav.filter(F.s == "qa_boom_test")):
+        await flow.press(Nav(s="qa_boom_test").pack())
 
     ans = flow.answers()
     assert [a.params["text"] for a in ans] == [GENERIC_ERROR_ALERT]

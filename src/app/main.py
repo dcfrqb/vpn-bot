@@ -73,6 +73,9 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     from app.middlewares.blocklist import load_blocklist_from_redis
     await load_blocklist_from_redis()
 
+    from app.bot.routers.start import set_my_commands
+    await set_my_commands(bot)
+
     return dp
 
 

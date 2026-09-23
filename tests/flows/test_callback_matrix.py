@@ -43,7 +43,13 @@ PACKED_SAMPLES = {
     cb.Gift(a="buy").pack(): "A",
 }
 # Streams delete their entries when their handlers land.
-PENDING_PACKED = set(PACKED_SAMPLES)
+PENDING_PACKED = set(PACKED_SAMPLES) - {
+    # D landed: main menu, connect screen, help screen, devices list.
+    cb.Nav(s="main").pack(),
+    cb.Nav(s="connect").pack(),
+    cb.Nav(s="help").pack(),
+    cb.Dev(a="list").pack(),
+}
 
 # 2.x strings (every producer in the 2.1.1 code) -> (alias key, packed rewrite or None).
 LEGACY_SAMPLES = {
