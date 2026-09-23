@@ -1,6 +1,11 @@
 """YooKassa adapter. Owner stream: A (Money).
 
-Foundation leaves the SDK calls in app.services.payments.yookassa; the port
-``PaymentGateway`` is implemented over it by app.services.shims.
-Stream A adds an async httpx client here.
+- ``client.YooKassaClient``: async httpx client (Idempotence-Key, 202/5xx retries).
+- ``gateway.YooKassaGateway``: app.services.ports.PaymentGateway over it.
+
+The synchronous ``yookassa`` SDK is no longer used on the money path.
 """
+from app.infra.yookassa.client import YooKassaClient, YooKassaError
+from app.infra.yookassa.gateway import YooKassaGateway, default_gateway, normalize_payment
+
+__all__ = ["YooKassaClient", "YooKassaError", "YooKassaGateway", "default_gateway", "normalize_payment"]

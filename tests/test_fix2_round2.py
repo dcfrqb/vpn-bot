@@ -173,106 +173,20 @@ def _payment(**meta):
     )
 
 
-@pytest.mark.asyncio
-async def test_payment_for_disabled_user_is_held_for_review_with_one_alert():
-    fake = FakeRemna()
-    fake.add_user(9, "tg_test_user", telegram_id=TG_ID, squads=["lite"], status="DISABLED")
-    tg = SimpleNamespace(telegram_id=TG_ID, remna_user_id="9")
-    payment = _payment()
-    bot = AsyncMock()
-    remna = AsyncMock()
-    for trace in ("t1", "t2"):  # повтор вебхука / recovery не спамит
-        session = _session(payment, payment, tg)
-        with patch.object(yk, "RemnaClient", return_value=fake), \
-             patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-             patch.object(yk.settings, "ADMINS", [ADMIN_ID]):
-            outcome = await yk.handle_successful_payment(
-                session=session, payment_id=20, telegram_user_id=TG_ID,
-                amount=payment.amount, description="x", bot=bot, trace_id=trace,
-            )
-        assert outcome == "review"
-    remna.assert_not_awaited()
-    assert fake.patches == [] and fake.enabled == []
-    assert payment.payment_metadata["needs_review"] is True
-    assert "отключен вручную" in payment.payment_metadata["review_reason"]
-    admin_msgs = [c for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == ADMIN_ID]
-    assert len(admin_msgs) == 1
-    assert admin_msgs[0].kwargs.get("reply_markup") is not None  # кнопки одобрить/отклонить
+# test_payment_for_disabled_user_is_held_for_review_with_one_alert: removed in 3.0 with the 2.x provisioning (covered by tests/money/test_fulfillment.py and tests/panel)
 
 
-@pytest.mark.asyncio
-async def test_approved_payment_passes_enable_flag():
-    fake = FakeRemna()
-    fake.add_user(9, "tg_test_user", telegram_id=TG_ID, squads=["lite"], status="DISABLED")
-    tg = SimpleNamespace(telegram_id=TG_ID, remna_user_id="9", username=None,
-                         first_name=None, last_name=None)
-    payment = _payment(needs_review=True, review_approved=True)
-    remna = AsyncMock(return_value=None)  # дальше silent failure, нам важен только флаг
-    session = _session(payment, payment, tg, None)
-    with patch.object(yk, "RemnaClient", return_value=fake), \
-         patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna):
-        with pytest.raises(Exception):
-            await yk.handle_successful_payment(
-                session=session, payment_id=20, telegram_user_id=TG_ID,
-                amount=payment.amount, description="x", bot=AsyncMock(), trace_id="t",
-            )
-    assert remna.await_args.kwargs["enable_if_disabled"] is True
+# test_approved_payment_passes_enable_flag: removed in 3.0 with the 2.x provisioning (covered by tests/money/test_fulfillment.py and tests/panel)
 
 
-@pytest.mark.asyncio
-async def test_disabled_detected_during_sync_holds_for_review():
-    """Проверка до выдачи не увидела DISABLED (чтение упало): выдача сама
-    отказывает, платеж уходит на ревью, а не в бесконечный ретрай."""
-    fake = FakeRemna()
-    fake.fail_get_user = True
-    tg = SimpleNamespace(telegram_id=TG_ID, remna_user_id="9")
-    payment = _payment()
-    remna = AsyncMock(side_effect=RemnaUserDisabledError("disabled"))
-    session = _session(payment, payment, tg, None)
-    with patch.object(yk, "RemnaClient", return_value=fake), \
-         patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-         patch.object(yk.settings, "ADMINS", [ADMIN_ID]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=20, telegram_user_id=TG_ID,
-            amount=payment.amount, description="x", bot=AsyncMock(), trace_id="t",
-        )
-    assert outcome == "review"
-    assert payment.payment_metadata["needs_review"] is True
-    assert remna.await_args.kwargs["enable_if_disabled"] is False
+# test_disabled_detected_during_sync_holds_for_review: removed in 3.0 with the 2.x provisioning (covered by tests/money/test_fulfillment.py and tests/panel)
 
 
 # --------------------------------------------------------------------------
 # N3
 # --------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_approve_uses_recovery_provision_lock():
-    from app.services.payments import review as rv
-    from tests.test_fix1_payment_review import _held, _session as _rv_session
-
-    payment = _held()
-    _s, factory = _rv_session(payment)
-    redis = FakeRedis()
-    redis.store["provision_lock:ext-10"] = "1"  # recovery сейчас выдает этот платеж
-    handler = AsyncMock()
-    with patch("app.db.session.SessionLocal", factory), \
-         patch("app.services.cache.get_redis_client", return_value=redis), \
-         patch("app.services.payments.yookassa.handle_successful_payment", handler):
-        code, _ = await rv.decide_held_payment(payment.id, ADMIN_ID, True, AsyncMock())
-        assert code == rv.BUSY
-        handler.assert_not_awaited()
-        assert "review_approved" not in payment.payment_metadata
-
-        seen = {}
-
-        async def _provision(**_kw):
-            seen["locked"] = "provision_lock:ext-10" in redis.store
-        handler.side_effect = _provision
-        del redis.store["provision_lock:ext-10"]
-        code, _ = await rv.decide_held_payment(payment.id, ADMIN_ID, True, AsyncMock())
-    assert code == rv.APPROVED
-    assert seen["locked"] is True                      # выдача шла под локом
-    assert "provision_lock:ext-10" not in redis.store  # и лок снят
+# test_approve_uses_recovery_provision_lock: removed in 3.0 with the 2.x provisioning (covered by tests/money/test_fulfillment.py and tests/panel)
 
 
 # --------------------------------------------------------------------------

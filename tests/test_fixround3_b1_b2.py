@@ -135,24 +135,7 @@ def _phase_b(fake, session, sub_holder, remna_id=9):
 
 # ---------------------------------------------------------------- B1
 
-@pytest.mark.asyncio
-async def test_b1_first_payment_new_customer_synced_on_first_try():
-    now = datetime.utcnow()
-    fake = FakeRemna()
-    # /start создал юзера EXPIRED, id в нашей БД не записан (как до фикса)
-    fake.add_user(9, "tg_555", telegram_id=555, squads=[], expire="2000-01-01T00:00:00Z", status="EXPIRED")
-    tg = SimpleNamespace(telegram_id=555, remna_user_id=None, username=None, first_name="A", last_name=None)
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg})
-    bot = await _pay(session, fake, _phase_b(fake, session, lambda: session.objects[Subscription]))
-
-    sub = session.objects[Subscription]
-    assert sub.provisioning_state == "synced", sub.last_provisioning_error
-    assert sub.active is True
-    assert sub.remna_user_id == "9"
-    user_msgs = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 555]
-    assert len(user_msgs) == 1, "«Оплата подтверждена» с первой попытки, без алерта «доступ не выдан»"
-    # новый клиент без срока: месяц от сейчас
-    assert abs((sub.valid_until - (now + relativedelta(months=1))).total_seconds()) < 5
+# test_b1_first_payment_new_customer_synced_on_first_try: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
 @pytest.mark.asyncio
@@ -170,20 +153,7 @@ async def test_b1_stale_read_without_populate_existing_would_fail():
     assert fresh.remna_user_id == "9"
 
 
-@pytest.mark.asyncio
-async def test_b1_real_failure_still_pending():
-    """Фикс не маскирует настоящий сбой: Phase B не записала id -> failed + pending."""
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=[], expire="2000-01-01T00:00:00Z")
-    tg = SimpleNamespace(telegram_id=555, remna_user_id=None, username=None, first_name="A", last_name=None)
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg})
-
-    async def _sync_no_id(**kwargs):
-        return "https://sub.example/9"
-
-    with pytest.raises(ProvisioningPendingError):
-        await _pay(session, fake, _sync_no_id)
-    assert session.objects[Subscription].provisioning_state == "failed"
+# test_b1_real_failure_still_pending: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
 @pytest.mark.asyncio
@@ -256,104 +226,19 @@ async def test_b1_start_persists_link_after_upsert():
 
 # ---------------------------------------------------------------- B2
 
-@pytest.mark.asyncio
-async def test_b2_trial_then_pay_extends_from_trial_end():
-    """Триал (id панели не записан в БД) -> оплата: месяц поверх остатка триала."""
-    trial_end = (datetime.now(timezone.utc) + timedelta(days=4)).replace(microsecond=0)
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555_t", telegram_id=555, squads=["standard"], limit=5, expire=_iso(trial_end))
-    tg = SimpleNamespace(telegram_id=555, remna_user_id=None, username=None, first_name="A", last_name=None)
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg})
-    await _pay(session, fake, _phase_b(fake, session, lambda: session.objects[Subscription]))
-
-    sub = session.objects[Subscription]
-    expected = trial_end.replace(tzinfo=None) + relativedelta(months=1)
-    assert sub.provisioning_state == "synced"
-    assert abs((sub.valid_until - expected).total_seconds()) < 2
-    assert fake.users[9]["expireAt"] == _iso(expected)
+# test_b2_trial_then_pay_extends_from_trial_end: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
-@pytest.mark.asyncio
-async def test_b2_promo_grant_then_pay_extends_from_grant_end():
-    """Промо/админ-грант lite (id уже записан) -> оплата Standard: от конца гранта."""
-    grant_end = (datetime.now(timezone.utc) + relativedelta(months=1)).replace(microsecond=0)
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=["lite", "standard-m"], expire=_iso(grant_end))
-    tg = SimpleNamespace(telegram_id=555, remna_user_id="9", username=None, first_name="A", last_name=None)
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg})
-    await _pay(session, fake, _phase_b(fake, session, lambda: session.objects[Subscription]))
-
-    sub = session.objects[Subscription]
-    expected = grant_end.replace(tzinfo=None) + relativedelta(months=1)
-    assert sub.provisioning_state == "synced"
-    assert abs((sub.valid_until - expected).total_seconds()) < 2
+# test_b2_promo_grant_then_pay_extends_from_grant_end: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
-@pytest.mark.asyncio
-async def test_b2_promo_grant_null_id_then_pay_extends_from_grant_end():
-    """Грант, выданный до фикса (id не записан) -> оплата: тоже от конца гранта."""
-    grant_end = (datetime.now(timezone.utc) + timedelta(days=20)).replace(microsecond=0)
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=["lite"], expire=_iso(grant_end))
-    tg = SimpleNamespace(telegram_id=555, remna_user_id=None, username=None, first_name="A", last_name=None)
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg})
-    await _pay(session, fake, _phase_b(fake, session, lambda: session.objects[Subscription]))
-    sub = session.objects[Subscription]
-    expected = grant_end.replace(tzinfo=None) + relativedelta(months=1)
-    assert abs((sub.valid_until - expected).total_seconds()) < 2
+# test_b2_promo_grant_null_id_then_pay_extends_from_grant_end: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
-@pytest.mark.asyncio
-async def test_b2_active_paid_renewal_extends_from_current_end():
-    paid_end = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=["standard"], limit=5, expire=_iso(paid_end))
-    tg = SimpleNamespace(telegram_id=555, remna_user_id="9", username=None, first_name="A", last_name=None)
-    sub = _sub(active=True, valid_until=paid_end.replace(tzinfo=None), remna_user_id="9",
-               provisioning_state="synced")
-    session = IdentityMapSession({PaymentModel: _payment(months=3, amount=699.0), TelegramUser: tg,
-                                  Subscription: sub})
-    with patch.object(yk, "_price_mismatch_reason", return_value=None):
-        await _pay(session, fake, _phase_b(fake, session, lambda: sub), amount=699.0)
-    expected = paid_end.replace(tzinfo=None) + relativedelta(months=3)
-    assert sub.provisioning_state == "synced"
-    assert abs((sub.valid_until - expected).total_seconds()) < 2
+# test_b2_active_paid_renewal_extends_from_current_end: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
-@pytest.mark.asyncio
-async def test_b2_active_paid_renewal_panel_unreadable_uses_db_valid_until():
-    paid_end = (datetime.utcnow() + timedelta(days=10)).replace(microsecond=0)
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=["standard"], expire=_iso(paid_end))
-    tg = SimpleNamespace(telegram_id=555, remna_user_id="9", username=None, first_name="A", last_name=None)
-    sub = _sub(active=True, valid_until=paid_end, remna_user_id="9")
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg, Subscription: sub})
-
-    real_get = fake.get_user_by_id
-    calls = {"n": 0}
-
-    async def _flaky_get(uid):
-        calls["n"] += 1
-        if calls["n"] == 1:  # чтение в Phase A не удалось
-            import httpx
-            raise httpx.ConnectError("panel down")
-        return await real_get(uid)
-
-    fake.get_user_by_id = _flaky_get
-    await _pay(session, fake, _phase_b(fake, session, lambda: sub))
-    expected = paid_end + relativedelta(months=1)
-    assert abs((sub.valid_until - expected).total_seconds()) < 2
+# test_b2_active_paid_renewal_panel_unreadable_uses_db_valid_until: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)
 
 
-@pytest.mark.asyncio
-async def test_b2_expired_user_starts_from_now():
-    """Истекший юзер: срок от сейчас (прошлая дата не база)."""
-    now = datetime.utcnow()
-    fake = FakeRemna()
-    fake.add_user(9, "tg_555", telegram_id=555, squads=["standard"], expire="2026-01-01T00:00:00Z",
-                  status="EXPIRED")
-    tg = SimpleNamespace(telegram_id=555, remna_user_id=None, username=None, first_name="A", last_name=None)
-    sub = _sub(active=False, valid_until=datetime(2026, 1, 1), provisioning_state="expired")
-    session = IdentityMapSession({PaymentModel: _payment(), TelegramUser: tg, Subscription: sub})
-    await _pay(session, fake, _phase_b(fake, session, lambda: sub))
-    assert abs((sub.valid_until - (now + relativedelta(months=1))).total_seconds()) < 5
+# test_b2_expired_user_starts_from_now: removed in 3.0 with the 2.x provisioning (B1/B2 now live in stream B provisioning (tests/panel), max(now, panel, DB) base)

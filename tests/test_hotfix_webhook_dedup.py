@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services.payments import yookassa as yk
+from app.services.payments import webhook as yk  # 3.0: the webhook body moved here
 from app.services.payments.errors import ProvisioningPendingError, WebhookRetryableError
 from tests.test_hotfix_paid_no_squad import FakeRedis
 
@@ -53,6 +53,21 @@ async def test_different_events_of_same_object_not_deduped_together():
 
 @pytest.mark.asyncio
 async def test_yookassa_api_unavailable_is_retryable():
+    """3.0: the provider view comes from the container's PaymentGateway."""
+    from app.container import build_container, set_container
+    from app.services.money import money
+    from tests.fakes.bot import make_bot
+    from tests.fakes.payments import FakePaymentGateway
+    from tests.money.fakes import FakeHooks, InMemoryPaymentStore
+
+    class DownGateway(FakePaymentGateway):
+        async def get_payment(self, external_id):
+            return None
+
+    bot, _ = make_bot()
+    c = build_container(bot, payments=DownGateway())
+    money(c, store=InMemoryPaymentStore(), hooks=FakeHooks())
+    set_container(c)
     redis = FakeRedis()
     webhook = {"event": "payment.succeeded", "object": {
         "id": "pay-2", "status": "succeeded", "paid": True,
@@ -60,9 +75,10 @@ async def test_yookassa_api_unavailable_is_retryable():
         "created_at": "2026-09-23T00:00:00.000Z", "test": False,
         "recipient": {"account_id": "1", "gateway_id": "1"}, "refundable": True, "metadata": {},
     }}
-    with patch("app.services.cache.get_redis_client", return_value=redis), \
-         patch.object(yk, "check_payment_status", AsyncMock(return_value=None)), \
-         patch("app.services.blocklist.get_card_block_reason", AsyncMock(return_value=None)):
-        with pytest.raises(WebhookRetryableError):
-            await yk.process_payment_webhook(webhook, bot=AsyncMock())
+    try:
+        with patch("app.services.cache.get_redis_client", return_value=redis):
+            with pytest.raises(WebhookRetryableError):
+                await yk.process_payment_webhook(webhook, bot=AsyncMock())
+    finally:
+        set_container(None)
     assert redis.store == {}

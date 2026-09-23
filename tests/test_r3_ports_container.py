@@ -138,15 +138,17 @@ async def test_checkout_quote_uses_catalog_prices_only():
         assert (await co.quote(1, "basic", 1)).is_legacy
 
 
-async def test_checkout_start_goes_through_legacy_create_payment():
-    co = shims.LegacyCheckoutService()
-    q = await co.quote(7, "lite", 1)
-    with patch("app.services.payments.yookassa.create_payment",
-               AsyncMock(return_value=("https://pay/x", "ext-1"))) as cp:
-        intent = await co.start(7, q)
-    cp.assert_awaited_once()
-    assert cp.await_args.kwargs["user_id"] == 7 and cp.await_args.kwargs["period_months"] == 1
-    assert intent.external_id == "ext-1" and intent.amount_rub == q.amount_rub
+async def test_checkout_shim_delegates_to_stream_a_checkout():
+    from app.services.checkout import CheckoutServiceImpl
+
+    bot, _ = make_bot()
+    c = build_container(bot, payments=FakePaymentGateway())
+    set_container(c)
+    try:
+        assert isinstance(c.checkout._impl(), CheckoutServiceImpl)
+        assert c.checkout._impl().d.payments is c.payments
+    finally:
+        set_container(None)
 
 
 async def test_maintenance_guard_roundtrip():

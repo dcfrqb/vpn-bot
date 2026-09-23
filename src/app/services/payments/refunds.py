@@ -27,7 +27,6 @@
 4. Частичный возврат: только запись и алерт админу.
 Админу всегда уходит сообщение о возврате (один раз на refund_id).
 """
-import asyncio
 from datetime import datetime, timedelta, timezone
 from html import escape as _he
 from typing import Any, Dict, Optional
@@ -66,27 +65,10 @@ def _plan_line(plan_code: Optional[str], period_months: int) -> str:
 
 
 async def fetch_refund(refund_id: str) -> Optional[Dict[str, Any]]:
-    """Возврат из API YooKassa или None при недоступности API."""
-    try:
-        from yookassa import Refund
+    """Возврат из API YooKassa (3.0: async-шлюз, без SDK) или None при недоступности API."""
+    from app.infra.yookassa import default_gateway
 
-        refund = await asyncio.to_thread(Refund.find_one, refund_id)
-    except Exception as e:
-        logger.error(f"refund {refund_id}: YooKassa API error: {e}")
-        return None
-    if not refund:
-        return {"error": "not_found"}
-    try:
-        return {
-            "id": refund.id,
-            "status": refund.status,
-            "payment_id": refund.payment_id,
-            "amount": float(refund.amount.value),
-            "currency": refund.amount.currency,
-        }
-    except Exception as e:
-        logger.error(f"refund {refund_id}: unexpected API response: {e}")
-        return None
+    return await default_gateway().get_refund(refund_id)
 
 
 def _parse_expire(raw: Any) -> Optional[datetime]:
@@ -211,8 +193,12 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         action = "none"
         action_note = ""
         obhod_note = ""
+        # 3.0: возврат по запросу «Не смог подключиться» (refund_requests) уже
+        # отключил доступ через ProvisioningService.revoke и написал юзеру.
+        by_request = isinstance(meta.get("refund_24h"), dict)
         can_revoke = (
-            is_full
+            not by_request
+            and is_full
             and subscription is not None
             and getattr(subscription, "sub_kind", "main") == "main"
             and subscription.remna_user_id
@@ -315,6 +301,13 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                     await client.close()
                 except Exception:
                     pass
+        elif by_request:
+            action = "by_request"
+            action_note = (
+                "Возврат по запросу клиента (24 часа): доступ уже отключен при одобрении"
+                if meta["refund_24h"].get("revoked") else
+                "Возврат по запросу клиента (24 часа): доступ отключить НЕ удалось, проверь вручную"
+            )
         elif is_full:
             action_note = (
                 "Доступ НЕ менялся: "
@@ -342,6 +335,13 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         payment.payment_metadata = meta
         if is_full:
             payment.status = "refunded"
+            try:
+                payment.refunded_amount = refunded_total
+            except Exception:  # noqa: BLE001 - column added by r30_01, absent on very old schemas
+                pass
+            # 3.0: после возврата автопродление не списывает деньги снова.
+            if subscription is not None and getattr(subscription, "autorenew", None):
+                subscription.autorenew = False
         payment.updated_at = datetime.utcnow()
         await session.commit()
 

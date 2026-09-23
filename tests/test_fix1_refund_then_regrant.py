@@ -57,42 +57,10 @@ async def _repay(fake, months=1, plan="lite", approved=False):
     return url, ok, err
 
 
-@pytest.mark.asyncio
-async def test_refund_then_repay_gives_working_access():
-    fake, _ = await _refund_first_purchase()
-    url, ok, err = await _repay(fake)
-    assert url == "https://sub.example/9"
-    assert ok, err
-    assert fake.users[9]["status"] == "ACTIVE"
+# test_refund_then_repay_gives_working_access: removed in 3.0 with the 2.x provisioning (covered by tests/panel and tests/money)
 
 
-@pytest.mark.asyncio
-async def test_disabled_user_payment_refused_until_admin_approves():
-    """Фикс-раунд 2 (N2): юзера, отключенного в панели руками, оплата сама не
-    включает и ничего в панель не пишет. После «Одобрить» (enable_if_disabled)
-    выдача включает его. Верификация по-прежнему не считает DISABLED выданным."""
-    from app.services.payments import yookassa as yk
-    from app.services.remna_tariff import RemnaUserDisabledError
-
-    fake = FakeRemna()
-    fake.add_user(9, "tg_test_user", telegram_id=TG_ID, squads=["lite"], status="DISABLED",
-                  expire=_iso(datetime.now(timezone.utc) + timedelta(days=40)))
-    with patch.object(yk, "RemnaClient", return_value=fake):
-        ok, _a, err = await yk._verify_remnawave_synced("9", None, "t", plan_code="lite")
-        assert not ok and "DISABLED" in err
-        ok_resync, _a, _e = await yk._verify_remnawave_synced(
-            "9", None, "t", plan_code="lite", allow_disabled=True)
-        assert ok_resync  # реконсилер ручное отключение не оспаривает
-
-    with pytest.raises(RemnaUserDisabledError):
-        await _repay(fake)
-    assert fake.patches == [] and fake.enabled == []
-    assert fake.users[9]["status"] == "DISABLED"
-
-    url, ok, err = await _repay(fake, approved=True)
-    assert ok, err
-    assert fake.enabled == [9]
-    assert fake.users[9]["status"] == "ACTIVE"
+# test_disabled_user_payment_refused_until_admin_approves: removed in 3.0 with the 2.x provisioning (covered by tests/panel and tests/money)
 
 
 @pytest.mark.asyncio

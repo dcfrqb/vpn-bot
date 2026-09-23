@@ -107,7 +107,7 @@ async def test_forged_legacy_plan_not_sold_to_stranger():
 @pytest.mark.asyncio
 async def test_create_payment_rejects_wrong_amount():
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
-         patch.object(yk.Payment, "create") as yk_create:
+         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as yk_create:
         with pytest.raises(ValueError):
             await yk.create_payment(amount_rub=1, description="x", user_id=1, plan_code="pro", period_months=12)
         with pytest.raises(ValueError):
@@ -157,51 +157,10 @@ def _payment(amount, plan_code="pro", period=12, extra_meta=None):
     )
 
 
-@pytest.mark.asyncio
-async def test_underpaid_payment_is_held_for_review_not_provisioned():
-    payment = _payment(1.0)
-    session = _fake_session(payment)
-    bot = AsyncMock()
-    remna = AsyncMock()
-    with patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=bot, trace_id="t",
-        )
-    assert outcome == "review"
-    remna.assert_not_awaited()
-    assert payment.payment_metadata["needs_review"] is True
-    assert payment.payment_metadata["review_alerted"] is True
-    chat_ids = [c.kwargs["chat_id"] for c in bot.send_message.await_args_list]
-    assert 900 in chat_ids and 555 in chat_ids
-
-    # повторная обработка (ретрай вебхука/recovery) не спамит алертами
-    bot.send_message.reset_mock()
-    with patch.object(yk, "get_or_create_remna_user_and_get_subscription_url", remna), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=bot, trace_id="t2",
-        )
-    assert outcome == "review"
-    bot.send_message.assert_not_awaited()
-    remna.assert_not_awaited()
+# test_underpaid_payment_is_held_for_review_not_provisioned: removed in 3.0 with the 2.x provisioning (tests/money/test_fulfillment.py (price gate once))
 
 
-@pytest.mark.asyncio
-async def test_obhod_package_underpaid_not_applied():
-    payment = _payment(1.0, plan_code="obhod_500", period=1)
-    session = _fake_session(payment)
-    apply_pkg = AsyncMock(return_value=True)
-    with patch("app.services.obhod_service.apply_obhod_package", apply_pkg), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        outcome = await yk.handle_successful_payment(
-            session=session, payment_id=10, telegram_user_id=555, amount=1.0,
-            description="x", bot=AsyncMock(), trace_id="t",
-        )
-    assert outcome == "review"
-    apply_pkg.assert_not_awaited()
+# test_obhod_package_underpaid_not_applied: removed in 3.0 with the 2.x provisioning (tests/money/test_fulfillment.py (price gate once))
 
 
 def test_expected_amount_catalog():
@@ -211,39 +170,7 @@ def test_expected_amount_catalog():
     assert get_expected_amount("obhod_500", 1) == 1199
 
 
-@pytest.mark.asyncio
-async def test_recovery_skips_payments_on_review():
-    from app.services.payments import recovery
-
-    held = SimpleNamespace(
-        id=1, external_id="e1", telegram_user_id=1, amount=1, description="", created_at=None,
-        payment_metadata={"needs_review": True},
-    )
-
-    class _Rows:
-        def __init__(self, items):
-            self._items = items
-
-        def scalars(self):
-            return SimpleNamespace(all=lambda: list(self._items))
-
-    session = MagicMock()
-    session.execute = AsyncMock(side_effect=[_Rows([held]), _Rows([]), _Rows([])])
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    handle = AsyncMock()
-    with patch.object(recovery, "SessionLocal", MagicMock(return_value=cm)), \
-         patch.object(yk, "handle_successful_payment", handle):
-        result = await recovery.retry_needs_provisioning(bot=AsyncMock())
-    handle.assert_not_awaited()
-    assert result["processed"] == 0
-
-
-# --------------------------------------------------------------------------
-# Фикс-раунд 1 (F1): правило цены в core/plans + services/checkout,
-# create_payment считает сумму сам
-# --------------------------------------------------------------------------
+# test_recovery_skips_payments_on_review: moved to tests/money/test_recovery_sweep.py (3.0 Fulfillment)
 
 def test_quote_purchase_is_the_single_rule():
     from app.core.plans import quote_purchase
@@ -271,25 +198,16 @@ async def test_create_payment_computes_amount_without_caller_amount():
 
     created = {}
 
-    class _P:
-        id = "pay-900000001"
-        status = "pending"
-
-        class confirmation:
-            confirmation_url = "https://pay.example/1"
-
-        def dict(self):
-            return {}
-
-    def _create(data, key):
+    async def _create(data, key):
         created["data"] = data
-        return _P()
+        return {"id": "pay-900000001", "status": "pending",
+                "confirmation": {"confirmation_url": "https://pay.example/1"}}
 
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
          patch.object(yk.settings, "YOOKASSA_SHOP_ID", "shop"), \
          patch.object(yk.settings, "YOOKASSA_API_KEY", "key"), \
          patch.object(yk.settings, "YOOKASSA_RETURN_URL", "https://example.com/r"), \
-         patch.object(yk.Payment, "create", side_effect=_create), \
+         patch.object(yk, "_create_yookassa_payment", side_effect=_create), \
          patch.object(yk, "SessionLocal", None):
         with pytest.raises(ValueError, match="БД не настроена"):
             await yk.create_payment(description="x", user_id=900000001, plan_code="standard", period_months=3)
@@ -302,7 +220,7 @@ async def test_create_payment_refuses_legacy_plan_to_stranger():
 
     with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
          patch("app.services.users.get_user_last_plan", AsyncMock(return_value="lite")), \
-         patch.object(yk.Payment, "create") as create:
+         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as create:
         with pytest.raises(ValueError, match="недоступен"):
             await yk.create_payment(description="x", user_id=900000001, plan_code="basic", period_months=1)
     create.assert_not_called()

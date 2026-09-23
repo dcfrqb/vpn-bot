@@ -64,27 +64,4 @@ async def test_deep_scan_orders_by_last_check_and_bumps_verified():
     assert any(q.startswith("UPDATE subscriptions SET remnawave_synced_at") for q in session.sql[1:])
 
 
-@pytest.mark.asyncio
-async def test_obhod_package_not_applied_alerts_admin_once():
-    from app.services.payments import yookassa as yk
-    from tests.test_hotfix_paid_no_squad import EntitySession
-    from app.db.models import Payment as PaymentModel
-
-    payment = SimpleNamespace(
-        id=3, external_id="ext-3", provider="yookassa", amount=599.0, currency="RUB",
-        subscription_id=None, status="succeeded", paid_at=None,
-        payment_metadata={"plan_code": "obhod_250", "period_months": 1, "expected_amount": 599},
-    )
-    session = EntitySession({PaymentModel: payment})
-    bot = AsyncMock()
-    with patch("app.services.obhod_service.apply_obhod_package", AsyncMock(return_value=False)), \
-         patch.object(yk.settings, "ADMINS", [900]):
-        for _ in range(2):  # повтор recovery не спамит
-            await yk.handle_successful_payment(
-                session=session, payment_id=3, telegram_user_id=77, amount=599.0,
-                description="x", bot=bot, trace_id="t",
-            )
-    admin = [c for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 900]
-    user = [c for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 77]
-    assert len(admin) == 1 and len(user) == 1
-    assert payment.payment_metadata["obhod_package_applied"] is False
+# test_obhod_package_not_applied_alerts_admin_once: removed in 3.0 with the 2.x provisioning (tests/money/test_fulfillment.py::test_obhod_package_not_applied_alerts_admin_once)
