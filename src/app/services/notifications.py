@@ -10,7 +10,10 @@ Safety:
   - ``html=False`` (default) escapes the whole text; ``html=True`` only for
     text built from constants + ``h()``-escaped values.
   - ``dedup_key`` + ``dedup_ttl``: Redis SET NX ``notify:<key>``; a repeat
-    within the TTL is dropped. Redis down -> send anyway (fail-open).
+    within the TTL is dropped. Redis down -> send anyway (fail-open). The
+    claim is taken before sending (so concurrent callers do not double-send)
+    but released if the send does not actually deliver, so a failed send can
+    be retried instead of silently eating the dedup slot until the TTL ends.
   - Exception text of a failed send is logged by type only; message text is
     never logged.
 
@@ -69,6 +72,13 @@ class TelegramNotifier:
             return False
         return True
 
+    async def _dedup_release(self, dedup_key: Optional[str]) -> None:
+        if not dedup_key:
+            return
+        from app.infra.redis.flags import delete_key
+
+        await delete_key(f"{DEDUP_PREFIX}{dedup_key}")
+
     async def _send(self, chat_id: int, text: str, **kwargs: Any) -> bool:
         try:
             await self._bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", **kwargs)
@@ -111,6 +121,8 @@ class TelegramNotifier:
         for admin_id in list(getattr(self.settings, "ADMINS", None) or []):
             if await self._send(int(admin_id), body, **extra):
                 delivered += 1
+        if delivered == 0:
+            await self._dedup_release(dedup_key)
         return delivered
 
     async def notify_user(
@@ -128,4 +140,7 @@ class TelegramNotifier:
         extra: dict[str, Any] = {}
         if reply_markup is not None:
             extra["reply_markup"] = reply_markup
-        return await self._send(int(telegram_id), text if html else h(text), **extra)
+        ok = await self._send(int(telegram_id), text if html else h(text), **extra)
+        if not ok:
+            await self._dedup_release(dedup_key)
+        return ok

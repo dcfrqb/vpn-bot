@@ -82,6 +82,36 @@ async def test_dedup_fail_open_without_redis():
         assert await n.notify_admins(AdminTopic.PANEL, "x", dedup_key="k") == 1
 
 
+async def test_dedup_released_on_failed_send_admins(redis):
+    bot, s = make_bot()
+    n = TelegramNotifier(bot, cfg(ADMINS=[1]))
+    s.fail["SendMessage"] = RuntimeError("forbidden")
+    assert await n.notify_admins(AdminTopic.PANEL, "x", dedup_key="k") == 0
+    assert "notify:k" not in redis.store
+    del s.fail["SendMessage"]
+    assert await n.notify_admins(AdminTopic.PANEL, "x", dedup_key="k") == 1
+    assert "notify:k" in redis.store
+
+
+async def test_dedup_kept_on_successful_send_admins(redis):
+    bot, s = make_bot()
+    n = TelegramNotifier(bot, cfg(ADMINS=[1]))
+    assert await n.notify_admins(AdminTopic.PANEL, "x", dedup_key="k") == 1
+    assert "notify:k" in redis.store
+    assert await n.notify_admins(AdminTopic.PANEL, "x", dedup_key="k") == 0
+
+
+async def test_dedup_released_on_failed_send_user(redis):
+    bot, s = make_bot()
+    n = TelegramNotifier(bot, cfg())
+    s.fail["SendMessage"] = RuntimeError("forbidden")
+    assert await n.notify_user(5, "x", dedup_key="k") is False
+    assert "notify:k" not in redis.store
+    del s.fail["SendMessage"]
+    assert await n.notify_user(5, "x", dedup_key="k") is True
+    assert "notify:k" in redis.store
+
+
 async def test_notify_user_escapes_and_never_raises(redis):
     bot, s = make_bot()
     n = TelegramNotifier(bot, cfg())
