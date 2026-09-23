@@ -137,7 +137,7 @@ async def test_deep_link_without_buttons_sends_text_only():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(resp_body["text"])
+    message.answer.assert_awaited_once_with(resp_body["text"], parse_mode=None)
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_site_unreachable_fallback_text_no_exception():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT)
+    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT, parse_mode=None)
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_site_timeout_fallback_text_no_exception():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT)
+    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT, parse_mode=None)
 
 
 @pytest.mark.asyncio
@@ -179,7 +179,7 @@ async def test_non_200_status_fallback_text():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT)
+    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT, parse_mode=None)
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_bad_json_fallback_text():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT)
+    message.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_TEXT, parse_mode=None)
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_empty_token_feature_off_site_never_called():
         command = CommandObject(prefix="/", command="start", args="login_abcdefghijklmnop")
         await site_login.cmd_site_login(message, command)
 
-    message.answer.assert_awaited_once_with(site_login.FEATURE_OFF_TEXT)
+    message.answer.assert_awaited_once_with(site_login.FEATURE_OFF_TEXT, parse_mode=None)
     session.post.assert_not_called()
 
 
@@ -230,7 +230,7 @@ async def test_callback_posts_data_and_user_id_then_edits_message():
         "user_id": callback.from_user.id,
     }
     callback.answer.assert_awaited_once_with()
-    callback.message.edit_text.assert_awaited_once_with(resp_body["text"])
+    callback.message.edit_text.assert_awaited_once_with(resp_body["text"], parse_mode=None)
 
 
 @pytest.mark.asyncio

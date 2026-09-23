@@ -94,7 +94,7 @@ def _is_login_deep_link(message: types.Message, command: CommandObject) -> bool:
 async def cmd_site_login(message: types.Message, command: CommandObject) -> None:
     """Handler 1: /start login_<payload>."""
     if not settings.SITE_INTERNAL_TOKEN:
-        await message.answer(FEATURE_OFF_TEXT)
+        await message.answer(FEATURE_OFF_TEXT, parse_mode=None)
         return
 
     user = message.from_user
@@ -108,15 +108,15 @@ async def cmd_site_login(message: types.Message, command: CommandObject) -> None
     }
     data = await _post(CLAIM_PATH, body)
     if data is None:
-        await message.answer(SITE_UNAVAILABLE_TEXT)
+        await message.answer(SITE_UNAVAILABLE_TEXT, parse_mode=None)
         return
 
     text = data.get("text", "")
     buttons = data.get("buttons")
     if buttons:
-        await message.answer(text, reply_markup=_build_keyboard(buttons))
+        await message.answer(text, reply_markup=_build_keyboard(buttons), parse_mode=None)
     else:
-        await message.answer(text)
+        await message.answer(text, parse_mode=None)
 
 
 @router.callback_query(lambda c: c.data is not None and c.data.startswith("sitelogin:"))
@@ -134,4 +134,4 @@ async def cb_site_login(callback: types.CallbackQuery) -> None:
 
     text = data.get("text", "")
     await callback.answer()
-    await callback.message.edit_text(text)
+    await callback.message.edit_text(text, parse_mode=None)
