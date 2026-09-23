@@ -47,6 +47,7 @@ PACKED_SAMPLES = {
 LANDED_STREAMS = {
     "A",
     "E",
+    "D",
 }
 PENDING_PACKED = {k for k, owner in PACKED_SAMPLES.items() if owner not in LANDED_STREAMS}
 

@@ -23,11 +23,14 @@ import pytest
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from tests.fakes.bot import RecordingSession, callback_update, make_bot, message_update, user
+from tests.fakes.devices import FakeDevicesService
 from tests.fakes.notifier import RecordingNotifier
 from tests.fakes.payments import FakePaymentGateway
+from tests.fakes.promo import FakePromoService
 from tests.fakes.redis import FakeRedis
 from tests.fakes.remnawave import FakeRemnaGateway
 from tests.fakes.stars import FakeStarsGateway
+from tests.fakes.status import FakeStatusService
 
 
 @dataclass
@@ -40,6 +43,9 @@ class Flow:
     notifier: RecordingNotifier
     di: Any
     maintenance_mw: Any
+    status: FakeStatusService
+    devices_service: FakeDevicesService
+    promo: FakePromoService
     user: Any = field(default_factory=user)
 
     async def send(self, text: str, u: Optional[Any] = None):
@@ -77,17 +83,24 @@ def flow(_flow_bundle, monkeypatch):
     redis = FakeRedis()
     monkeypatch.setattr("app.services.cache.get_redis_client", lambda: redis)
     notifier = RecordingNotifier()
+    status = FakeStatusService()
+    devices_service = FakeDevicesService()
+    promo = FakePromoService()
     container = build_container(
         bot,
         remna=FakeRemnaGateway(),
         payments=FakePaymentGateway(),
         stars=FakeStarsGateway(),
         notifier=notifier,
+        status=status,
+        devices=devices_service,
+        promo=promo,
     )
     di.container = container
     mmw.guard = container.maintenance
     mmw.reset_cache()
     set_container(container)
     yield Flow(dp=dp, bot=bot, session=session, container=container, redis=redis,
-               notifier=notifier, di=di, maintenance_mw=mmw)
+               notifier=notifier, di=di, maintenance_mw=mmw,
+               status=status, devices_service=devices_service, promo=promo)
     mmw.reset_cache()
