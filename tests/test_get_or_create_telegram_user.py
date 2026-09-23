@@ -10,6 +10,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_remna_link_write():
+    """Фикс B1: get_or_create_telegram_user после upsert пишет связь с панелью
+    отдельным запросом (persist_remna_link, свои тесты в test_fixround3_b1_b2.py).
+    Здесь проверяется только upsert, поэтому запись связи заглушена."""
+    with patch("app.services.remna_service.persist_remna_link", new=AsyncMock(return_value=True)):
+        yield
+
+
 @pytest.fixture
 def mock_session_factory():
     """

@@ -732,9 +732,12 @@ async def resync_subscription_to_remnawave(
             await _mark_provisioning_failed(session, subscription.id, f"resync sync error: {e}", trace_id)
             return False
 
-        # Перечитываем подписку (могла обновиться внутри get_or_create_...)
+        # Перечитываем подписку (могла обновиться внутри get_or_create_...).
+        # populate_existing: иначе identity map отдаст устаревший объект (фикс B1).
         sub_r = await session.execute(
-            select(Subscription).where(Subscription.id == subscription_id)
+            select(Subscription)
+            .where(Subscription.id == subscription_id)
+            .execution_options(populate_existing=True)
         )
         subscription = sub_r.scalar_one_or_none()
         if not subscription:
@@ -743,9 +746,9 @@ async def resync_subscription_to_remnawave(
         remna_user_id = subscription.remna_user_id
         if not remna_user_id:
             tg_r = await session.execute(
-                select(TelegramUser).where(
-                    TelegramUser.telegram_id == subscription.telegram_user_id
-                )
+                select(TelegramUser)
+                .where(TelegramUser.telegram_id == subscription.telegram_user_id)
+                .execution_options(populate_existing=True)
             )
             tg = tg_r.scalar_one_or_none()
             remna_user_id = tg.remna_user_id if tg else None
@@ -1263,34 +1266,53 @@ async def handle_successful_payment(
             # Первая попытка по этому платежу (либо новый платёж после synced подписки).
             # Целевая дата = max(now, текущий expireAt в Remnawave) + period.
             # Учитываем текущее состояние Remnawave чтобы не сократить уже накопленный срок.
+            # Фикс B2: если id панели у нас не записан (юзер с /start, /trial,
+            # промо или гранта до фикса B1), ищем его по telegramId, как Phase B.
+            # Раньше в этом случае база была now, и остаток триала/промо сгорал.
             base = datetime.utcnow()
-            if telegram_user.remna_user_id:
+            try:
+                _client_peek = RemnaClient()
                 try:
-                    _client_peek = RemnaClient()
-                    try:
+                    if telegram_user.remna_user_id:
                         _peek = await _client_peek.get_user_by_id(str(telegram_user.remna_user_id))
-                    finally:
-                        try:
-                            await _client_peek.close()
-                        except Exception:
-                            pass
-                    _raw = _peek.get("response", _peek) if isinstance(_peek, dict) else {}
-                    if not isinstance(_raw, dict):
-                        _raw = {}
-                    _expire_raw = _raw.get("expireAt")
-                    if _expire_raw:
-                        _es = str(_expire_raw).replace("Z", "+00:00")
-                        _curr = datetime.fromisoformat(_es)
-                        if _curr.tzinfo is not None:
-                            _curr = _curr.astimezone(timezone.utc).replace(tzinfo=None)
-                        if _curr > base:
-                            base = _curr
-                            logger.info(
-                                f"[{trace_id}] extending from current remna expireAt: "
-                                f"tg_id={telegram_user_id} current={_curr.isoformat()}"
-                            )
-                except Exception as _peek_e:
-                    logger.debug(f"[{trace_id}] could not peek remna expireAt: {_peek_e}")
+                    else:
+                        _found = await _client_peek.get_user_by_telegram_id(telegram_user_id)
+                        _peek = dict(_found.raw_data or {}) if _found else {}
+                finally:
+                    try:
+                        await _client_peek.close()
+                    except Exception:
+                        pass
+                _raw = _peek.get("response", _peek) if isinstance(_peek, dict) else {}
+                if not isinstance(_raw, dict):
+                    _raw = {}
+                _expire_raw = _raw.get("expireAt")
+                if _expire_raw:
+                    _es = str(_expire_raw).replace("Z", "+00:00")
+                    _curr = datetime.fromisoformat(_es)
+                    if _curr.tzinfo is not None:
+                        _curr = _curr.astimezone(timezone.utc).replace(tzinfo=None)
+                    if _curr > base:
+                        base = _curr
+                        logger.info(
+                            f"[{trace_id}] extending from current remna expireAt: "
+                            f"tg_id={telegram_user_id} current={_curr.isoformat()}"
+                        )
+            except Exception as _peek_e:
+                logger.debug(f"[{trace_id}] could not peek remna expireAt: {_peek_e}")
+            # Фикс B2: активная оплаченная подписка в БД тоже база (панель не
+            # ответила на чтение, а срок у юзера есть: не начинаем с now).
+            if (
+                existing_sub is not None
+                and existing_sub.active
+                and existing_sub.valid_until is not None
+                and existing_sub.valid_until > base
+            ):
+                base = existing_sub.valid_until
+                logger.info(
+                    f"[{trace_id}] extending from DB valid_until: "
+                    f"tg_id={telegram_user_id} current={base.isoformat()}"
+                )
             valid_until = base + relativedelta(months=period_months)
 
         # ===================== PHASE A: persist intent =====================
@@ -1362,13 +1384,21 @@ async def handle_successful_payment(
 
         # Перечитываем подписку и telegram_user — get_or_create_... мог изменить
         # remna_user_id и subscription.config_data в своей сессии.
+        # Фикс B1: объекты уже лежат в identity map этой сессии (expire_on_commit=False),
+        # обычный SELECT вернул бы их со старыми атрибутами, и remna_user_id, записанный
+        # Phase B в своей сессии, был бы не виден: первая оплата нового клиента
+        # помечалась failed при уже обновленной панели. populate_existing перечитывает.
         subscription_id_for_failure = subscription.id  # сохраняем до reload, на случай гонки
         sub_r = await session.execute(
-            select(Subscription).where(Subscription.id == subscription_id_for_failure)
+            select(Subscription)
+            .where(Subscription.id == subscription_id_for_failure)
+            .execution_options(populate_existing=True)
         )
         subscription = sub_r.scalar_one_or_none()
         tg_r = await session.execute(
-            select(TelegramUser).where(TelegramUser.telegram_id == telegram_user_id)
+            select(TelegramUser)
+            .where(TelegramUser.telegram_id == telegram_user_id)
+            .execution_options(populate_existing=True)
         )
         telegram_user = tg_r.scalar_one_or_none()
 

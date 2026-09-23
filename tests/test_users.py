@@ -12,6 +12,15 @@ from app.services.users import (
 from app.db.models import TelegramUser, Subscription
 
 
+@pytest.fixture(autouse=True)
+def _no_remna_link_write():
+    """Фикс B1: get_or_create_telegram_user после upsert пишет связь с панелью
+    отдельным запросом (persist_remna_link, свои тесты в test_fixround3_b1_b2.py).
+    Здесь проверяется только upsert, поэтому запись связи заглушена."""
+    with patch("app.services.remna_service.persist_remna_link", new=AsyncMock(return_value=True)):
+        yield
+
+
 # Хотфикс 2.1 (чистка тестов по 08 §3): прежние 4 теста патчили
 # app.services.users.SessionLocal и проверяли ORM-версию функций (session.add,
 # чтение подписки из БД). Сейчас get_or_create_telegram_user делает upsert

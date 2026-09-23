@@ -333,6 +333,11 @@ async def get_or_create_telegram_user(
                     stmt = stmt.on_conflict_do_nothing(index_elements=["telegram_id"])
                 await session.execute(stmt)
                 await session.commit()
+            # Фикс B1: новый юзер получает строку telegram_users только сейчас,
+            # поэтому связь с панелью пишем после upsert (только если там NULL).
+            if remna_user_id:
+                from app.services.remna_service import persist_remna_link
+                await persist_remna_link(telegram_id, remna_user_id)
     except Exception as e:
         logger.warning(
             f"get_or_create_telegram_user db-upsert soft-fail tg_id={telegram_id}: {e}"

@@ -84,6 +84,53 @@ TARIFF_TO_DAYS = {
 }
 
 
+async def persist_remna_link(
+    telegram_id: int,
+    remna_user_id,
+    username: Optional[str] = None,
+    raw_data=None,
+) -> bool:
+    """Записать в БД id юзера панели: строка remna_users (FK) и
+    telegram_users.remna_user_id, только если там еще NULL (чужую или более
+    раннюю привязку не перезаписываем). Uuid и прочие поля панели лежат в
+    remna_users.raw_data. Строку telegram_users не создает. Любая ошибка БД
+    глушится: выдача и /start от нее не зависят. True, если запись прошла.
+
+    Фикс B1: раньше id писал только путь оплаты, у нового клиента он был NULL,
+    и первая оплата помечалась failed.
+    """
+    if not remna_user_id:
+        return False
+    try:
+        from sqlalchemy import update
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from app.db import session as _db_session
+        from app.db.models import RemnaUser as RemnaUserRow, TelegramUser
+
+        session_factory = _db_session.SessionLocal
+        if session_factory is None:
+            return False
+        rid = str(remna_user_id)
+        values = {"remna_id": rid, "username": username}
+        if isinstance(raw_data, dict):
+            values["raw_data"] = raw_data
+        async with session_factory() as session:
+            await session.execute(
+                pg_insert(RemnaUserRow).values(**values).on_conflict_do_nothing(index_elements=["remna_id"])
+            )
+            await session.execute(
+                update(TelegramUser)
+                .where(TelegramUser.telegram_id == int(telegram_id), TelegramUser.remna_user_id.is_(None))
+                .values(remna_user_id=rid)
+            )
+            await session.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"persist_remna_link soft-fail tg_id={telegram_id} remna_id={remna_user_id}: {e}")
+        return False
+
+
 async def ensure_user_in_remnawave(
     telegram_id: int,
     username: Optional[str] = None,
@@ -109,6 +156,13 @@ async def ensure_user_in_remnawave(
                 tg_last_name=tg_last_name,
             ),
             timeout=REMNAWAVE_CALL_TIMEOUT,
+        )
+        # Фикс B1: связь tg -> юзер панели пишем в БД сразу (/start, промо,
+        # триал, гранты), а не только при оплате.
+        await persist_remna_link(
+            telegram_id, user.uuid,
+            username=getattr(user, "username", None),
+            raw_data=getattr(user, "raw_data", None),
         )
         return user.uuid
     except asyncio.TimeoutError:
