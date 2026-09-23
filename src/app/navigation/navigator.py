@@ -365,6 +365,14 @@ class Navigator:
         """Получает копию backstack пользователя"""
         return self._backstacks.get(user_id, []).copy()
 
+    def reset_to(self, user_id: int, screen_id: ScreenID) -> None:
+        """Жесткий сброс навигации юзера: пустой backstack, без flow anchor,
+        текущий экран = screen_id. Публичная замена прямых записей в
+        приватное состояние (/start, «В главное меню»)."""
+        self.clear_backstack(user_id)
+        self.clear_flow_anchor(user_id)
+        self._set_current_screen(user_id, screen_id)
+
 
 # Singleton instance
 _navigator: Optional[Navigator] = None

@@ -68,9 +68,7 @@ async def cmd_start(m: types.Message):
     )
     
     # HARD RESET: ВСЕГДА очищаем состояние
-    navigator.clear_backstack(telegram_id)
-    navigator.clear_flow_anchor(telegram_id)
-    navigator._set_current_screen(telegram_id, ScreenID.MAIN_MENU)
+    navigator.reset_to(telegram_id, ScreenID.MAIN_MENU)
 
     # Гарантируем строку в `telegram_users` — нужна для FK-зависимых
     # таблиц (payments, subscriptions, access_requests, broadcast_recipients).
@@ -673,14 +671,9 @@ async def back_to_main(callback: types.CallbackQuery):
     navigator = get_navigator()
     screen_manager = get_screen_manager()
 
-    navigator.clear_backstack(user_id)
-    navigator.clear_flow_anchor(user_id)
-    navigator._set_current_screen(user_id, ScreenID.MAIN_MENU)
-    try:
-        screen_manager._set_current_screen(user_id, ScreenID.MAIN_MENU)
-        screen_manager._backstacks.pop(user_id, None)
-    except Exception as e:
-        logger.debug(f"back_to_main: screen_manager state sync soft-fail: {e}")
+    # Сброс обоих хранилищ навигации (Navigator + ScreenManager) одним вызовом.
+    navigator.reset_to(user_id, ScreenID.MAIN_MENU)
+    screen_manager.reset_to(user_id, ScreenID.MAIN_MENU)
 
     viewmodel = await get_main_menu_viewmodel(
         telegram_id=user_id,

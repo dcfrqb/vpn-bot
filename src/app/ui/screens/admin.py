@@ -75,6 +75,9 @@ class AdminStatsScreen(BaseScreen):
         user_id: Optional[int]
     ) -> bool:
         """Обрабатывает действия экрана (refresh - обновление статистики)"""
+        if not (user_id and is_admin(user_id)):
+            logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
+            return False
         from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_statistics
         
@@ -141,6 +144,9 @@ class AdminUsersScreen(BaseScreen):
         action_type=None
     ) -> bool:
         """Обрабатывает действия экрана (page - пагинация с использованием Pagination)"""
+        if not (user_id and is_admin(user_id)):
+            logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
+            return False
         from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_users_list
         from app.core.pagination import Pagination
@@ -250,6 +256,9 @@ class AdminPaymentsScreen(BaseScreen):
         action_type=None
     ) -> bool:
         """Обрабатывает действия экрана (page - пагинация, filter - фильтрация с использованием Pagination)"""
+        if not (user_id and is_admin(user_id)):
+            logger.warning(f"admin screen action denied: user_id={user_id} action={action}")
+            return False
         from app.ui.screen_manager import get_screen_manager
         from app.services.stats import get_payments_list
         from app.core.pagination import Pagination

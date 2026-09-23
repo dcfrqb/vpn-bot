@@ -48,7 +48,7 @@ async def test_back_to_main_shows_main_menu_without_name_error():
     assert kwargs["edit"] is True
     assert kwargs["viewmodel"] is vm
     assert navigator.get_current_screen(cb.from_user.id) == ScreenID.MAIN_MENU
-    assert cb.from_user.id not in fake_sm._backstacks
+    fake_sm.reset_to.assert_called_once_with(cb.from_user.id, ScreenID.MAIN_MENU)
 
 
 def test_no_undefined_names_in_src():

@@ -20,6 +20,15 @@ from app.ui.action_types import ActionType, get_action_type
 from app.ui.action_map import ACTION_MAP, get_action_effect, is_action_allowed
 from app.config import is_admin
 
+# Экраны, любые действия на которых доступны только админам (05 S-7).
+ADMIN_SCREEN_IDS = frozenset({
+    ScreenID.ADMIN_PANEL,
+    ScreenID.ADMIN_STATS,
+    ScreenID.ADMIN_USERS,
+    ScreenID.ADMIN_PAYMENTS,
+    ScreenID.ADMIN_GRANTS,
+})
+
 
 class ScreenManager:
     """Менеджер экранов - централизованное управление отображением"""
@@ -535,6 +544,17 @@ class ScreenManager:
     def _set_current_screen(self, user_id: int, screen_id: ScreenID):
         """Устанавливает текущий экран пользователя"""
         self._current_screens[user_id] = screen_id
+
+    def reset_to(self, user_id: int, screen_id: ScreenID) -> None:
+        """Сбрасывает состояние ScreenManager И Navigator юзера на screen_id.
+
+        Два хранилища навигации синхронизируются здесь, в одном месте, а не
+        записью в приватные поля из роутеров (review A-m8 / F3).
+        """
+        self._backstacks.pop(user_id, None)
+        self._flow_anchors.pop(user_id, None)
+        self._set_current_screen(user_id, screen_id)
+        get_navigator().reset_to(user_id, screen_id)
     
     async def navigate(
         self,
@@ -662,6 +682,21 @@ class ScreenManager:
             f"action={action}, payload={payload}, user_id={user_id}, backstack_size={backstack_size}"
         )
         
+        # ШАГ 1.5: админские экраны только для админов (05 S-7). Любое действие
+        # (включая STATE page/filter, которые не проходят проверку навигации)
+        # от не-админа отбрасывается без ответа данными.
+        if screen_id in ADMIN_SCREEN_IDS and not (user_id and is_admin(user_id)):
+            logger.warning(
+                f"[UI ACTION DENIED] request_id={request_id} non-admin user_id={user_id} "
+                f"screen_id={screen_id.value} action={action}"
+            )
+            if isinstance(message_or_callback, types.CallbackQuery):
+                try:
+                    await message_or_callback.answer("Недостаточно прав", show_alert=False)
+                except Exception:
+                    pass
+            return False
+
         # ШАГ 2: ПРОВЕРЯЕМ action разрешен для screen_id
         action_effect = get_action_effect(screen_id, action)
         if not action_effect:
