@@ -747,7 +747,22 @@ class RemnaClient:
             if isinstance(user_data, dict) and 'users' in user_data:
                 user_data = user_data['users']
 
-            # API может вернуть список пользователей или одного
+            # Ревью m-2: не доверяем фильтру панели. Если апгрейд панели
+            # проигнорирует/переименует telegramId, stream вернет чужих юзеров,
+            # и «лучший» из них был бы привязан к звонящему (захват аккаунта).
+            if isinstance(user_data, dict) and user_data:
+                user_data = [user_data]
+            if isinstance(user_data, list):
+                matched = [
+                    u for u in user_data
+                    if isinstance(u, dict) and str(u.get("telegramId")) == str(telegram_id)
+                ]
+                if len(matched) != len(user_data):
+                    logger.warning(
+                        f"Remnawave stream?telegramId={telegram_id} вернул "
+                        f"{len(user_data) - len(matched)} юзеров с чужим telegramId, отброшены"
+                    )
+                user_data = matched
             if isinstance(user_data, list):
                 if not user_data:
                     logger.debug(f"Пользователь telegram_id={telegram_id} не найден в Remna")

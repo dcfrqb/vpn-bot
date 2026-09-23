@@ -3,6 +3,7 @@ FastAPI приложение — webhook ЮKassa.
 Полноценная обработка: IP whitelist, идемпотентность, provision.
 Webhook используется только как триггер — статус платежа всегда верифицируется через YooKassa API.
 """
+import functools
 import ipaddress
 
 from fastapi import FastAPI, Request, HTTPException
@@ -14,29 +15,71 @@ from aiogram.client.default import DefaultBotProperties
 from app.config import settings
 from app.logger import logger
 
-# IP-диапазоны YooKassa (https://yookassa.ru/developers/using-api/webhooks)
+# IP-адреса YooKassa. Сверено с https://yookassa.ru/developers/using-api/webhooks
+# 23.09.2026: пять сетей и два одиночных адреса 77.75.156.11 и 77.75.156.35
+# (одиночных раньше не было в списке).
 _YOOKASSA_NETWORKS = [
     ipaddress.ip_network("185.71.76.0/27"),
     ipaddress.ip_network("185.71.77.0/27"),
     ipaddress.ip_network("77.75.153.0/25"),
     ipaddress.ip_network("77.75.154.128/25"),
+    ipaddress.ip_network("77.75.156.11/32"),
+    ipaddress.ip_network("77.75.156.35/32"),
     ipaddress.ip_network("2a02:5180::/32"),
 ]
 
+DOCKER_GATEWAY_TOKEN = "docker-gateway"
+_PROC_NET_ROUTE = "/proc/net/route"
 
-def _trusted_proxy_networks() -> list:
-    """Сети, от которых принимаем X-Real-IP (локальный nginx / docker-шлюз)."""
-    raw = getattr(settings, "WEBHOOK_TRUSTED_PROXIES", None) or ""
+
+def _docker_default_gateway(route_file: str = _PROC_NET_ROUTE) -> str | None:
+    """IPv4 шлюза по умолчанию внутри контейнера (адрес docker-моста).
+
+    Nginx на хосте ходит на опубликованный 127.0.0.1:8001, и docker-proxy/NAT
+    приводит соединение в контейнер именно с адреса шлюза сети compose.
+    Вне Linux/контейнера файла нет -> None.
+    """
+    try:
+        with open(route_file) as f:
+            next(f, None)
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3 and fields[1] == "00000000":
+                    gw = int(fields[2], 16)
+                    if gw == 0:
+                        continue
+                    return str(ipaddress.IPv4Address(gw.to_bytes(4, "little")))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_trusted_proxies(raw: str) -> tuple:
     nets = []
     for part in str(raw).split(","):
         part = part.strip()
         if not part:
             continue
+        if part == DOCKER_GATEWAY_TOKEN:
+            gw = _docker_default_gateway()
+            if gw:
+                nets.append(ipaddress.ip_network(f"{gw}/32"))
+            else:
+                logger.info("WEBHOOK_TRUSTED_PROXIES: docker-gateway не определен (не в контейнере?)")
+            continue
         try:
             nets.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
             logger.warning(f"WEBHOOK_TRUSTED_PROXIES: пропускаю невалидную сеть {part!r}")
-    return nets
+    return tuple(nets)
+
+
+def _trusted_proxy_networks() -> list:
+    """Адреса, от которых принимаем X-Real-IP: localhost и шлюз docker-сети
+    (через него приходит nginx хоста). Раньше доверяли всем частным сетям, и
+    любой соседний контейнер мог подставить X-Real-IP (ревью m-1)."""
+    return list(_parse_trusted_proxies(settings.WEBHOOK_TRUSTED_PROXIES or ""))
 
 
 def _get_client_ip(request: Request) -> str | None:

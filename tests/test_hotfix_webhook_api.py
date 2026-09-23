@@ -21,13 +21,59 @@ def test_spoofed_headers_from_internet_are_ignored():
     assert not api_main._is_yookassa_ip(api_main._get_client_ip(req))
 
 
-def test_behind_local_nginx_only_x_real_ip_counts():
+@pytest.fixture
+def docker_gateway_172_18():
+    """Как в контейнере: шлюз сети compose 172.18.0.1 (фикс-раунд 1: доверяем
+    только ему и localhost, а не всем частным сетям)."""
+    api_main._parse_trusted_proxies.cache_clear()
+    with patch.object(api_main, "_docker_default_gateway", return_value="172.18.0.1"):
+        yield
+    api_main._parse_trusted_proxies.cache_clear()
+
+
+def test_behind_local_nginx_only_x_real_ip_counts(docker_gateway_172_18):
     # nginx на хосте -> контейнер видит docker-шлюз 172.18.0.1
     req = _req("172.18.0.1", {"CF-Connecting-IP": "185.71.76.1", "X-Forwarded-For": "185.71.76.1",
                               "X-Real-IP": "203.0.113.9"})
     assert api_main._get_client_ip(req) == "203.0.113.9"
     req = _req("172.18.0.1", {"X-Real-IP": "185.71.76.5"})
     assert api_main._is_yookassa_ip(api_main._get_client_ip(req))
+
+
+def test_other_container_on_bridge_is_not_trusted(docker_gateway_172_18):
+    # соседний контейнер (не шлюз) не может подставить X-Real-IP
+    req = _req("172.18.0.5", {"X-Real-IP": "185.71.76.5"})
+    assert api_main._get_client_ip(req) == "172.18.0.5"
+    assert not api_main._is_yookassa_ip(api_main._get_client_ip(req))
+    for peer in ("10.1.2.3", "192.168.1.10"):
+        assert api_main._get_client_ip(_req(peer, {"X-Real-IP": "185.71.76.5"})) == peer
+
+
+def test_localhost_is_trusted_without_docker(monkeypatch):
+    api_main._parse_trusted_proxies.cache_clear()
+    with patch.object(api_main, "_docker_default_gateway", return_value=None):
+        assert api_main._get_client_ip(_req("127.0.0.1", {"X-Real-IP": "185.71.77.3"})) == "185.71.77.3"
+        assert api_main._get_client_ip(_req("172.18.0.1", {"X-Real-IP": "185.71.77.3"})) == "172.18.0.1"
+    api_main._parse_trusted_proxies.cache_clear()
+
+
+def test_docker_gateway_from_proc_route(tmp_path):
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "eth0\t00000000\t010012AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+        "eth0\t000012AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n"
+    )
+    assert api_main._docker_default_gateway(str(route)) == "172.18.0.1"
+    assert api_main._docker_default_gateway(str(tmp_path / "missing")) is None
+
+
+@pytest.mark.parametrize("ip,ok", [
+    ("77.75.156.11", True), ("77.75.156.35", True), ("77.75.156.12", False),
+    ("185.71.76.31", True), ("185.71.76.32", False), ("2a02:5180::1", True),
+])
+def test_yookassa_allowlist_matches_official_list(ip, ok):
+    assert api_main._is_yookassa_ip(ip) is ok
 
 
 def test_docs_disabled():

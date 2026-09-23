@@ -55,9 +55,27 @@ def test_duplicate_telegram_id_prefers_active_latest():
 async def test_lookup_returns_primary_of_duplicates():
     client = RemnaClient()
     resp = {"response": {"users": [
-        {"id": 1001, "status": "ACTIVE", "expireAt": "2000-01-01T00:00:00Z", "username": "tg_test_user_a"},
-        {"id": 1002, "status": "ACTIVE", "expireAt": "2026-12-01T00:00:00Z", "username": "tg_test_user_b"},
+        {"id": 1001, "status": "ACTIVE", "expireAt": "2000-01-01T00:00:00Z", "username": "tg_test_user_a", "telegramId": 900000001},
+        {"id": 1002, "status": "ACTIVE", "expireAt": "2026-12-01T00:00:00Z", "username": "tg_test_user_b", "telegramId": 900000001},
     ]}}
     with patch.object(client, "request", AsyncMock(return_value=resp)):
         user = await client.get_user_by_telegram_id(900000001)
     assert user.uuid == "1002"
+
+
+@pytest.mark.asyncio
+async def test_lookup_ignores_users_with_foreign_telegram_id():
+    """Фикс-раунд 1 (ревью m-2): панель проигнорировала фильтр и вернула всех."""
+    client = RemnaClient()
+    resp = {"response": {"users": [
+        {"id": 1004, "status": "ACTIVE", "expireAt": "2099-01-01T00:00:00Z", "telegramId": 900000009},
+        {"id": 1005, "status": "ACTIVE", "expireAt": "2026-12-01T00:00:00Z", "telegramId": None},
+    ]}}
+    with patch.object(client, "request", AsyncMock(return_value=resp)):
+        assert await client.get_user_by_telegram_id(900000001) is None
+        assert await client.get_user_by_telegram_id(900000001, strict=True) is None
+    resp["response"]["users"].append(
+        {"id": 1006, "status": "EXPIRED", "expireAt": "2025-01-01T00:00:00Z", "telegramId": "900000001"})
+    with patch.object(client, "request", AsyncMock(return_value=resp)):
+        user = await client.get_user_by_telegram_id(900000001)
+    assert user.uuid == "1006"
