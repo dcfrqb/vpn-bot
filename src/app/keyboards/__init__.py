@@ -78,7 +78,7 @@ def get_payment_method_keyboard(plan_code: str, period_months: int = 1, amount: 
     keyboard = [
         [types.InlineKeyboardButton(
             text="💳 Оплатить картой (Yookassa)",
-            callback_data=f"pay_yookassa_{plan_code}_{period_months}_{amount}"
+            callback_data=f"pay_yookassa_{plan_code}_{period_months}"  # цену считает сервер
         )],
         [types.InlineKeyboardButton(
             text="⬅️ Назад",

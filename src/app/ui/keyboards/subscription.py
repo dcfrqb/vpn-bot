@@ -114,9 +114,9 @@ async def build_subscription_plan_detail_keyboard(
         keyboard.append([
             types.InlineKeyboardButton(
                 text="💳 Оплатить картой (Yookassa)",
+                # Только plan+months: цену считает сервер (хотфикс 2.1).
                 callback_data=(
-                    f"pay_yookassa_{viewmodel.plan_code}_"
-                    f"{viewmodel.period_months}_{viewmodel.amount}"
+                    f"pay_yookassa_{viewmodel.plan_code}_{viewmodel.period_months}"
                 ),
             )
         ])

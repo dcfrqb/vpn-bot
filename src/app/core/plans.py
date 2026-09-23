@@ -284,3 +284,35 @@ def get_plan_features(plan_code: Optional[str]) -> list[str]:
     return list(meta["features"]) if meta else []
 
 
+
+
+# =============================================================================
+# Серверная цена покупки (хотфикс 2.1: цена никогда не берется из callback_data)
+# =============================================================================
+
+
+def get_expected_amount(plan_code: Optional[str], period_months: Optional[int]) -> int:
+    """Цена в RUB, которую сервер ждет за покупку plan_code/period_months.
+
+    - Тариф из PLAN_CATALOG: цена периода (0 если период не продается, например trial).
+    - Пакет обхода: цена пакета (период пакета фиксирован каталогом).
+    - Иначе 0 (неизвестная покупка, продавать нельзя).
+    """
+    package = get_obhod_package(plan_code)
+    if package is not None:
+        return int(package.get("price") or 0)
+    try:
+        months = int(period_months) if period_months is not None else 0
+    except (TypeError, ValueError):
+        return 0
+    if months <= 0:
+        return 0
+    return get_plan_price(plan_code, months)
+
+
+def amounts_match(paid: float, expected: float) -> bool:
+    """Сравнение сумм в рублях с допуском на копейки float."""
+    try:
+        return abs(float(paid) - float(expected)) < 0.01
+    except (TypeError, ValueError):
+        return False

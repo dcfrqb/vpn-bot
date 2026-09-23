@@ -82,6 +82,10 @@ async def retry_needs_provisioning(bot) -> Dict[str, Any]:
     candidates = []
     for payment in payments:
         meta = payment.payment_metadata or {}
+        # Платежи на ручной проверке (сумма не совпала с прайсом) не ретраим,
+        # пока админ явно не одобрил (review_approved=true).
+        if isinstance(meta, dict) and meta.get("needs_review") and not meta.get("review_approved"):
+            continue
         has_needs_provisioning = isinstance(meta, dict) and meta.get("needs_provisioning")
         is_old_enough = payment.created_at < fallback_threshold if payment.created_at else False
         is_unprovisioned = payment in payments_case3
@@ -209,6 +213,11 @@ async def recheck_single_payment(
         result["error"] = "not_found"
         return result
 
+    _pmeta = payment.payment_metadata if isinstance(payment.payment_metadata, dict) else {}
+    if _pmeta.get("needs_review") and not _pmeta.get("review_approved"):
+        result["status"] = "review"
+        return result
+
     if payment.status == "succeeded" and payment.subscription_id:
         logger.info(f"[{trace_id}] recheck_single: already done external_id={external_id} tg_user={payment.telegram_user_id}")
         result["status"] = "succeeded"
@@ -279,7 +288,7 @@ async def recheck_single_payment(
                 result["provisioned"] = False
             else:
                 try:
-                    await handle_successful_payment(
+                    outcome = await handle_successful_payment(
                         session=session,
                         payment_id=p.id,
                         telegram_user_id=p.telegram_user_id,
@@ -288,6 +297,11 @@ async def recheck_single_payment(
                         bot=bot,
                         trace_id=trace_id,
                     )
+                    if outcome == "review":
+                        result["provisioned"] = False
+                        result["updated"] = True
+                        result["status"] = "review"
+                        return result
                     result["provisioned"] = True
                     logger.info(f"[{trace_id}] recheck_single: provisioned external_id={external_id} tg_user={p.telegram_user_id}")
                 except ProvisioningPendingError as ppe:

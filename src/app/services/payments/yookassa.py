@@ -107,6 +107,17 @@ async def create_payment(
             )
             raise ValueError("Оплата недоступна для этого аккаунта")
 
+        # Хотфикс 2.1: сумма обязана совпадать с прайсом. Любой caller (кнопка
+        # тарифа, пакет обхода) не может создать платеж с произвольной суммой.
+        from app.core.plans import amounts_match, get_expected_amount
+        expected_amount = get_expected_amount(plan_code, period_months)
+        if expected_amount <= 0 or not amounts_match(amount_rub, expected_amount):
+            logger.warning(
+                f"[{trace_id}] create_payment price mismatch: tg_id={user_id} plan={plan_code} "
+                f"period={period_months} amount={amount_rub} expected={expected_amount}"
+            )
+            raise ValueError("Тариф недоступен для покупки")
+
         if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_API_KEY:
             raise ValueError("YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены")
         
@@ -128,6 +139,9 @@ async def create_payment(
             metadata["period_months"] = str(period_months)
         if request_id:
             metadata["request_id"] = str(request_id)
+        # Цена по прайсу на момент создания: вебхук сверяет оплаченную сумму с ней
+        # (или с текущим прайсом), чтобы смена цен не ломала платежи «в полете».
+        metadata["expected_amount"] = str(int(expected_amount))
         
         payment_data = {
             "amount": {"value": f"{amount_rub}.00", "currency": "RUB"},
@@ -173,6 +187,7 @@ async def create_payment(
             "trace_id": trace_id,
             "plan_code": plan_code,
             "period_months": period_months,
+            "expected_amount": int(expected_amount),
         }
         
         for attempt in range(2):
@@ -435,6 +450,8 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                     meta["trace_id"] = trace_id
                     meta["plan_code"] = metadata.get("plan_code")
                     meta["period_months"] = metadata.get("period_months")
+                    if metadata.get("expected_amount") is not None:
+                        meta["expected_amount"] = metadata.get("expected_amount")
                     new_payment = PaymentModel(
                         telegram_user_id=telegram_user_id,
                         provider="yookassa",
@@ -718,6 +735,109 @@ async def resync_subscription_to_remnawave(
         return True
 
 
+def _price_mismatch_reason(
+    plan_code: Optional[str],
+    period_months: Optional[int],
+    amount: float,
+    currency: Optional[str],
+    meta: Any,
+) -> Optional[str]:
+    """None если оплаченная сумма совпадает с прайсом, иначе причина для ревью.
+
+    Допустимые суммы: текущая цена по каталогу ИЛИ expected_amount, записанный
+    сервером в metadata при создании платежа (create_payment сам сверяет его с
+    каталогом, так что клиент на него не влияет). Второе нужно, чтобы смена
+    цен не отправляла на ревью платежи, созданные до смены.
+    """
+    from app.core.plans import amounts_match, get_expected_amount
+
+    if currency and str(currency).upper() != "RUB":
+        return f"currency={currency!r} (ожидали RUB)"
+    candidates = []
+    catalog = get_expected_amount(plan_code, period_months)
+    if catalog > 0:
+        candidates.append(catalog)
+    if isinstance(meta, dict) and meta.get("expected_amount") not in (None, ""):
+        try:
+            recorded = int(float(meta.get("expected_amount")))
+            if recorded > 0:
+                candidates.append(recorded)
+        except (TypeError, ValueError):
+            pass
+    if not candidates:
+        return f"нет цены в прайсе для plan={plan_code!r} period={period_months!r}"
+    if any(amounts_match(amount, c) for c in candidates):
+        return None
+    return (
+        f"сумма {amount} не совпадает с прайсом {sorted(set(candidates))} "
+        f"для plan={plan_code!r} period={period_months!r}"
+    )
+
+
+async def _hold_payment_for_review(
+    session,
+    payment,
+    telegram_user_id: int,
+    reason: str,
+    bot,
+    trace_id: str,
+) -> None:
+    """Платеж не провижиним: помечаем needs_review и один раз шлем алерт админам и юзеру.
+
+    Снять с ревью может только человек: выставить payment_metadata.review_approved=true
+    (тогда recovery/кнопка проверки проведут выдачу) или оформить возврат.
+    """
+    from html import escape as _he
+
+    meta = dict(payment.payment_metadata or {}) if isinstance(payment.payment_metadata, dict) else {}
+    already_alerted = bool(meta.get("review_alerted"))
+    meta["needs_review"] = True
+    meta["review_reason"] = reason[:500]
+    meta.setdefault("review_marked_at", datetime.utcnow().isoformat())
+    payment.payment_metadata = meta
+    await session.commit()
+    logger.error(
+        f"[{trace_id}] payment_held_for_review: payment_id={payment.id} "
+        f"external_id={payment.external_id} tg_id={telegram_user_id} reason={reason}"
+    )
+    if already_alerted:
+        return
+
+    alerted = False
+    admin_text = (
+        "🚨 <b>Платеж на ручной проверке</b>\n\n"
+        f"Payment ID: <code>{_he(str(payment.external_id))}</code>\n"
+        f"Telegram ID: <code>{telegram_user_id}</code>\n"
+        f"Сумма: {_he(str(payment.amount))} {_he(str(payment.currency or ''))}\n"
+        f"Причина: {_he(reason)}\n\n"
+        "Подписка НЕ выдана. Проверьте платеж: выдайте доступ вручную "
+        "(payment_metadata.review_approved=true) или оформите возврат."
+    )
+    for admin_id in (settings.ADMINS or []):
+        try:
+            await bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="HTML")
+            alerted = True
+        except Exception as e:
+            logger.warning(f"[{trace_id}] review alert to admin {admin_id} failed: {e}")
+    try:
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=(
+                "⏳ <b>Оплата получена</b>\n\n"
+                "Платеж передан на ручную проверку администратору. "
+                "Мы свяжемся с вами в ближайшее время."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.debug(f"[{trace_id}] review notice to user failed: {e}")
+    if alerted:
+        meta = dict(payment.payment_metadata or {})
+        meta["review_alerted"] = True
+        payment.payment_metadata = meta
+        await session.commit()
+
+
 async def handle_successful_payment(
     session,
     payment_id: int,
@@ -726,8 +846,11 @@ async def handle_successful_payment(
     description: str,
     bot,
     trace_id: Optional[str] = None,
-) -> None:
+) -> Optional[str]:
     """Обрабатывает успешный платеж: создает подписку и отправляет пользователю ссылку.
+
+    Возвращает "review", если платеж задержан на ручную проверку (сумма не
+    совпала с прайсом), иначе None.
 
     Фазы:
       A — записать intent: subscription с provisioning_state='pending', НЕ ставить
@@ -831,6 +954,15 @@ async def handle_successful_payment(
                 )
                 return
 
+            _reason = _price_mismatch_reason(
+                plan_code, period_months, amount, payment.currency, meta
+            )
+            if _reason and not (isinstance(meta, dict) and meta.get("review_approved")):
+                await _hold_payment_for_review(
+                    session, payment, telegram_user_id, _reason, bot, trace_id
+                )
+                return "review"
+
             applied = await apply_obhod_package(
                 session=session,
                 telegram_user_id=telegram_user_id,
@@ -912,6 +1044,17 @@ async def handle_successful_payment(
                 plan_code = "basic"
                 period_months = 1
         
+        # Хотфикс 2.1: оплаченная сумма обязана совпасть с прайсом. Иначе не
+        # провижиним (никаких «Pro на год за 1 ₽»), платеж уходит на ручную проверку.
+        _reason = _price_mismatch_reason(
+            plan_code, period_months, amount, payment.currency, meta
+        )
+        if _reason and not (isinstance(meta, dict) and meta.get("review_approved")):
+            await _hold_payment_for_review(
+                session, payment, telegram_user_id, _reason, bot, trace_id
+            )
+            return "review"
+
         # Определяем plan_name через единый каталог
         from app.core.plans import get_plan_name
         plan_name = get_plan_name(plan_code)

@@ -26,6 +26,58 @@ from sqlalchemy import select
 
 router = Router(name="legacy_payments")
 
+
+def parse_pay_callback(data: str):
+    """Разбирает pay_yookassa_* callback в (plan_code, period_months) или None.
+
+    Форматы:
+      pay_yookassa_{plan}_{months}           — текущий (с хотфикса 2.1);
+      pay_yookassa_{plan}_{months}_{amount}  — старый, сумма ИГНОРИРУЕТСЯ;
+      pay_yookassa_{plan}                    — самый старый (basic/premium), 1 месяц.
+    """
+    if not data or not data.startswith("pay_yookassa_"):
+        return None
+    parts = data[len("pay_yookassa_"):].split("_")
+    plan_code = (parts[0] or "").lower().strip()
+    if not plan_code:
+        return None
+    if len(parts) == 1:
+        return plan_code, 1
+    if len(parts) in (2, 3):
+        try:
+            months = int(parts[1])
+        except (TypeError, ValueError):
+            return None
+        if months <= 0:
+            return None
+        return plan_code, months
+    return None
+
+
+async def resolve_purchase_amount(plan_code: str, period_months: int, user_id: int) -> int:
+    """Серверная цена покупки или 0, если такую покупку этому юзеру продавать нельзя.
+
+    Разрешено: тарифы из меню (MENU_PLAN_CODES) и legacy-тариф юзера для продления
+    (кнопка «Продлить» ведет на get_user_last_plan, basic/premium по старой цене).
+    trial и прочие служебные коды не продаются (цены нет).
+    """
+    from app.core.plans import MENU_PLAN_CODES, LEGACY_PLAN_CODES, get_plan_price
+
+    plan_code = (plan_code or "").lower().strip()
+    allowed = plan_code in MENU_PLAN_CODES
+    if not allowed and plan_code in LEGACY_PLAN_CODES:
+        try:
+            from app.services.users import get_user_last_plan
+            last_plan = await get_user_last_plan(int(user_id))
+        except Exception as e:
+            logger.warning(f"resolve_purchase_amount: get_user_last_plan failed user={user_id} err={e}")
+            last_plan = None
+        allowed = last_plan == plan_code
+    if not allowed:
+        return 0
+    return get_plan_price(plan_code, period_months)
+
+
 @router.callback_query(F.data.startswith("pay_yookassa_"))
 async def handle_yookassa_payment(callback: types.CallbackQuery):
     """Обработчик выбора оплаты через Yookassa"""
@@ -34,44 +86,28 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
     await callback.answer("⏳ Создаю платеж...")
     
     try:
-        # Парсим callback_data: pay_yookassa_{plan_code}_{period_months}_{amount}
-        parts = callback.data.replace("pay_yookassa_", "").split("_")
-        
-        if len(parts) == 3:
-            plan_code, period_months, amount_rub = parts
-            period_months = int(period_months)
-            amount_rub = int(amount_rub)
-        elif len(parts) == 1:
-            # Старый формат для обратной совместимости
-            plan_code = parts[0]
-            if plan_code == "basic":
-                amount_rub = 99
-                period_months = 1
-            elif plan_code == "premium":
-                amount_rub = 199
-                period_months = 1
-            else:
-                # UI EXCEPTION: прямой вызов UI метода
-                await callback.message.edit_text(
-                    "❌ Неизвестный тариф",
-                    reply_markup=get_back_to_plans_keyboard()
-                )
-                return
-        else:
+        # Цена НИКОГДА не берется из callback_data (хотфикс 2.1). callback несет
+        # только plan+months; сумма считается по каталогу core/plans.py.
+        parsed = parse_pay_callback(callback.data)
+        if parsed is None:
             # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
                 "❌ Неверный формат данных",
                 reply_markup=get_back_to_plans_keyboard()
             )
             return
-        
-        # Определяем название тарифа через единый каталог.
-        # Поддерживает legacy (basic/premium) и новые (lite/standard/pro).
-        from app.core.plans import get_plan_name, is_valid_plan_code
-        if not is_valid_plan_code(plan_code):
+        plan_code, period_months = parsed
+
+        from app.core.plans import get_plan_name
+        amount_rub = await resolve_purchase_amount(plan_code, period_months, callback.from_user.id)
+        if amount_rub <= 0:
+            logger.warning(
+                f"pay_yookassa rejected: user={callback.from_user.id} data={callback.data!r} "
+                f"plan={plan_code} months={period_months}"
+            )
             # UI EXCEPTION: прямой вызов UI метода
             await callback.message.edit_text(
-                "❌ Неизвестный тариф",
+                "❌ Этот тариф сейчас недоступен для покупки. Выберите тариф из меню.",
                 reply_markup=get_back_to_plans_keyboard()
             )
             return
@@ -244,6 +280,15 @@ async def handle_check_payment(callback: types.CallbackQuery):
                 "⚠️ Не удалось проверить статус в платежной системе.\n\n"
                 "Попробуйте позже или обратитесь в поддержку.",
                 reply_markup=get_back_to_plans_keyboard()
+            )
+            return
+
+        if recheck_result.get("status") == "review":
+            await callback.message.edit_text(
+                "⏳ <b>Оплата получена</b>\n\n"
+                "Платеж на ручной проверке у администратора. Мы свяжемся с вами.",
+                reply_markup=get_back_to_plans_keyboard(),
+                parse_mode="HTML"
             )
             return
 
