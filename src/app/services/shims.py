@@ -8,16 +8,20 @@ What is real here and what is a placeholder:
 
 | Port                | Shim                       | State                                   |
 |---------------------|----------------------------|-----------------------------------------|
-| RemnaGateway        | LegacyRemnaGateway         | real over RemnaClient, devices -> B     |
+| RemnaGateway        | LegacyRemnaGateway         | = infra.remnawave.gateway.HttpRemnaGateway (B) |
 | PaymentGateway      | LegacyPaymentGateway       | create/get real, charge/refund -> A     |
 | StarsGateway        | DisabledStarsGateway       | placeholder -> A                        |
-| ProvisioningService | LegacyProvisioningService  | placeholder -> B                        |
-| StatusService       | LegacyStatusService        | real over services.users (+cache)       |
-| DevicesService      | UnavailableDevicesService  | empty list / False -> B                 |
+| ProvisioningService | LegacyProvisioningService  | = services.provisioning.PanelProvisioningService (B) |
+| StatusService       | LegacyStatusService        | = services.status.PanelStatusService (B) |
+| DevicesService      | UnavailableDevicesService  | = services.devices.PanelDevicesService (B) |
 | CheckoutService     | LegacyCheckoutService      | quote/start real, check -> A            |
 | PromoService        | LegacyPromoService         | placeholder -> E                        |
 | MaintenanceGuard    | RedisMaintenanceGuard      | real (manual Redis flag)                |
 | Notifier            | notifications.TelegramNotifier (not a shim)                          |
+
+Stream B: its four names are now aliases of the real services, so
+app.container (frozen) wires them without an edit; the orchestrator renames
+the lines at cutover (impl/requests/B.md).
 
 Placeholders raise NotImplementedError("<port>: owned by stream X"), so a
 premature call fails loudly in tests instead of silently doing nothing.
@@ -26,18 +30,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional
 
 from app.domain.models import (
-    DeviceInfo,
-    Entitlement,
     PanelUser,
     PaymentIntent,
     PaymentStatus,
     PromoReward,
     Quote,
-    SubKind,
-    SubscriptionState,
 )
 from app.logger import logger
 
@@ -99,170 +99,8 @@ def panel_user_from_raw(raw: Mapping[str, Any], uuid_to_name: Optional[Mapping[s
     )
 
 
-class LegacyRemnaGateway:
-    """RemnaGateway over app.remnawave.client.RemnaClient.
-
-    Enforces the two panel invariants on writes:
-      - manual squads (*-m, *-friend, arcadia) already on the user are kept,
-        and are never added by the bot;
-      - hwidDeviceLimit is never lowered.
-    """
-
-    def __init__(self, client_factory: Optional[Callable[[], Any]] = None):
-        if client_factory is None:
-            from app.remnawave.client import RemnaClient
-
-            client_factory = RemnaClient
-        self._factory = client_factory
-
-    def _client(self):
-        return self._factory()
-
-    async def list_squads(self) -> Mapping[str, str]:
-        squads = await self._client().list_internal_squads()
-        return {s.get("name"): s.get("uuid") for s in squads if isinstance(s, dict) and s.get("name")}
-
-    async def get_user(self, panel_id: int) -> Optional[PanelUser]:
-        import httpx
-
-        try:
-            data = await self._client().get_user_by_id(str(int(panel_id)))
-        except httpx.HTTPStatusError as e:
-            if e.response is not None and e.response.status_code == 404:
-                return None
-            raise
-        raw = _unwrap(data)
-        return panel_user_from_raw(raw) if raw else None
-
-    async def find_users_by_telegram_id(self, telegram_id: int) -> list[PanelUser]:
-        client = self._client()
-        found = await client.get_user_by_telegram_id(int(telegram_id), strict=True)
-        if not found:
-            return []
-        raw = getattr(found, "raw_data", None) or {}
-        return [panel_user_from_raw(raw)] if raw else []
-
-    async def get_subscription_url(self, panel_id: int) -> Optional[str]:
-        return await self._client().get_user_subscription_url(str(int(panel_id)))
-
-    async def _names_to_uuids(self, names: Sequence[str]) -> list[str]:
-        from app.services.remna_tariff import is_manual_squad_name
-
-        bad = [n for n in names if is_manual_squad_name(n)]
-        if bad:
-            raise ValueError(f"refusing to write manual squads {bad}")
-        mapping = await self.list_squads()
-        missing = [n for n in names if n not in mapping]
-        if missing:
-            raise LookupError(f"squads not found in panel: {missing}")
-        return [mapping[n] for n in names]
-
-    async def create_user(
-        self,
-        username: str,
-        *,
-        telegram_id: Optional[int],
-        expire_at: datetime,
-        squads: Sequence[str] = (),
-        device_limit: Optional[int] = None,
-        traffic_limit_bytes: Optional[int] = None,
-        traffic_limit_strategy: Optional[str] = None,
-    ) -> PanelUser:
-        from app.services.payments.yookassa import generate_remna_password
-
-        uuids = await self._names_to_uuids(list(squads))
-        data = await self._client().create_user(
-            username,
-            generate_remna_password(),
-            expire_at=expire_at,
-            telegram_id=telegram_id,
-            active_internal_squads=uuids or None,
-            hwid_device_limit=device_limit,
-            traffic_limit_bytes=traffic_limit_bytes,
-            traffic_limit_strategy=traffic_limit_strategy,
-        )
-        return panel_user_from_raw(_unwrap(data))
-
-    async def update_user(
-        self,
-        panel_id: int,
-        *,
-        expire_at: Optional[datetime] = None,
-        squads: Optional[Sequence[str]] = None,
-        device_limit: Optional[int] = None,
-        traffic_limit_bytes: Optional[int] = None,
-        traffic_limit_strategy: Optional[str] = None,
-    ) -> PanelUser:
-        from app.services.remna_tariff import is_manual_squad_name
-
-        current = await self.get_user(panel_id)
-        if current is None:
-            raise LookupError(f"panel user {panel_id} not found")
-        kwargs: dict[str, Any] = {}
-        if expire_at is not None:
-            kwargs["expire_at"] = expire_at
-        if squads is not None:
-            target = await self._names_to_uuids(list(squads))
-            mapping = await self.list_squads()
-            by_uuid = {u: n for n, u in mapping.items()}
-            kept_manual = [u for u in current.squad_uuids if is_manual_squad_name(by_uuid.get(u))]
-            merged = kept_manual + [u for u in target if u not in kept_manual]
-            if set(merged) != set(current.squad_uuids):
-                kwargs["activeInternalSquads"] = merged
-        if device_limit is not None:
-            cur = current.device_limit
-            # Never lower: 0/None on the panel = unlimited / manual, leave it.
-            if cur is not None and (int(cur) == 0 or int(cur) >= int(device_limit)):
-                pass
-            else:
-                kwargs["hwid_device_limit"] = int(device_limit)
-        if traffic_limit_bytes is not None:
-            kwargs["traffic_limit_bytes"] = int(traffic_limit_bytes)
-        if traffic_limit_strategy is not None:
-            kwargs["traffic_limit_strategy"] = traffic_limit_strategy
-        if not kwargs:
-            return current
-        data = await self._client().update_user(str(int(panel_id)), **kwargs)
-        raw = _unwrap(data)
-        return panel_user_from_raw(raw) if raw else current
-
-    async def enable_user(self, panel_id: int) -> None:
-        await self._client().enable_user(str(int(panel_id)))
-
-    async def disable_user(self, panel_id: int) -> None:
-        await self._client().disable_user(str(int(panel_id)))
-
-    async def list_devices(self, panel_id: int) -> list[DeviceInfo]:
-        raise _placeholder("RemnaGateway.list_devices", "B")
-
-    async def delete_device(self, panel_id: int, hwid: str) -> bool:
-        raise _placeholder("RemnaGateway.delete_device", "B")
-
-    async def iter_users(self, page_size: int = 500) -> AsyncIterator[PanelUser]:
-        client = self._client()
-        start = 1
-        seen = 0
-        while True:
-            data = await client.get_users(size=page_size, start=start)
-            response = data.get("response", {}) if isinstance(data, dict) else {}
-            users = response.get("users", []) if isinstance(response, dict) else []
-            total = response.get("total") if isinstance(response, dict) else None
-            if not users:
-                return
-            for raw in users:
-                yield panel_user_from_raw(raw)
-            seen += len(users)
-            if (total is not None and seen >= int(total)) or len(users) < page_size:
-                return
-            start += page_size
-
-    async def ping(self) -> bool:
-        try:
-            await self._client().health_check()
-            return True
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"remna ping failed ({type(e).__name__})")
-            return False
+# Stream B: real adapter (manual squads kept, limit never lowered, devices, paging from 0).
+from app.infra.remnawave.gateway import HttpRemnaGateway as LegacyRemnaGateway  # noqa: E402,F401 (re-export for app.container)
 
 
 class LegacyPaymentGateway:
@@ -313,53 +151,10 @@ class DisabledStarsGateway:
         raise _placeholder("StarsGateway.refund", "A")
 
 
-class LegacyProvisioningService:
-    """2.x provisioning lives in yookassa.handle_successful_payment and
-    remna_service.provision_tariff and is called by the old flows directly.
-    Stream B builds the real ProvisioningService."""
-
-    async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str) -> SubscriptionState:
-        raise _placeholder("ProvisioningService.grant", "B")
-
-    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str) -> bool:
-        raise _placeholder("ProvisioningService.revoke", "B")
-
-
-class LegacyStatusService:
-    """StatusService over services.users.get_user_active_subscription."""
-
-    async def get_state(self, telegram_id: int, *, force: bool = False) -> SubscriptionState:
-        from app.services.users import get_user_active_subscription
-
-        info = await get_user_active_subscription(int(telegram_id), use_cache=not force)
-        now = datetime.now(timezone.utc)
-        if info is None:
-            return SubscriptionState(telegram_id=int(telegram_id), fetched_at=now)
-        return SubscriptionState(
-            telegram_id=int(telegram_id),
-            has_panel_user=bool(info.remna_user_id),
-            active=bool(info.active),
-            plan_code=info.plan_code or None,
-            expires_at=_parse_dt(info.valid_until),
-            fetched_at=now,
-        )
-
-    async def invalidate(self, telegram_id: int) -> None:
-        from app.services.cache import invalidate_sync_cache, invalidate_user_cache
-
-        await invalidate_sync_cache(int(telegram_id))
-        await invalidate_user_cache(int(telegram_id))
-
-
-class UnavailableDevicesService:
-    async def list_devices(self, telegram_id: int) -> list[DeviceInfo]:
-        return []
-
-    async def unlink(self, telegram_id: int, device_short_id: str) -> bool:
-        return False
-
-    async def unlinks_left(self, telegram_id: int) -> int:
-        return 0
+# Stream B: real services (panel account created only by provisioning).
+from app.services.devices import PanelDevicesService as UnavailableDevicesService  # noqa: E402,F401 (re-export for app.container)
+from app.services.provisioning import PanelProvisioningService as LegacyProvisioningService  # noqa: E402,F401 (re-export for app.container)
+from app.services.status import PanelStatusService as LegacyStatusService  # noqa: E402,F401 (re-export for app.container)
 
 
 class LegacyCheckoutService:
