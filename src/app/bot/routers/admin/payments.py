@@ -26,14 +26,23 @@ def _is_admin(container: Any, user_id: int) -> bool:
 
 
 async def _close(cb: CallbackQuery, result_text: str) -> None:
-    """Append the decision to the admin message and drop its buttons."""
+    """Append the decision to the admin message and drop its buttons.
+
+    O5: the original alert text is HTML (bold labels, <code> ids). ``msg.text``
+    is the plain rendering (entities stripped), so escaping it with ``h()``
+    used to turn the whole message to plain text. ``msg.html_text`` renders
+    the entities back to HTML markup, which needs no further escaping; the
+    edit itself must ask for ``parse_mode="HTML"`` explicitly, since editing
+    does not inherit the parse_mode the message was first sent with.
+    """
     msg = cb.message
     if msg is None or not getattr(msg, "text", None):
         if msg is not None:
             await msg.answer(result_text)
         return
     try:
-        await msg.edit_text(f"{h(msg.text)}\n\n<b>{result_text}</b>", reply_markup=None)
+        body = msg.html_text or h(msg.text)
+        await msg.edit_text(f"{body}\n\n<b>{result_text}</b>", reply_markup=None, parse_mode="HTML")
     except Exception:  # noqa: BLE001 - too old to edit: say it in a new message
         await msg.answer(result_text)
 

@@ -218,6 +218,34 @@ async def test_old_review_buttons_reach_the_new_admin_handler(money_flow):
     assert "Одобрено" in edited.text
 
 
+async def test_o5_review_decision_keeps_the_original_html_formatting(money_flow):
+    """O5: admin/payments._close used to edit the alert to h(msg.text) + result,
+    which drops bold/code entities of the original alert (they are not present
+    as literal tags in msg.text, only as entities)."""
+    from aiogram.types import Chat as _Chat
+    from aiogram.types import Message as _Message
+    from aiogram.types import MessageEntity
+
+    f = money_flow
+    await f.press(Period(c="pro", m=12).pack())
+    rec = next(iter(f.store.payments.values()))
+    f.container.payments.succeed(rec.external_id)
+    f.container.payments.payments[rec.external_id]["amount"] = 1.0
+    await f.money.fulfillment.process(rec.id, source="webhook")
+
+    admin_text = "Payment ID: X-1"
+    admin_msg = _Message(
+        message_id=999001, date=int(time.time()), chat=_Chat(id=ADMIN, type="private"),
+        from_user=user(uid=0, username=None, first_name="Bot"), text=admin_text,
+        entities=[MessageEntity(type="code", offset=12, length=3)],  # "X-1" as <code>
+    )
+    await f.press(f"rv_ok:{rec.id}", u=user(uid=ADMIN), message=admin_msg)
+    edited = f.session.calls_of("EditMessageText")[-1]
+    assert edited.params.get("parse_mode") == "HTML"
+    assert "<code>X-1</code>" in edited.text
+    assert "<b>✅ Одобрено" in edited.text
+
+
 async def test_autopay_stop_button(money_flow):
     f = money_flow
     f.store.add_sub(f.user.id, autorenew=True)
