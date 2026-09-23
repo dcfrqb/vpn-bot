@@ -408,3 +408,12 @@ async def test_admin_disabled_user_without_grace_is_still_refused(svc, fake, rep
     repo.add_row(7, plan="pro", panel_id=501, until=NOW + timedelta(days=3))
     with pytest.raises(GrantRefused):
         await svc.grant(7, Entitlement(plan_code="pro", source=Src.PAYMENT, payment_id=9), trace_id="t", months=1)
+
+
+async def test_repeat_of_applied_grant_with_panel_down_answers_from_db(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW))
+    ent = Entitlement(plan_code="lite", source=Src.PAYMENT, payment_id=77)
+    await svc.grant(7, ent, trace_id="x", months=1)
+    fake.fail_lookup_tg = fake.fail_get_user = True
+    st = await svc.grant(7, ent, trace_id="x", months=1)
+    assert st.stale and st.active

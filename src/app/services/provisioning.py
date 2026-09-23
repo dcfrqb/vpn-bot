@@ -369,7 +369,10 @@ class PanelProvisioningService:
         record = ((row.config_data if row else {}) or {}).get("grants", {}).get(key)
         if record and record.get("state") == "applied":
             logger.info(f"[{trace_id}] provisioning: grant {key} already applied tg={tg}, no write")
-            user = await self.accounts.find_main(tg)
+            try:
+                user = await self.accounts.find_main(tg)
+            except Exception:  # noqa: BLE001 - already granted; the DB row is enough
+                return build_state(tg, user=None, main_row=row, now=now, stale=True)
             return build_state(tg, user=user, main_row=row, now=now)
 
         try:
