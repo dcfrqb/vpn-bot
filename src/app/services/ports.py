@@ -1,9 +1,8 @@
 """Service ports (release 3.0 Foundation). FROZEN seam.
 
 Protocols that bot routers, API routes and worker jobs depend on. Concrete
-implementations are wired in ONE place, app.container. Foundation wires the
-shims from app.services.shims (ports over 2.1.1 code); streams replace them
-with real implementations without changing these signatures.
+implementations are wired in ONE place, app.container (table in
+docs/ARCHITECTURE_3.0.md); new implementations keep these signatures.
 
 Rules:
 - No aiogram / FastAPI imports here or in any implementation under
@@ -59,7 +58,7 @@ __all__ = [
 @runtime_checkable
 class RemnaGateway(Protocol):
     """Remnawave panel. Owner: stream B. Implemented over RemnaClient by
-    shims.LegacyRemnaGateway in Foundation."""
+    infra.remnawave.gateway.HttpRemnaGateway."""
 
     async def get_user(self, panel_id: int) -> Optional[PanelUser]:
         """User by numeric panel id; None if the panel says 404."""
@@ -237,6 +236,11 @@ class PromoService(Protocol):
     async def start_trial(self, telegram_id: int) -> PromoReward: ...
 
     async def trial_available(self, telegram_id: int) -> bool: ...
+
+    async def create_gift(self, buyer_telegram_id: int, plan_code: str, months: int, *,
+                          payment_id: Optional[int] = None) -> str:
+        """One-time gift code (``g_...``) for a paid gift; idempotent per payment_id."""
+        ...
 
 
 @runtime_checkable

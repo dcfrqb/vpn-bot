@@ -27,6 +27,22 @@ M_NOTIFIED = "notified"
 M_ADMIN_NOTIFIED = "admin_notified"
 M_OBHOD_APPLIED = "obhod_package_applied"
 M_FULFILLED_AT = "fulfilled_at"
+# Set by PaymentStore.create (3.0 rows). Recovery retries a paid-but-unlinked
+# row without the needs_provisioning flag ONLY when it carries this marker:
+# 2.x rows (subscription_id may be NULL on rows 2.x did deliver) are retried
+# only when 2.x itself flagged them, exactly as 2.1 did. No double grants on
+# the first 3.0 deploy.
+M_CREATED_V3 = "v3"
+
+
+def stuck_is_recoverable(meta: Mapping[str, Any], since: Optional[datetime], now: datetime,
+                         stuck_age: timedelta) -> bool:
+    """A paid, unfulfilled, not held row the recovery sweep should grant again."""
+    if meta.get(M_REVIEW_REJECTED) or (meta.get(M_NEEDS_REVIEW) and not meta.get(M_REVIEW_APPROVED)):
+        return False
+    if meta.get(M_NEEDS_PROVISIONING):
+        return True
+    return bool(meta.get(M_CREATED_V3)) and since is not None and since < now - stuck_age
 
 PENDING_STATUSES = ("pending", "waiting_for_capture")
 

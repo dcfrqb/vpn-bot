@@ -403,10 +403,13 @@ class PromoEngine:
         }
         if res.status != "ok":
             return PromoReward(code=code, outcome=mapping.get(res.status, PromoOutcome.ERROR))
+        gift_months = (row.meta or {}).get("months") if row.kind == KIND_GIFT else None
         ent = Entitlement(
             plan_code=plan,
             source=source_kind,
-            days=int(row.days or 0),
+            # a gift grants the paid calendar months (A-5); other codes grant days
+            months=int(gift_months) if gift_months else None,
+            days=None if gift_months else int(row.days or 0),
             device_limit=row.devices or None,
             traffic_limit_bytes=(int(row.traffic_gb) * GIB) if row.traffic_gb else None,
             note=f"promo:{code}",

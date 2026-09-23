@@ -5,9 +5,9 @@ The ONLY place that decides which implementation backs each port
 worker (app.worker.scheduler) build one Container at startup and pass it
 down; nothing else instantiates services.
 
-Foundation wires the 2.1.1 shims (app.services.shims). A stream that ships
-a real implementation changes exactly one line in ``build_container`` (via
-an orchestrator commit) and keeps the port signature.
+Since the 3.0 cutover every port is backed by its real implementation
+(infra/* adapters, services/* over them). A new implementation changes one
+line in ``build_container`` and keeps the port signature.
 
 Tests build a container with fakes:
 
@@ -74,9 +74,18 @@ _current: Optional[Container] = None
 
 
 def build_container(bot: Any, *, settings: Any = None, **overrides: Any) -> Container:
-    """Wire every port. ``overrides`` replace single ports (tests, debug)."""
-    from app.services import shims
+    """Wire every port. ``overrides`` replace single ports (tests, debug);
+    the services that depend on an overridden port are built over it."""
+    from app.infra.remnawave.gateway import HttpRemnaGateway
+    from app.infra.telegram_stars import TelegramStarsGateway
+    from app.infra.yookassa.gateway import YooKassaGateway
+    from app.services.checkout import ContainerCheckout
+    from app.services.devices import PanelDevicesService
+    from app.services.maintenance import RedisMaintenanceGuard
     from app.services.notifications import TelegramNotifier
+    from app.services.promo import PromoEngine
+    from app.services.provisioning import PanelProvisioningService
+    from app.services.status import PanelStatusService
 
     if settings is None:
         from app.config import settings as _settings
@@ -87,21 +96,32 @@ def build_container(bot: Any, *, settings: Any = None, **overrides: Any) -> Cont
     if unknown:
         raise TypeError(f"unknown container overrides: {sorted(unknown)}")
 
-    payments = overrides.pop("payments", None) or shims.LegacyPaymentGateway()
+    def pick(name: str, factory: Any) -> Any:
+        value = overrides.get(name)
+        return value if value is not None else factory()
+
+    # One gateway per process: the 10-minute squad cache is shared.
+    remna = pick("remna", HttpRemnaGateway)
+    notifier = pick("notifier", lambda: TelegramNotifier(bot, settings))
+    status = pick("status", lambda: PanelStatusService(remna))
+    provisioning = pick("provisioning", lambda: PanelProvisioningService(remna, notifier=notifier, status=status))
     parts: dict[str, Any] = {
-        "remna": shims.LegacyRemnaGateway(),
-        "payments": payments,
-        "stars": shims.DisabledStarsGateway(),
-        "provisioning": shims.LegacyProvisioningService(),
-        "status": shims.LegacyStatusService(),
-        "devices": shims.UnavailableDevicesService(),
-        "checkout": shims.LegacyCheckoutService(payments),
-        "promo": shims.LegacyPromoService(),
-        "notifier": TelegramNotifier(bot, settings),
-        "maintenance": shims.RedisMaintenanceGuard(),
+        "remna": remna,
+        "payments": pick("payments", YooKassaGateway),
+        "stars": pick("stars", lambda: TelegramStarsGateway(bot)),
+        "provisioning": provisioning,
+        "status": status,
+        "devices": pick("devices", lambda: PanelDevicesService(remna, status=status)),
+        "checkout": pick("checkout", ContainerCheckout),
+        "promo": pick("promo", lambda: PromoEngine(provisioning=provisioning, status=status,
+                                                     notifier=notifier, settings=settings)),
+        "notifier": notifier,
+        "maintenance": pick("maintenance", RedisMaintenanceGuard),
     }
-    parts.update(overrides)
-    return Container(bot=bot, settings=settings, **parts)
+    container = Container(bot=bot, settings=settings, **parts)
+    if isinstance(container.checkout, ContainerCheckout):
+        container.checkout.bind(container)
+    return container
 
 
 def set_container(container: Optional[Container]) -> None:

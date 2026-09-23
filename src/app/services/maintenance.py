@@ -1,6 +1,6 @@
 """Panel health probe and automatic maintenance mode. Owner: C. No aiogram.
 
-Works over the frozen MaintenanceGuard port (Foundation shim: one Redis key
+Works over the MaintenanceGuard port (RedisMaintenanceGuard below: one Redis key
 ``maintenance:state`` with a reason). The automatic mode is the same flag
 with a reason starting with ``auto:``, so:
   - the probe only ever clears a flag it set itself (reason ``auto:...``);
@@ -19,6 +19,8 @@ Redis down: the counter lives in the process (the scheduler runs on one leader).
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.domain.models import AdminTopic
@@ -113,3 +115,45 @@ class PanelHealthMonitor:
                 dedup_key="panel_down", dedup_ttl=1800,
             )
         return "down"
+
+
+# --- MaintenanceGuard port: manual/automatic flag in Redis (moved from shims at cutover) ---
+
+MAINTENANCE_KEY = "maintenance:state"
+
+
+class RedisMaintenanceGuard:
+    """Manual maintenance switch stored in Redis (``maintenance:state`` JSON).
+
+    Redis unavailable -> not active (the bot keeps serving, as in 2.x).
+    """
+
+    async def _state(self) -> Optional[dict]:
+        from app.infra.redis.flags import get_value
+
+        raw = await get_value(MAINTENANCE_KEY)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = {"reason": ""}
+        return data if isinstance(data, dict) else {"reason": ""}
+
+    async def is_active(self) -> bool:
+        return (await self._state()) is not None
+
+    async def reason(self) -> Optional[str]:
+        state = await self._state()
+        return (state or {}).get("reason") if state else None
+
+    async def set_active(self, active: bool, *, reason: str = "", by: Optional[int] = None) -> None:
+        from app.infra.redis.flags import delete_key, set_value
+
+        if active:
+            payload = {"reason": reason, "by": by, "since": datetime.now(timezone.utc).isoformat()}
+            await set_value(MAINTENANCE_KEY, json.dumps(payload, ensure_ascii=False))
+            logger.warning(f"maintenance ON by={by} reason={reason!r}")
+        else:
+            await delete_key(MAINTENANCE_KEY)
+            logger.warning(f"maintenance OFF by={by}")

@@ -51,39 +51,21 @@ def test_task_enabled_master_and_per_task(master, task, expected):
 
 @pytest.mark.asyncio
 async def test_background_tasks_all_off_starts_nothing():
+    """BACKGROUND_TASKS_ENABLED=false (debug bot): the scheduler starts no job at all."""
     from app import config
-    from app.tasks import background as main
+    from app.worker.scheduler import Scheduler, build_jobs
 
-    checker_cls = MagicMock()
-    checker_cls.any_stage_enabled = MagicMock(return_value=False)
-    sun_cls = MagicMock()
-    resume = AsyncMock()
-    with patch.object(config.settings, "BACKGROUND_TASKS_ENABLED", False), \
-         patch("app.tasks.subscription_checker.SubscriptionChecker.any_stage_enabled", return_value=False), \
-         patch("app.tasks.subscription_checker.SubscriptionChecker.start") as checker_start, \
-         patch("app.tasks.sun718_revert.Sun718RevertTask.start") as sun_start, \
-         patch("app.services.broadcast.resume_unfinished_broadcasts", resume):
-        handle = await main.start_background_tasks(MagicMock())
-    checker_start.assert_not_called()
-    sun_start.assert_not_called()
-    resume.assert_not_awaited()
-    handle.stop()  # заглушка со stop()
+    class Leader:
+        async def ensure(self):
+            return True
 
+        async def release(self):
+            pass
 
-@pytest.mark.asyncio
-async def test_checker_runs_only_enabled_stages():
-    from app import config
-    from app.tasks.subscription_checker import SubscriptionChecker
-
-    checker = SubscriptionChecker(MagicMock())
-    with patch.object(config.settings, "BACKGROUND_TASKS_ENABLED", True), \
-         patch.object(config.settings, "TASK_RECOVERY_ENABLED", False), \
-         patch.object(config.settings, "TASK_EXPIRY_NOTIFIER_ENABLED", True), \
-         patch.object(config.settings, "TASK_RECONCILER_ENABLED", False), \
-         patch.object(checker, "_run_recovery", AsyncMock()) as rec, \
-         patch.object(checker, "_run_expiry", AsyncMock()) as exp, \
-         patch.object(checker, "_run_reconciler", AsyncMock()) as recon:
-        await checker._run_once("t")
-    rec.assert_not_awaited()
-    exp.assert_awaited_once()
-    recon.assert_not_awaited()
+    with patch.object(config.settings, "BACKGROUND_TASKS_ENABLED", False):
+        s = Scheduler(build_jobs(MagicMock()), leader=Leader(), tick_s=3600)
+        await s.start()
+        started = await s.tick()
+        s.stop()
+    assert started == []
+    assert all(st.runs == 0 for st in s.state.values())

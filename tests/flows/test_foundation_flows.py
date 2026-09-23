@@ -25,9 +25,10 @@ def test_router_order_site_login_first_then_new_then_legacy(flow):
     names = [r.name for r in flow.dp.sub_routers]
     assert names[0] == "site_login"
     assert names[1:1 + len(NEW_ROUTER_MODULES)] == [
-        "r3_promo_deeplink", "r3_start", "r3_menu", "r3_checkout", "r3_connect", "r3_devices",
-        "r3_support", "r3_refund", "r3_admin_payments", "r3_admin_promo", "r3_admin_broadcast",
-        "r3_admin_obhod", "r3_admin_panel",
+        "r3_promo_deeplink", "r3_trial_promo", "r3_start", "r3_menu", "r3_checkout", "r3_connect",
+        "r3_devices", "r3_support", "r3_refund", "r3_admin_payments", "r3_admin_home", "r3_admin_users",
+        "r3_admin_grants", "r3_admin_ops", "r3_admin_promo", "r3_admin_broadcast", "r3_admin_obhod",
+        "r3_admin_panel",
     ]
     assert names[1 + len(NEW_ROUTER_MODULES):] == [
         "ui", "start", "legacy_payments", "admin_broadcast", "admin", "legacy_callbacks", "tg_errors_global",

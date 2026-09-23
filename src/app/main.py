@@ -95,8 +95,9 @@ async def run_polling():
     except Exception as e:
         logger.error(f"Ошибка получения информации о боте: {e}")
 
-    from app.tasks.background import start_background_tasks
-    subscription_checker = await start_background_tasks(bot)
+    from app.container import get_container
+    from app.worker.scheduler import start_scheduler
+    scheduler = await start_scheduler(bot, get_container())
 
     logger.info("Запуск polling")
     logger.info("=" * 50)
@@ -122,7 +123,8 @@ async def run_polling():
         
         for attempt in range(max_retries):
             try:
-                await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+                # pre_checkout_query (Stars) and every other type a router uses
+                await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
                 break  # Успешный запуск
             except Exception as e:
                 error_msg = str(e)
@@ -147,7 +149,7 @@ async def run_polling():
                     logger.error(f"Ошибка при запуске polling: {e}")
                     raise
     finally:
-        subscription_checker.stop()
+        scheduler.stop()
         from app.routers.site_login import close_session as close_site_login_session
         await close_site_login_session()
         await bot.session.close()
@@ -172,8 +174,9 @@ async def run_webhook():
     except Exception as e:
         logger.error(f"Ошибка получения информации о боте: {e}")
 
-    from app.tasks.background import start_background_tasks
-    subscription_checker = await start_background_tasks(bot)
+    from app.container import get_container
+    from app.worker.scheduler import start_scheduler
+    scheduler = await start_scheduler(bot, get_container())
 
     # TELEGRAM_WEBHOOK_URL должен содержать полный URL включая путь /webhook
     webhook_base_url = settings.TELEGRAM_WEBHOOK_URL.rstrip('/')
@@ -190,7 +193,11 @@ async def run_webhook():
     logger.info(f"Webhook path для обработчика: {webhook_path}")
     
     secret_token = settings.BOT_SECRET_TOKEN or None
-    await bot.set_webhook(webhook_url, secret_token=secret_token)
+    await bot.set_webhook(
+        webhook_url, secret_token=secret_token,
+        # pre_checkout_query (Stars) and every other type a router uses
+        allowed_updates=dp.resolve_used_update_types(),
+    )
     if secret_token:
         logger.info(f"Telegram webhook установлен с BOT_SECRET_TOKEN: {webhook_url}")
     else:
@@ -233,9 +240,9 @@ async def run_webhook():
     finally:
         # Graceful: сначала отключаем источники новых задач, потом закрываем ресурсы.
         try:
-            subscription_checker.stop()
+            scheduler.stop()
         except Exception as _e:
-            logger.warning(f"subscription_checker.stop() failed: {_e}")
+            logger.warning(f"scheduler.stop() failed: {_e}")
         try:
             # Drain: даем in-flight broadcast-ам/хендлерам шанс завершиться (до 10с).
             from app.services.broadcast import shutdown_broadcast_worker

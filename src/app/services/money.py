@@ -10,9 +10,6 @@ them once per container and cached on it:
     await m.autopay.run_once()    # worker job body
 
 Tests pass their own store/ui/hooks: ``money(container, store=InMemoryPaymentStore())``.
-
-Until the orchestrator rewires the container (requests/A.md), placeholders
-are replaced here: DisabledStarsGateway -> TelegramStarsGateway(bot).
 """
 from __future__ import annotations
 
@@ -153,17 +150,12 @@ def build_money(deps: MoneyDeps) -> MoneyServices:
 
 def money_deps(container: Any, *, store: Optional[PaymentStore] = None, ui: Optional[MoneyUi] = None,
                hooks: Optional[LegacyHooks] = None, clock: Optional[Callable[[], datetime]] = None) -> MoneyDeps:
-    from app.infra.telegram_stars import TelegramStarsGateway
     from app.services.payments.sql_store import SqlPaymentStore
     from app.services.payments.ui import default_ui
-    from app.services.shims import DisabledStarsGateway
 
-    stars = container.stars
-    if isinstance(stars, DisabledStarsGateway):
-        stars = TelegramStarsGateway(container.bot)
     return MoneyDeps(
         payments=container.payments,
-        stars=stars,
+        stars=container.stars,
         provisioning=container.provisioning,
         notifier=container.notifier,
         promo=container.promo,

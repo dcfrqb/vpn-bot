@@ -37,7 +37,6 @@ from app.logger import logger
 from app.services.payments.notices import FulfillmentNotices, plan_label  # noqa: F401 (plan_label re-export)
 from app.services.payments.pricing import (
     amount_fallback_plan,
-    months_to_days,
     price_mismatch_reason,
     stars_mismatch_reason,
 )
@@ -283,13 +282,12 @@ class Fulfillment(FulfillmentNotices):
             raise ValueError(f"unknown plan {plan!r}")
         source = EntitlementSource.AUTORENEW if rec.kind == "autorenew" else EntitlementSource.PAYMENT
         ent = Entitlement(
-            plan_code=plan, source=source, days=months_to_days(int(months), self.d.clock()),
+            plan_code=plan, source=source, months=int(months),
             payment_id=rec.id, note=f"months={int(months)}",
         )
-        # Stream B extension: calendar months from max(now, current expiry) (days
-        # stay as a fallback for a provider without it); an admin-approved payment
+        # Calendar months from max(now, current expiry); an admin-approved payment
         # may enable a user an admin disabled. Idempotent per payment id (pay:<id>).
-        kwargs: dict[str, Any] = {"months": int(months)}
+        kwargs: dict[str, Any] = {}
         if approved:
             kwargs["enable_if_disabled"] = True
         state = await self.d.provisioning.grant(rec.telegram_id, ent, trace_id=f"pay:{rec.id}", **kwargs)

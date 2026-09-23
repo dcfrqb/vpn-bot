@@ -31,7 +31,7 @@ SRC = ROOT / "src" / "app"
 # 3.0 code (Foundation + streams). Streams add their new top-level modules here.
 NEW_LAYER = [
     SRC / "bot", SRC / "domain", SRC / "worker", SRC / "infra", SRC / "api" / "routes",
-    SRC / "container.py", SRC / "services" / "ports.py", SRC / "services" / "shims.py",
+    SRC / "container.py", SRC / "services" / "ports.py",
     SRC / "services" / "notifications.py",
     # stream A (Money)
     SRC / "services" / "checkout.py", SRC / "services" / "fulfillment.py", SRC / "services" / "autopay.py",

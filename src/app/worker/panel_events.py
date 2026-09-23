@@ -28,7 +28,7 @@ from app.domain.models import AdminTopic, PanelUser
 from app.domain.texts import notify as T
 from app.logger import logger
 from app.services.events_repo import EXPIRE_PAID_LATER, EventsRepo, SqlEventsRepo
-from app.services.shims import panel_user_from_raw
+from app.infra.remnawave.dto import panel_user_from_raw
 
 OBHOD_USERNAME = re.compile(r"^tg_(\d+)_obhod$")
 

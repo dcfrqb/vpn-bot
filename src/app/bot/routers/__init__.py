@@ -27,6 +27,7 @@ SITE_LOGIN_MODULE = "app.routers.site_login"
 
 NEW_ROUTER_MODULES: tuple[str, ...] = (
     "app.bot.routers.promo_deeplink",
+    "app.bot.routers.trial_promo",
     "app.bot.routers.start",
     "app.bot.routers.menu",
     "app.bot.routers.checkout",
@@ -35,6 +36,10 @@ NEW_ROUTER_MODULES: tuple[str, ...] = (
     "app.bot.routers.support",
     "app.bot.routers.refund",
     "app.bot.routers.admin.payments",
+    "app.bot.routers.admin.home",
+    "app.bot.routers.admin.users",
+    "app.bot.routers.admin.grants",
+    "app.bot.routers.admin.ops",
     "app.bot.routers.admin.promo",
     "app.bot.routers.admin.broadcast",
     "app.bot.routers.admin.obhod",

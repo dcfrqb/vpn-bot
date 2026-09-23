@@ -141,38 +141,79 @@ def test_task_flag_gate():
     assert not Job("z", AsyncMock(), 60).is_enabled()
 
 
-def test_registry_wraps_2x_tasks():
+EXPECTED_JOBS = {
+    # name: (flag, interval_s)
+    "payment_recovery": ("RECOVERY", 300),
+    "autopay": ("AUTOPAY", 3600),
+    "panel_sync": ("PANEL_SYNC", None),
+    "device_cleanup": ("DEVICE_CLEANUP", 86400),
+    "obhod_lifecycle": ("OBHOD_LIFECYCLE", 86400),
+    "reminders": ("REMINDERS", 1800),
+    "grace": ("GRACE", 3600),
+    "panel_health": ("PANEL_HEALTH", 30),
+    "sun718_revert": ("SUN718_REVERT", 3600),
+    "broadcast_resume": ("BROADCAST_RESUME", 0),
+    "expiry_notifier": (None, 3600),
+    "reconciler": ("RECONCILER", 3600),
+}
+
+
+def test_registry_has_every_job_gated_by_its_flag():
+    from app.config import settings
+
     jobs = {j.name: j for j in build_jobs(object())}
-    assert list(jobs) == ["subscription_check", "sun718_revert", "broadcast_resume"]
-    assert jobs["subscription_check"].interval_s == 3600 and jobs["sun718_revert"].flag == "SUN718_REVERT"
-    assert jobs["broadcast_resume"].once and jobs["broadcast_resume"].flag == "BROADCAST_RESUME"
+    assert set(jobs) == set(EXPECTED_JOBS)
+    for name, (flag, interval) in EXPECTED_JOBS.items():
+        assert jobs[name].flag == flag, name
+        if interval is not None:
+            assert jobs[name].interval_s == interval, name
+    assert jobs["panel_sync"].interval_s == settings.RECONCILER_INTERVAL_S
+    assert jobs["broadcast_resume"].once
+    assert not jobs["device_cleanup"].run_at_start and not jobs["obhod_lifecycle"].run_at_start
 
 
-async def test_legacy_subscription_job_calls_run_once_with_label():
-    from app.worker.jobs.legacy import LegacyJobs
-    from app.worker.scheduler import JobContext
+def test_new_jobs_are_off_by_default_and_2x_jobs_on():
+    """First deploy of 3.0 with an unchanged .env runs only what 2.1 ran."""
+    from app.config import Settings
 
-    lj = LegacyJobs(object())
-    with patch.object(lj.checker, "_run_once", AsyncMock()) as run_once, \
-         patch.object(lj.sun718, "_tick_safe", AsyncMock()) as tick:
-        await lj.subscription_check(JobContext(bot=None, container=None, label="periodic"))
-        await lj.sun718_revert(JobContext(bot=None, container=None, label="startup"))
-    run_once.assert_awaited_once_with(label="periodic")
-    tick.assert_awaited_once_with(label="startup")
+    s = Settings(_env_file=None)
+    for flag in ("AUTOPAY", "PANEL_SYNC", "DEVICE_CLEANUP", "OBHOD_LIFECYCLE", "REMINDERS", "GRACE",
+                 "PANEL_HEALTH"):
+        assert getattr(s, f"TASK_{flag}_ENABLED") is False, flag
+    for flag in ("RECOVERY", "EXPIRY_NOTIFIER", "RECONCILER", "SUN718_REVERT", "BROADCAST_RESUME"):
+        assert getattr(s, f"TASK_{flag}_ENABLED") is True, flag
+    assert s.DEVICE_CLEANUP_DRY_RUN is True and s.GRACE_ENABLED is False and s.AUTOPAY_ENABLED is False
+    assert s.OBHOD_ORPHAN_DEACTIVATE_ENABLED is False
 
 
-async def test_background_delegates_to_scheduler_all_on():
+def test_expiry_notifier_is_muted_while_reminders_run(monkeypatch):
+    from app.worker.jobs import legacy
+
+    flags = {"EXPIRY_NOTIFIER": True, "REMINDERS": True}
+    monkeypatch.setattr("app.config.task_enabled", lambda n: flags.get(n, False))
+    assert legacy.expiry_notifier_enabled() is False
+    flags["REMINDERS"] = False
+    assert legacy.expiry_notifier_enabled() is True
+    flags["EXPIRY_NOTIFIER"] = False
+    assert legacy.expiry_notifier_enabled() is False
+
+
+async def test_start_scheduler_runs_enabled_jobs_all_on():
     from app import config
-    from app.tasks import background
+    from app.worker import scheduler as sched
 
     with patch.object(config.settings, "BACKGROUND_TASKS_ENABLED", True), \
-         patch("app.worker.jobs.legacy.LegacyJobs.subscription_check", AsyncMock()) as chk, \
-         patch("app.worker.jobs.legacy.LegacyJobs.sun718_revert", AsyncMock()) as sun, \
-         patch("app.worker.jobs.legacy.LegacyJobs.broadcast_resume", AsyncMock()) as res, \
+         patch("app.worker.jobs.broadcast_resume.run", AsyncMock()) as res, \
+         patch("app.worker.jobs.sun718_revert.run", AsyncMock()) as sun, \
+         patch("app.worker.jobs.recovery.run", AsyncMock()) as rec, \
+         patch("app.worker.jobs.legacy.reconciler", AsyncMock()) as recon, \
+         patch("app.worker.jobs.legacy.expiry_notifier", AsyncMock()) as exp, \
          patch("app.services.cache.get_redis_client", return_value=None):
-        handle = await background.start_background_tasks(object())
+        handle = await sched.start_scheduler(object())
         await _drain()
         handle.stop()
     res.assert_awaited_once()
-    chk.assert_awaited_once()
     sun.assert_awaited_once()
+    rec.assert_awaited_once()
+    recon.assert_awaited_once()
+    exp.assert_awaited_once()

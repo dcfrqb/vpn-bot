@@ -366,3 +366,36 @@ def parse_stars_payload(payload: Optional[str]) -> Optional[int]:
         return None
     tail = payload[len(STARS_PAYLOAD_PREFIX):]
     return int(tail) if tail.isdigit() else None
+
+
+class ContainerCheckout:
+    """CheckoutService port slot of the container: delegates to the money
+    services built over that same container (``money(container).checkout``).
+    ``build_container`` binds it once the container exists (no cycle)."""
+
+    def __init__(self) -> None:
+        self._container: Any = None
+
+    def bind(self, container: Any) -> "ContainerCheckout":
+        self._container = container
+        return self
+
+    def _impl(self) -> CheckoutServiceImpl:
+        from app.services.money import money
+
+        return money(self._container).checkout
+
+    async def quote(self, telegram_id: int, plan_code: str, months: int, **kw: Any):
+        return await self._impl().quote(telegram_id, plan_code, months, **kw)
+
+    async def start(self, telegram_id: int, quote: Any, **kw: Any):
+        return await self._impl().start(telegram_id, quote, **kw)
+
+    async def check(self, telegram_id: int, payment_id: int):
+        return await self._impl().check(telegram_id, payment_id)
+
+    def __getattr__(self, name: str) -> Any:
+        # start_checkout, check_result, plan_options, ... of the real service
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._impl(), name)

@@ -22,7 +22,12 @@ change in Postgres, no rewrite).
 - CHECK subscriptions.provisioning_state IN ('pending','synced','failed','expired')
   ('expired' undocumented in 2.1.1 comments but in live use, see 07 D8/Q4)
 - CHECK subscriptions.active = false OR valid_until IS NOT NULL OR is_lifetime
-- CHECK payments.status IN ('pending','succeeded','canceled','failed')
+- CHECK payments.status IN ('pending','waiting_for_capture','succeeded',
+  'canceled','failed','refunded'). Amended before its first prod run
+  (integration 3.0, requests/A.md A-1): 2.1 refunds.py writes 'refunded' on
+  every full refund, 3.0 on Stars/24h refunds; 'waiting_for_capture' is in
+  the 2.x FSM. tests/data/test_constraints_vs_code.py keeps this list equal
+  to every status the code writes.
 - CHECK payments.amount >= 0
 - CHECK payments.status <> 'succeeded' OR paid_at IS NOT NULL
 - UNIQUE (telegram_user_id, sub_kind) on subscriptions, full (not partial
@@ -56,7 +61,11 @@ CHECKS = [
         "ck_subscriptions_active_has_end",
         "active = false OR valid_until IS NOT NULL OR is_lifetime",
     ),
-    ("payments", "ck_payments_status", "status IN ('pending', 'succeeded', 'canceled', 'failed')"),
+    (
+        "payments",
+        "ck_payments_status",
+        "status IN ('pending', 'waiting_for_capture', 'succeeded', 'canceled', 'failed', 'refunded')",
+    ),
     ("payments", "ck_payments_amount_nonneg", "amount >= 0"),
     (
         "payments",

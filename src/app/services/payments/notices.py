@@ -102,8 +102,10 @@ class FulfillmentNotices:
             return T.OBHOD_PACKAGE_MANUAL, ui.support()
         if rec.kind == "gift":
             username = await self.d.bot_username()
-            code = rec.meta.get("gift_code") or ""
-            link = f"https://t.me/{username}?start=g_{code}" if username else f"g_{code}"
+            code = str(rec.meta.get("gift_code") or "")
+            if not code.startswith("g_"):  # PromoEngine codes already carry the g_ prefix
+                code = f"g_{code}"
+            link = f"https://t.me/{username}?start={code}" if username else code
             return T.gift_paid_buyer(name, int(rec.period_months or 1), link), ui.gift_paid()
         expires = await self._expires_at(rec, state)
         if rec.kind == "autorenew":

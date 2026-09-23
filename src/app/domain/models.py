@@ -107,9 +107,11 @@ class Quote:
 class Entitlement:
     """What the user is entitled to after a payment/promo/trial/admin grant.
 
-    ``days`` extends from max(now, current expiry); ``until`` sets an exact
-    end. Exactly one of them is set (``is_lifetime`` needs neither).
-    ``squad``/``device_limit`` default to the plan catalog when None.
+    ``months`` (calendar months, payments) or ``days`` extend from
+    max(now, current expiry); ``until`` sets an exact end. Exactly one of them
+    is set (``is_lifetime`` needs none). ``squad``/``device_limit`` default to
+    the plan catalog when None. ``clear_grace``: a grant ends stream C's
+    grace period (restores the plan squad and the traffic cap).
     """
 
     plan_code: str
@@ -123,6 +125,8 @@ class Entitlement:
     traffic_limit_bytes: Optional[int] = None
     payment_id: Optional[int] = None
     note: str = ""
+    months: Optional[int] = None
+    clear_grace: bool = True
 
 
 @dataclass(frozen=True)

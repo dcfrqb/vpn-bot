@@ -45,11 +45,24 @@ async def test_recent_paid_without_flag_is_left_to_the_webhook():
     m, deps = make_money()
     rec = deps.store.add_payment(TG, status="succeeded", plan_code="lite", period_months=1,
                                  amount=get_plan_price("lite", 1), paid_at=deps.clock().replace(tzinfo=None),
-                                 meta={"expected_amount": get_plan_price("lite", 1)})
+                                 meta={"expected_amount": get_plan_price("lite", 1), "v3": True})
     assert (await m.fulfillment.recover())["checked"] == 0
     deps.clock.advance(minutes=6)
     assert (await m.fulfillment.recover())["fulfilled"] == 1
     assert (await deps.store.get(rec.id)).fulfilled
+
+
+async def test_2x_paid_row_without_flag_is_never_regranted():
+    """First 3.0 deploy: a 2.x succeeded row with subscription_id NULL and no
+    needs_provisioning flag (2.x delivered it or decided not to) is not granted again."""
+    m, deps = make_money()
+    deps.store.add_payment(TG, status="succeeded", plan_code="lite", period_months=1,
+                           amount=get_plan_price("lite", 1),
+                           paid_at=deps.clock().replace(tzinfo=None) - timedelta(days=3),
+                           meta={"expected_amount": get_plan_price("lite", 1)})
+    deps.clock.advance(hours=1)
+    assert (await m.fulfillment.recover())["checked"] == 0
+    assert not deps.provisioning.grants
 
 
 async def test_recovery_skips_payments_on_review():

@@ -180,8 +180,6 @@ async def test_sql_store_state_changes_are_compare_and_set():
 
 
 @pytest.mark.skipif(not PG_URL, reason="HOTFIX_PG_URL is not set")
-@pytest.mark.xfail(strict=True, reason="r30_02 ck_payments_status has no 'refunded' (requests/A.md A-1): "
-                                       "full refunds (2.1 refunds.py, Stars 24h refunds) cannot be recorded")
 async def test_refunded_status_can_be_recorded():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 

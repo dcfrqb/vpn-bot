@@ -32,6 +32,7 @@ _LENIENT_BOOL_FIELDS = (
     "TASK_PANEL_HEALTH_ENABLED",
     "TASK_REMINDERS_ENABLED",
     "TASK_PANEL_SYNC_ENABLED",
+    "OBHOD_ORPHAN_DEACTIVATE_ENABLED",
 )
 
 # Выключатели фоновых задач (ревью N5): непонятное значение = False (fail safe).
@@ -51,6 +52,7 @@ _KILL_SWITCH_FIELDS = frozenset({
     "TASK_PANEL_HEALTH_ENABLED",
     "TASK_REMINDERS_ENABLED",
     "TASK_PANEL_SYNC_ENABLED",
+    "OBHOD_ORPHAN_DEACTIVATE_ENABLED",
 })
 
 # 3.0: числовые и опциональные поля, которые в .env.example записаны пустыми.
@@ -203,6 +205,9 @@ class Settings(BaseSettings):
     DEVICE_CLEANUP_DRY_RUN: bool = True
     TASK_DEVICE_CLEANUP_ENABLED: bool = False
     TASK_OBHOD_LIFECYCLE_ENABLED: bool = False
+    # Обход без основного Pro («сироты»): решение владельца 23.09.2026 - не трогать.
+    # false = джоба только считает и шлет сводку; true = выключает такие обходы.
+    OBHOD_ORPHAN_DEACTIVATE_ENABLED: bool = False
     TASK_PANEL_SYNC_ENABLED: bool = False   # новый реконсилер по всем юзерам (pull-forward)
 
     # --- 3.0 Stream C: Panel events (вебхуки панели, напоминания, техработы, льготный период) ---

@@ -14,7 +14,7 @@ from app.bot.middlewares.maintenance import (
 from app.domain.models import AdminTopic
 from app.domain.texts.notify import MAINTENANCE_CHECKOUT_NOTICE, MAINTENANCE_SCREEN
 from app.services import maintenance as M
-from app.services.shims import RedisMaintenanceGuard
+from app.services.maintenance import RedisMaintenanceGuard
 from tests.fakes.bot import callback_update, make_bot, message_update, user
 
 # ------------------------------------------------------------------ probe

@@ -288,3 +288,59 @@ def pick_primary(users: list[UserDTO]) -> Optional[UserDTO]:
         )
 
     return max(users, key=key)
+
+
+# --- raw panel JSON -> domain PanelUser (moved from services/shims.py at cutover) ---
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _unwrap(data: Any) -> dict:
+    raw = data.get("response", data) if isinstance(data, dict) else {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def panel_user_from_raw(raw: Mapping[str, Any], uuid_to_name: Optional[Mapping[str, str]] = None) -> PanelUser:
+    """Remnawave 3.4.3 user JSON -> PanelUser."""
+    squads = raw.get("activeInternalSquads") or []
+    uuids: list[str] = []
+    names: list[str] = []
+    for item in squads:
+        if isinstance(item, dict):
+            u, n = item.get("uuid"), item.get("name")
+        else:
+            u, n = item, None
+        if u:
+            uuids.append(str(u))
+        n = n or (uuid_to_name or {}).get(str(u))
+        if n:
+            names.append(str(n))
+    traffic = raw.get("userTraffic") if isinstance(raw.get("userTraffic"), dict) else {}
+    used = raw.get("usedTrafficBytes", traffic.get("usedTrafficBytes"))
+    tg = raw.get("telegramId")
+    return PanelUser(
+        id=int(raw.get("id") or 0),
+        uuid=str(raw.get("uuid") or ""),
+        username=str(raw.get("username") or ""),
+        telegram_id=int(tg) if tg not in (None, "") else None,
+        status=raw.get("status"),
+        expire_at=_parse_dt(raw.get("expireAt")),
+        squads=tuple(names),
+        squad_uuids=tuple(uuids),
+        device_limit=raw.get("hwidDeviceLimit"),
+        traffic_limit_bytes=raw.get("trafficLimitBytes"),
+        traffic_limit_strategy=raw.get("trafficLimitStrategy"),
+        used_traffic_bytes=int(used) if used not in (None, "") else None,
+        subscription_url=raw.get("subscriptionUrl"),
+        raw=dict(raw),
+    )

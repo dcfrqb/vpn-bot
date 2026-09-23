@@ -92,39 +92,9 @@ async def test_provision_tariff_uses_policy():
     assert len(fake.patches) == 1
 
 
-@pytest.mark.asyncio
-async def test_sun718_revert_keeps_manual_squads_and_limit():
-    from app.tasks import sun718_revert as rv
-
-    fake = FakeRemna()
-    fake.add_user(2002, "tg_test_user", telegram_id=900000002, squads=["pro", "arcadia"], limit=12)
-
-    payment = SimpleNamespace(
-        id=1, telegram_user_id=900000002,
-        payment_metadata={"pre_promo_plan": "lite", "revert_completed": False},
-    )
-    tg_user = SimpleNamespace(remna_user_id="2002")
-
-    class _Res:
-        def scalar_one_or_none(self):
-            return tg_user
-
-    session = MagicMock()
-    session.get = AsyncMock(return_value=payment)
-    session.execute = AsyncMock(return_value=_Res())
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=session)
-    cm.__aexit__ = AsyncMock(return_value=False)
-
-    task = rv.Sun718RevertTask(bot=AsyncMock())
-    with patch("app.db.session.SessionLocal", MagicMock(return_value=cm)), \
-         patch("app.remnawave.client.RemnaClient", return_value=fake), \
-         patch("app.routers.start._get_last_paid_plan_code", AsyncMock(return_value="lite")), \
-         patch.object(task, "_mark_completed", AsyncMock()) as mark:
-        await task._revert_one(1)
-    assert set(fake.squad_names(2002)) == {"arcadia", "lite"}
-    assert fake.users[2002]["hwidDeviceLimit"] == 12
-    mark.assert_awaited_once()
+# test_sun718_revert_keeps_manual_squads_and_limit: the 2.x Sun718RevertTask was removed at the
+# 3.0 cutover; the same invariant is tested on app.services.referral.Sun718Reverter
+# (tests/integration/test_growth_real_postgres.py::test_sun718_revert_on_postgres).
 
 
 class _Res:

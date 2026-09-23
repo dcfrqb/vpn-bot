@@ -1,11 +1,11 @@
-"""3.0 Foundation: every port has an implementation wired by the container; shims behave."""
+"""3.0: every port has its real implementation wired by the container."""
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.container import Container, build_container, get_container, set_container
-from app.services import ports, shims
+from app.services import ports
 from tests.fakes.bot import make_bot
 from tests.fakes.notifier import RecordingNotifier
 from tests.fakes.payments import FakePaymentGateway
@@ -40,7 +40,7 @@ def test_overrides_and_unknown_override():
     bot, _ = make_bot()
     pay = FakePaymentGateway()
     c = build_container(bot, payments=pay)
-    assert c.payments is pay and c.checkout._payments is pay  # checkout uses the same gateway
+    assert c.payments is pay and c.checkout._impl().d.payments is pay  # checkout uses the same gateway
     with pytest.raises(TypeError):
         build_container(bot, nope=1)
     with pytest.raises(TypeError):
@@ -58,24 +58,30 @@ def test_get_container_requires_startup():
     set_container(None)
 
 
-async def test_placeholders_fail_loudly():
-    with pytest.raises(NotImplementedError, match="stream E"):
-        await shims.LegacyPromoService().start_trial(1)
-    with pytest.raises(NotImplementedError, match="stream A"):
-        await shims.DisabledStarsGateway().refund(1, "x")
-
-
-def test_stream_b_shims_are_the_real_services():
-    """Stream B: the shim names wired by the frozen container are the real services."""
+def test_container_wires_the_real_services_over_one_gateway():
     from app.infra.remnawave.gateway import HttpRemnaGateway
+    from app.infra.telegram_stars import TelegramStarsGateway
+    from app.infra.yookassa.gateway import YooKassaGateway
     from app.services.devices import PanelDevicesService
+    from app.services.promo import PromoEngine
     from app.services.provisioning import PanelProvisioningService
     from app.services.status import PanelStatusService
 
-    assert shims.LegacyRemnaGateway is HttpRemnaGateway
-    assert shims.LegacyProvisioningService is PanelProvisioningService
-    assert shims.LegacyStatusService is PanelStatusService
-    assert shims.UnavailableDevicesService is PanelDevicesService
+    bot, _ = make_bot()
+    c = build_container(bot)
+    assert isinstance(c.remna, HttpRemnaGateway) and isinstance(c.payments, YooKassaGateway)
+    assert isinstance(c.stars, TelegramStarsGateway)
+    assert isinstance(c.provisioning, PanelProvisioningService) and c.provisioning.remna is c.remna
+    assert isinstance(c.status, PanelStatusService) and c.status.remna is c.remna
+    assert isinstance(c.devices, PanelDevicesService) and c.devices.remna is c.remna
+    assert isinstance(c.promo, PromoEngine) and c.promo.provisioning is c.provisioning
+
+
+def test_dependents_are_built_over_an_overridden_gateway():
+    bot, _ = make_bot()
+    fake = FakeRemnaGateway()
+    c = build_container(bot, remna=fake)
+    assert c.provisioning.remna is fake and c.status.remna is fake and c.devices.remna is fake
 
 
 # --- LegacyRemnaGateway over the in-memory panel -------------------------------------------------
@@ -123,12 +129,13 @@ async def test_create_iter_ping(gw):
     assert await gw.ping() is False
 
 
-# --- Status / checkout / maintenance shims ---------------------------------------------------------
+# --- checkout / maintenance ---------------------------------------------------------
 
 async def test_checkout_quote_uses_catalog_prices_only():
     from app.domain.plans import get_plan_price
 
-    co = shims.LegacyCheckoutService(FakePaymentGateway())
+    bot, _ = make_bot()
+    co = build_container(bot, payments=FakePaymentGateway()).checkout
     q = await co.quote(1, "pro", 12)
     assert q.amount_rub == get_plan_price("pro", 12) and q.title == "Pro" and not q.is_legacy
     assert await co.quote(1, "trial", 1) is None
@@ -138,22 +145,20 @@ async def test_checkout_quote_uses_catalog_prices_only():
         assert (await co.quote(1, "basic", 1)).is_legacy
 
 
-async def test_checkout_shim_delegates_to_stream_a_checkout():
+async def test_checkout_slot_delegates_to_stream_a_checkout():
     from app.services.checkout import CheckoutServiceImpl
 
     bot, _ = make_bot()
     c = build_container(bot, payments=FakePaymentGateway())
-    set_container(c)
-    try:
-        assert isinstance(c.checkout._impl(), CheckoutServiceImpl)
-        assert c.checkout._impl().d.payments is c.payments
-    finally:
-        set_container(None)
+    assert isinstance(c.checkout._impl(), CheckoutServiceImpl)
+    assert c.checkout._impl().d.payments is c.payments
 
 
 async def test_maintenance_guard_roundtrip():
     r = FakeRedis()
-    g = shims.RedisMaintenanceGuard()
+    from app.services.maintenance import RedisMaintenanceGuard
+
+    g = RedisMaintenanceGuard()
     with patch("app.services.cache.get_redis_client", return_value=r):
         assert await g.is_active() is False
         await g.set_active(True, reason="panel down", by=1)

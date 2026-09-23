@@ -14,16 +14,15 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from app.domain.models import Entitlement, SubKind, SubscriptionState
 from app.services.payments.store import (
+    M_CREATED_V3,
     M_FULFILLED_AT,
     M_NEEDS_PROVISIONING,
-    M_NEEDS_REVIEW,
-    M_REVIEW_APPROVED,
-    M_REVIEW_REJECTED,
     PENDING_STATUSES,
     PaymentRecord,
     RefundRequestRecord,
     SavedMethodRecord,
     SubInfo,
+    stuck_is_recoverable,
 )
 
 T0 = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
@@ -107,7 +106,8 @@ class InMemoryPaymentStore:
                                        user.get("username") or "")
         return self.add_payment(telegram_id, provider=provider, external_id=external_id, amount=amount,
                                 currency=currency, status=status, plan_code=plan_code, period_months=months,
-                                kind=kind, method=method, description=description, meta=dict(meta))
+                                kind=kind, method=method, description=description,
+                                meta={**dict(meta), M_CREATED_V3: True})
 
     async def mark_paid(self, payment_id, *, amount=None, charge_id=None, card_fingerprint=None, meta_patch=None):
         rec = self.payments.get(int(payment_id))
@@ -171,11 +171,9 @@ class InMemoryPaymentStore:
         for r in self.payments.values():
             if r.status != "succeeded" or r.provider not in ("yookassa", "stars") or r.subscription_id is not None:
                 continue
-            if r.fulfilled or r.meta.get(M_REVIEW_REJECTED) or (r.meta.get(M_NEEDS_REVIEW)
-                                                               and not r.meta.get(M_REVIEW_APPROVED)):
+            if r.fulfilled:
                 continue
-            since = r.paid_at or r.created_at
-            if r.meta.get(M_NEEDS_PROVISIONING) or since < now - stuck_age:
+            if stuck_is_recoverable(r.meta, r.paid_at or r.created_at, now, stuck_age):
                 stuck.append(self._copy(r))
         return pending, stuck[:limit]
 
@@ -266,6 +264,7 @@ class FakeProvisioning:
     async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str,
                     months: Optional[int] = None, enable_if_disabled: bool = False,
                     clear_grace: Optional[bool] = None) -> SubscriptionState:
+        months = months if months is not None else entitlement.months
         self.calls.append({"tg": telegram_id, "months": months, "enable_if_disabled": enable_if_disabled})
         if self.fail_times > 0:
             self.fail_times -= 1
@@ -278,7 +277,12 @@ class FakeProvisioning:
             sub = self.store.subs.get(telegram_id)
             if sub and sub.valid_until and sub.valid_until.replace(tzinfo=timezone.utc) > base:
                 base = sub.valid_until.replace(tzinfo=timezone.utc)
-        until = base + timedelta(days=entitlement.days or 0)
+        if months:
+            from dateutil.relativedelta import relativedelta
+
+            until = base + relativedelta(months=int(months))
+        else:
+            until = base + timedelta(days=entitlement.days or 0)
         if self.store is not None:
             sub = self.store.subs.get(telegram_id) or self.store.add_sub(telegram_id)
             sub.valid_until, sub.active, sub.plan_code = until.replace(tzinfo=None), True, entitlement.plan_code

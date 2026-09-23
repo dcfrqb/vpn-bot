@@ -195,7 +195,8 @@ class Payment(Base):
         Index("ix_payments_external_id", "external_id"),
         Index("ix_payments_updated_at", "updated_at"),
         CheckConstraint(
-            "status IN ('pending', 'succeeded', 'canceled', 'failed')", name="ck_payments_status"
+            "status IN ('pending', 'waiting_for_capture', 'succeeded', 'canceled', 'failed', 'refunded')",
+            name="ck_payments_status",
         ),
         CheckConstraint("amount >= 0", name="ck_payments_amount_nonneg"),
         CheckConstraint(

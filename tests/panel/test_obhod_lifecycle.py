@@ -19,36 +19,82 @@ def life(gw, repo, notifier, clock):
     return ObhodLifecycle(gw, repo, notifier=notifier, clock=clock)
 
 
+@pytest.fixture
+def life_deactivating(gw, repo, notifier, clock):
+    """OBHOD_ORPHAN_DEACTIVATE_ENABLED=true (not the default)."""
+    return ObhodLifecycle(gw, repo, notifier=notifier, clock=clock, deactivate_orphans=True)
+
+
 def obhod_user(fake, uid=600, *, status="ACTIVE", days=10, limit=100):
     fake.add_user(uid, f"tg_{uid}_obhod", squads=["obhod"], limit=10, status=status,
                   expire=iso(NOW + timedelta(days=days)))
     fake.users[uid]["trafficLimitBytes"] = limit
 
 
-async def test_expired_obhod_is_deactivated(life, fake, repo):
+async def test_expired_obhod_of_a_live_pro_is_marked_inactive_without_panel_write(life, fake, repo):
     obhod_user(fake, status="EXPIRED", days=-1)
     repo.add_row(7, plan="pro", panel_id=501, until=NOW + timedelta(days=5))
     row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW - timedelta(days=1))
     r = await life.run()
-    assert r.deactivated == 1 and not repo.subs[row.id].active and fake.disabled == [600]
+    assert r.deactivated == 1 and not repo.subs[row.id].active
+    assert fake.disabled == [] and not fake.patches  # already expired on the panel: no panel write
 
 
-async def test_orphan_is_kept_and_reported_once(life, fake, repo, notifier):
+def _snapshot(fake, repo, row):
+    return dict(fake.users[600]), repo.subs[row.id]
+
+
+async def test_orphan_without_main_is_left_untouched_and_reported_once(life, fake, repo, notifier):
+    """Owner decision 23.09.2026: orphans are report-only by default."""
     obhod_user(fake)
-    row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10))
-    await life.run()
-    await life.run()
-    assert repo.subs[row.id].active and not fake.disabled
-    assert len([s for s in notifier.to_admins() if "без основной" in s.text]) == 1
+    row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10),
+                       config_data={"package": "obhod_500",
+                                    "package_until": (NOW - timedelta(hours=1)).replace(tzinfo=None).isoformat()})
+    before = _snapshot(fake, repo, row)
+    r1 = await life.run()
+    r2 = await life.run()
+    assert r1.orphans == 1 and r1.orphan_reasons == {"no_main": 1} and r1.deactivated == 0
+    assert r1.packages_expired == 0 and r2.orphans == 1
+    assert _snapshot(fake, repo, row) == before  # no DB write, not even the package expiry
+    assert not fake.disabled and not fake.patches
+    reports = [s for s in notifier.to_admins() if "без основного Pro" in s.text]
+    assert len(reports) == 1 and "не трогаю" in reports[0].text
 
 
-async def test_main_inactive_and_dead_turns_obhod_off(life, fake, repo):
+async def test_orphan_with_inactive_main_is_left_untouched(life, fake, repo, notifier):
     obhod_user(fake)
     fake.add_user(501, "u", telegram_id=7, squads=["pro"], status="EXPIRED", expire=iso(NOW - timedelta(days=1)))
     repo.add_row(7, plan="pro", panel_id=501, active=False, until=NOW - timedelta(days=1))
     row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10))
     r = await life.run()
-    assert r.deactivated == 1 and not repo.subs[row.id].active
+    assert r.orphans == 1 and r.orphan_reasons == {"main_inactive": 1} and r.deactivated == 0
+    assert repo.subs[row.id].active and not fake.disabled and not fake.patches
+
+
+async def test_orphan_with_non_pro_main_is_left_untouched(life, fake, repo):
+    obhod_user(fake)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], expire=iso(NOW + timedelta(days=30)))
+    repo.add_row(7, plan="lite", panel_id=501, until=NOW + timedelta(days=30))
+    row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10))
+    r = await life.run()
+    assert r.orphan_reasons == {"main_not_pro": 1} and repo.subs[row.id].active and not fake.disabled
+
+
+async def test_orphans_are_turned_off_only_with_the_flag(life_deactivating, fake, repo):
+    obhod_user(fake)
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], status="EXPIRED", expire=iso(NOW - timedelta(days=1)))
+    repo.add_row(7, plan="pro", panel_id=501, active=False, until=NOW - timedelta(days=1))
+    row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10))
+    r = await life_deactivating.run()
+    assert r.deactivated == 1 and r.orphans_deactivated == 1 and not repo.subs[row.id].active
+    assert fake.disabled == [600]
+
+
+def test_orphan_flag_defaults_to_report_only():
+    from app.config import Settings
+
+    assert Settings(_env_file=None).OBHOD_ORPHAN_DEACTIVATE_ENABLED is False
+    assert ObhodLifecycle(object(), object()).deactivate_orphans is False
 
 
 async def test_main_inactive_but_live_in_panel_is_kept(life, fake, repo, notifier):
@@ -60,12 +106,13 @@ async def test_main_inactive_but_live_in_panel_is_kept(life, fake, repo, notifie
     assert r.kept_manual == 1 and repo.subs[row.id].active and notifier.to_admins()
 
 
-async def test_main_in_grace_is_not_a_live_pro(life, fake, repo):
+async def test_main_in_grace_is_not_a_live_pro(life, life_deactivating, fake, repo):
     obhod_user(fake)
     fake.add_user(501, "u", telegram_id=7, squads=["pro"], expire=iso(NOW + timedelta(days=2)))
     repo.add_row(7, plan="pro", panel_id=501, active=False, until=NOW - timedelta(days=1), grace_state="active")
     row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, until=NOW + timedelta(days=10))
-    await life.run()
+    assert (await life.run()).orphan_reasons == {"main_inactive": 1} and repo.subs[row.id].active
+    await life_deactivating.run()
     assert not repo.subs[row.id].active
 
 

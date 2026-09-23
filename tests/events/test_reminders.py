@@ -131,19 +131,10 @@ def test_texts_have_no_yo_and_no_em_dash():
 
 
 async def test_legacy_expiry_notifier_is_muted_when_reminders_on(monkeypatch):
-    from app.tasks.subscription_checker import SubscriptionChecker
+    from app.worker.jobs import legacy
 
-    flags = {"EXPIRY_NOTIFIER": True, "REMINDERS": True, "RECOVERY": False, "RECONCILER": False}
+    flags = {"EXPIRY_NOTIFIER": True, "REMINDERS": True}
     monkeypatch.setattr("app.config.task_enabled", lambda n: flags.get(n, False))
-    calls = []
-
-    async def fake_expiry(self, prefix):
-        calls.append(prefix)
-
-    monkeypatch.setattr(SubscriptionChecker, "_run_expiry", fake_expiry)
-    checker = SubscriptionChecker(bot=None)
-    await checker._run_once("t")
-    assert calls == []
+    assert not legacy.expiry_notifier_enabled()
     flags["REMINDERS"] = False
-    await checker._run_once("t")
-    assert len(calls) == 1
+    assert legacy.expiry_notifier_enabled()

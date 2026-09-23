@@ -1,13 +1,9 @@
 """Admin: promo codes (PromoAdm, /promo_new, /promo_list). Owner: E.
 
-Also carries the other stream E admin routers (home, users, grants, ops) as
-sub-routers until they are listed in NEW_ROUTER_MODULES themselves (request
-in impl/requests/E.md); the include is skipped once they are.
 Admins only (AdminGuard).
 """
 from __future__ import annotations
 
-import importlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -25,12 +21,6 @@ from app.services.promo import KIND_DAYS, KIND_PLAN, PromoCodeSpec, get_promo, n
 
 router = guard_router(Router(name="r3_admin_promo"))
 
-SUBROUTER_MODULES = (
-    "app.bot.routers.admin.home",
-    "app.bot.routers.admin.users",
-    "app.bot.routers.admin.grants",
-    "app.bot.routers.admin.ops",
-)
 
 
 def parse_promo_new(args: str) -> PromoCodeSpec:
@@ -120,17 +110,3 @@ async def cb_code(callback: CallbackQuery, callback_data: PromoAdm, container: A
         return
     me = await callback.bot.me()
     await render(callback, *V.promo_card(row, me.username))
-
-
-def _include_subrouters() -> None:
-    from app.bot.routers import NEW_ROUTER_MODULES
-
-    for mod in SUBROUTER_MODULES:
-        if mod in NEW_ROUTER_MODULES:
-            continue
-        sub = importlib.import_module(mod).router
-        if sub.parent_router is None:
-            router.include_router(sub)
-
-
-_include_subrouters()

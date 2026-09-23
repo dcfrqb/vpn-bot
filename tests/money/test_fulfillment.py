@@ -42,7 +42,7 @@ async def test_paid_payment_is_granted_once_across_all_entry_points():
     assert len(deps.provisioning.grants) == 1
     tg, ent = deps.provisioning.grants[0]
     assert tg == TG and ent.plan_code == "pro" and ent.payment_id == rec.id
-    assert ent.source is EntitlementSource.PAYMENT and 28 <= ent.days <= 31
+    assert ent.source is EntitlementSource.PAYMENT and ent.months == 1 and ent.days is None
     users = [s for s in deps.notifier.sent if s.kind == "user"]
     assert len(users) == 1 and "Оплата прошла" in users[0].text
     assert len(deps.notifier.to_admins(AdminTopic.PAYMENTS)) == 1

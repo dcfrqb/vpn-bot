@@ -10,14 +10,13 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from app.services.payments.sql_store_refunds import SqlRefundsAutorenewMixin, _record
 from app.services.payments.store import (
+    M_CREATED_V3,
     M_FULFILLED_AT,
     M_NEEDS_PROVISIONING,
-    M_NEEDS_REVIEW,
-    M_REVIEW_APPROVED,
-    M_REVIEW_REJECTED,
     PENDING_STATUSES,
     PaymentRecord,
     _naive,
+    stuck_is_recoverable,
 )
 
 
@@ -107,7 +106,7 @@ class SqlPaymentStore(SqlRefundsAutorenewMixin):
             row = Payment(
                 telegram_user_id=int(telegram_id), provider=provider, external_id=str(external_id),
                 amount=Decimal(str(amount)), currency=currency, status=status, description=description,
-                payment_metadata=dict(meta), plan_code=plan_code, period_months=months, kind=kind, method=method,
+                payment_metadata={**dict(meta), M_CREATED_V3: True}, plan_code=plan_code, period_months=months, kind=kind, method=method,
             )
             s.add(row)
             try:
@@ -274,11 +273,7 @@ class SqlPaymentStore(SqlRefundsAutorenewMixin):
             rec = _record(row)
             if rec.fulfilled:
                 continue
-            m = rec.meta
-            if m.get(M_REVIEW_REJECTED) or (m.get(M_NEEDS_REVIEW) and not m.get(M_REVIEW_APPROVED)):
-                continue
-            since = rec.paid_at or rec.created_at
-            if m.get(M_NEEDS_PROVISIONING) or (since is not None and since < now - stuck_age):
+            if stuck_is_recoverable(rec.meta, rec.paid_at or rec.created_at, now, stuck_age):
                 stuck.append(rec)
         return [_record(r) for r in pending], stuck[:limit]
 

@@ -73,25 +73,44 @@ class _JobState:
 
 
 def build_jobs(bot: Any, container: Any = None) -> list[Job]:
-    """The JOBS registry: every background job of the bot, in start order."""
-    from app.tasks.subscription_checker import SubscriptionChecker
-    from app.worker.jobs.legacy import LegacyJobs
+    """The JOBS registry: every background job of the bot, in start order.
 
-    legacy = LegacyJobs(bot)
+    Every job is gated by BACKGROUND_TASKS_ENABLED and its TASK_<FLAG>_ENABLED
+    (2.x jobs default ON, every 3.0 job default OFF except payment_recovery,
+    which reuses the 2.x TASK_RECOVERY_ENABLED)."""
+    from app.config import settings
+    from app.worker.jobs import (
+        autopay,
+        broadcast_resume,
+        device_cleanup,
+        grace,
+        legacy,
+        obhod_lifecycle,
+        panel_health,
+        panel_sync,
+        recovery,
+        reminders,
+        sun718_revert,
+    )
+
     return [
-        # 2.x, wrapped as-is (default ON, as in 2.1.1)
-        Job("subscription_check", legacy.subscription_check, 3600,
-            enabled=SubscriptionChecker.any_stage_enabled),
-        Job("sun718_revert", legacy.sun718_revert, 3600, flag="SUN718_REVERT"),
-        Job("broadcast_resume", legacy.broadcast_resume, 0, flag="BROADCAST_RESUME", once=True),
-        # 3.0 jobs are appended here by their streams (default OFF):
-        #   A: autopay            flag="AUTOPAY"
-        #   B: device_cleanup     flag="DEVICE_CLEANUP"
-        #   B: obhod_lifecycle    flag="OBHOD_LIFECYCLE"
-        #   B: panel_sync         flag="PANEL_SYNC"   interval=settings.RECONCILER_INTERVAL_S
-        #   C: reminders          flag="REMINDERS"
-        #   C: grace              flag="GRACE"
-        #   C: panel_health       flag="PANEL_HEALTH"
+        # money (A)
+        Job("payment_recovery", recovery.run, 300, flag="RECOVERY"),
+        Job("autopay", autopay.run, 3600, flag="AUTOPAY"),
+        # panel core (B)
+        Job("panel_sync", panel_sync.run, float(settings.RECONCILER_INTERVAL_S), flag="PANEL_SYNC"),
+        Job("device_cleanup", device_cleanup.run, 86400, flag="DEVICE_CLEANUP", run_at_start=False),
+        Job("obhod_lifecycle", obhod_lifecycle.run, 86400, flag="OBHOD_LIFECYCLE", run_at_start=False),
+        # panel events (C)
+        Job("reminders", reminders.run, 1800, flag="REMINDERS"),
+        Job("grace", grace.run, 3600, flag="GRACE"),
+        Job("panel_health", panel_health.run, 30, flag="PANEL_HEALTH"),
+        # growth (E)
+        Job("sun718_revert", sun718_revert.run, 3600, flag="SUN718_REVERT"),
+        Job("broadcast_resume", broadcast_resume.run, 0, flag="BROADCAST_RESUME", once=True),
+        # 2.x, unchanged until 3.0.1 (app.worker.jobs.legacy)
+        Job("expiry_notifier", legacy.expiry_notifier, 3600, enabled=legacy.expiry_notifier_enabled),
+        Job("reconciler", legacy.reconciler, 3600, flag="RECONCILER"),
     ]
 
 
