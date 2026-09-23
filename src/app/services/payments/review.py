@@ -53,7 +53,6 @@ async def decide_held_payment(payment_row_id: int, admin_id: int, approve: bool,
     """Возвращает (код результата, текст для админа)."""
     from app.db.models import Payment as PaymentModel
     from app.db.session import SessionLocal
-    from app.services.payments.errors import ProvisioningError
     from app.services.user_lock import user_action_lock
 
     trace_id = f"review_{uuid.uuid4().hex[:8]}"
@@ -94,30 +93,47 @@ async def decide_held_payment(payment_row_id: int, admin_id: int, approve: bool,
             if payment.status != "succeeded":
                 return NOT_PAID, RESULT_TEXT[NOT_PAID]
 
-            meta.update({
-                "review_approved": True,
-                "review_decided_by": int(admin_id),
-                "review_decided_at": datetime.utcnow().isoformat(),
-            })
-            payment.payment_metadata = meta
-            await session.commit()
-            logger.warning(
-                f"[{trace_id}] payment review approved: payment_id={payment.id} "
-                f"external_id={payment.external_id} by admin={admin_id}"
-            )
+            # Ревью N3: тот же лок, что у recovery и вебхука
+            # (provision_lock:<external_id>). Иначе одобрение во время цикла
+            # recovery давало две выдачи параллельно и два «оплата подтверждена».
+            from app.services.cache import acquire_provision_lock, release_provision_lock
 
-            from app.services.payments.yookassa import handle_successful_payment
+            if not await acquire_provision_lock(payment.external_id):
+                return BUSY, RESULT_TEXT[BUSY]
             try:
-                await handle_successful_payment(
-                    session=session,
-                    payment_id=payment.id,
-                    telegram_user_id=int(payment.telegram_user_id),
-                    amount=float(payment.amount),
-                    description=payment.description or "CRS VPN",
-                    bot=bot,
-                    trace_id=trace_id,
-                )
-            except ProvisioningError as e:
-                logger.error(f"[{trace_id}] approved payment provisioning pending: {e}")
-                return PENDING, RESULT_TEXT[PENDING]
-            return APPROVED, RESULT_TEXT[APPROVED]
+                return await _approve_and_provision(session, payment, meta, admin_id, bot, trace_id)
+            finally:
+                await release_provision_lock(payment.external_id)
+
+
+async def _approve_and_provision(session, payment, meta: dict, admin_id: int, bot, trace_id: str) -> Tuple[str, str]:
+    """Одобрение и выдача под provision_lock (см. decide_held_payment)."""
+    from app.services.payments.errors import ProvisioningError
+
+    meta.update({
+        "review_approved": True,
+        "review_decided_by": int(admin_id),
+        "review_decided_at": datetime.utcnow().isoformat(),
+    })
+    payment.payment_metadata = meta
+    await session.commit()
+    logger.warning(
+        f"[{trace_id}] payment review approved: payment_id={payment.id} "
+        f"external_id={payment.external_id} by admin={admin_id}"
+    )
+
+    from app.services.payments.yookassa import handle_successful_payment
+    try:
+        await handle_successful_payment(
+            session=session,
+            payment_id=payment.id,
+            telegram_user_id=int(payment.telegram_user_id),
+            amount=float(payment.amount),
+            description=payment.description or "CRS VPN",
+            bot=bot,
+            trace_id=trace_id,
+        )
+    except ProvisioningError as e:
+        logger.error(f"[{trace_id}] approved payment provisioning pending: {e}")
+        return PENDING, RESULT_TEXT[PENDING]
+    return APPROVED, RESULT_TEXT[APPROVED]

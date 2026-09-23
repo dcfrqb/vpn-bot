@@ -11,6 +11,9 @@
                         Раньше тут был 200: если первая доставка потом падала
                         и снимала маркер, ретрай уже был «съеден» (ревью m1/m-4);
   маркера нет        -> обрабатываем.
+  SET NX не прошел, а маркера уже нет (первая доставка упала между нашими
+  SET и GET) -> еще одна попытка SET NX, иначе 503 (ревью N4). Значения
+  маркера всегда непустые, поэтому «нет значения» никогда не значит «done».
 Неуспешная обработка (исключение или False) снимает маркер, чтобы повтор
 YooKassa после нашего 503 не был проглочен (дефект Д-2). Redis недоступен —
 обрабатываем без дедупа, страхует блокировка строки платежа в БД.
@@ -53,7 +56,18 @@ async def acquire_webhook_dedup(webhook_data: Dict[str, Any], event: str, trace_
         return WebhookDedup(UNAVAILABLE)
     if got:
         return WebhookDedup(ACQUIRED, key)
-    current = await get_value(key) or ""
+    current = await get_value(key)
+    if current is None:
+        # Ревью N4: между нашим SET NX и GET первая доставка упала и сняла
+        # маркер. Раньше пустое значение считалось «done» (200, ретрай съеден).
+        # Пробуем взять маркер еще раз; не вышло и значения опять нет -> 503.
+        got = await set_once(key, f"processing:{trace_id}", ttl=WEBHOOK_PROCESSING_TTL_SECONDS)
+        if got:
+            return WebhookDedup(ACQUIRED, key)
+        current = await get_value(key)
+        if current is None:
+            logger.info(f"[{trace_id}] webhook {key}: marker state unknown -> retry later")
+            return WebhookDedup(IN_PROGRESS, key)
     if current.startswith("processing"):
         logger.info(f"[{trace_id}] webhook {key}: first delivery still in progress -> retry later")
         return WebhookDedup(IN_PROGRESS, key)
