@@ -24,13 +24,40 @@ _YOOKASSA_NETWORKS = [
 ]
 
 
+def _trusted_proxy_networks() -> list:
+    """Сети, от которых принимаем X-Real-IP (локальный nginx / docker-шлюз)."""
+    raw = getattr(settings, "WEBHOOK_TRUSTED_PROXIES", None) or ""
+    nets = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning(f"WEBHOOK_TRUSTED_PROXIES: пропускаю невалидную сеть {part!r}")
+    return nets
+
+
 def _get_client_ip(request: Request) -> str | None:
-    """Возвращает IP клиента с учетом nginx-прокси."""
-    for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
-        raw = request.headers.get(header)
-        if raw:
-            return raw.split(",")[0].strip()
-    return request.client.host if request.client else None
+    """IP клиента для allow-list YooKassa.
+
+    Хотфикс 2.1: заголовкам верим ТОЛЬКО если соединение пришло от доверенного
+    прокси (nginx на хосте -> docker-шлюз / localhost). И берем только
+    X-Real-IP: nginx перезаписывает его своим $remote_addr. CF-Connecting-IP и
+    X-Forwarded-For клиент может прислать сам (pay.* без Cloudflare, nginx их
+    не чистит), поэтому раньше allow-list обходился подделкой заголовка.
+    """
+    peer = request.client.host if request.client else None
+    try:
+        peer_ip = ipaddress.ip_address(peer) if peer else None
+    except ValueError:
+        peer_ip = None
+    if peer_ip is not None and any(peer_ip in net for net in _trusted_proxy_networks()):
+        real_ip = (request.headers.get("X-Real-IP") or "").strip()
+        if real_ip:
+            return real_ip
+    return peer
 
 
 def _is_yookassa_ip(ip_str: str | None) -> bool:
@@ -96,7 +123,11 @@ app = FastAPI(
     title="CRS VPN Webhook API",
     description="API для обработки webhook'ов от ЮKassa",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Хотфикс 2.1: /docs, /redoc, /openapi.json были открыты в интернет.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
@@ -151,7 +182,9 @@ async def health_check():
         else:
             status_parts["db"] = "not_configured"
     except Exception as e:
-        status_parts["db"] = f"down: {str(e)[:80]}"
+        # Текст ошибки только в лог: /health доступен снаружи.
+        logger.error(f"health: db check failed: {e}")
+        status_parts["db"] = "down"
         overall_ok = False
 
     try:
@@ -163,7 +196,8 @@ async def health_check():
         else:
             status_parts["redis"] = "not_configured"
     except Exception as e:
-        status_parts["redis"] = f"down: {str(e)[:80]}"
+        logger.error(f"health: redis check failed: {e}")
+        status_parts["redis"] = "down"
         overall_ok = False
 
     body = {
@@ -319,5 +353,5 @@ async def yookassa_webhook(request: Request):
         # needs_provisioning=True уже выставлен — SubscriptionChecker подхватит при восстановлении.
         return JSONResponse(
             status_code=503,
-            content={"status": "error", "message": str(e)[:100]}
+            content={"status": "error"}
         )

@@ -1,7 +1,13 @@
 # Пример конфигурации Nginx для pay.crs-projects.com
-# Скопируйте в /etc/nginx/sites-available/crs-vpn-bot и адаптируйте
-# Для PROD: envsubst < nginx.conf.example > /etc/nginx/sites-available/crs-vpn-bot
-#   (если используете переменные ${YOOKASSA_WEBHOOK_SECRET})
+# Скопируйте в /etc/nginx/sites-available/pay.crs-projects.com и адаптируйте.
+#
+# Хотфикс 2.1 (безопасность вебхука):
+# - IP клиента для allow-list берется ТОЛЬКО из X-Real-IP, который nginx ставит
+#   сам ($remote_addr). CF-Connecting-IP и X-Forwarded-For от клиента вычищаются,
+#   иначе allow-list YooKassa обходится подделкой заголовка (pay.* без Cloudflare);
+# - allow-list YooKassa продублирован на уровне nginx;
+# - наружу открыт только /webhook/yookassa, остальное 404 (/docs, /openapi.json
+#   больше не светятся); /health только с localhost.
 
 server {
     listen 80;
@@ -11,39 +17,45 @@ server {
     error_log /var/log/nginx/crs-vpn-bot-error.log;
 
     # Webhook YooKassa → FastAPI (порт 8001)
-    location /webhook/yookassa {
+    location = /webhook/yookassa {
+        # IP-диапазоны YooKassa (те же, что _YOOKASSA_NETWORKS в app/api/main.py;
+        # перед выкладкой сверить со списком https://yookassa.ru/developers/using-api/webhooks)
+        allow 185.71.76.0/27;
+        allow 185.71.77.0/27;
+        allow 77.75.153.0/25;
+        allow 77.75.154.128/25;
+        allow 2a02:5180::/32;
+        deny all;
+
         limit_req zone=webhook burst=5 nodelay;
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP "";
         proxy_set_header X-Forwarded-Proto $scheme;
-        # Прокидываем секрет из env (envsubst при старте nginx)
-        proxy_set_header X-Webhook-Secret "${YOOKASSA_WEBHOOK_SECRET}";
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
     }
 
-    # Health для мониторинга (можно ограничить по IP)
-    location /health {
+    # Health только для локального мониторинга
+    location = /health {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header CF-Connecting-IP "";
     }
 
     location / {
-        proxy_pass http://127.0.0.1:8001;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        return 404;
     }
 }
 
 # В http { } добавить:
 # limit_req_zone $binary_remote_addr zone=webhook:10m rate=10r/s;
-

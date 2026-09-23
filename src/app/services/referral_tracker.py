@@ -164,11 +164,12 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
             select(TelegramUser).where(TelegramUser.telegram_id == tg_id)
         )
         tg_user = tg_res.scalar_one_or_none()
-        username = (f"@{tg_user.username}" if tg_user and tg_user.username
+        from html import escape as _he
+        username = (f"@{_he(tg_user.username)}" if tg_user and tg_user.username
                     else f"ID:<code>{tg_id}</code>")
         name = ""
         if tg_user:
-            name = f"{tg_user.first_name or ''} {tg_user.last_name or ''}".strip()
+            name = _he(f"{tg_user.first_name or ''} {tg_user.last_name or ''}".strip())
 
         # === ADMIN B ===
         admin_b = (

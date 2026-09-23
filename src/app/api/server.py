@@ -30,7 +30,11 @@ def run_api_server():
         host=host,
         port=port,
         log_level="info",
-        reload=False
+        reload=False,
+        # IP клиента определяем сами (app.api.main._get_client_ip), uvicorn не
+        # должен подменять request.client по X-Forwarded-For.
+        proxy_headers=False,
+        server_header=False,
     )
 
 

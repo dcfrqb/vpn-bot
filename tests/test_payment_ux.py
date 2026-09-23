@@ -60,23 +60,21 @@ class TestGetPaymentKeyboard:
 
 
 class TestWebhookSecret:
-    """Тесты защиты webhook X-Webhook-Secret"""
+    """Защита webhook: заголовок X-Webhook-Secret YooKassa не шлет и код его больше
+    не проверяет (см. api/main.py). Защита = allow-list IP YooKassa + сверка статуса
+    через API. Запрос не с IP YooKassa отклоняется 403 при любом секрете."""
 
-    def test_webhook_rejects_wrong_secret(self):
-        """Webhook возвращает 401 при неверном X-Webhook-Secret"""
+    def test_webhook_rejects_non_yookassa_ip(self):
         from fastapi.testclient import TestClient
         from app.api.main import app
 
-        with patch('app.api.main.settings') as mock_settings:
-            mock_settings.YOOKASSA_WEBHOOK_SECRET = "correct_secret_123"
-
-            client = TestClient(app)
-            response = client.post(
-                "/webhook/yookassa",
-                json={"event": "payment.succeeded", "object": {}},
-                headers={"X-Webhook-Secret": "wrong_secret"}
-            )
-            assert response.status_code == 401
+        client = TestClient(app)
+        response = client.post(
+            "/webhook/yookassa",
+            json={"event": "payment.succeeded", "object": {}},
+            headers={"X-Webhook-Secret": "wrong_secret", "CF-Connecting-IP": "185.71.76.1"},
+        )
+        assert response.status_code == 403
 
 
 class TestAutorecheckSchedulingGuard:

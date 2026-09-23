@@ -169,15 +169,17 @@ def test_webhook_endpoint_routes_refund_and_503_on_retry():
     from app.api import main as api_main
 
     client = TestClient(api_main.app)
-    headers = {"X-Real-IP": "185.71.76.5"}
-    with patch.object(api_main, "bot_instance", object()), \
+    headers = {}
+    yk_ip = patch.object(api_main, "_get_client_ip", return_value="185.71.76.5")
+    with yk_ip, patch.object(api_main, "bot_instance", object()), \
          patch.object(api_main, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
          patch("app.services.payments.refunds.handle_refund_webhook", AsyncMock(return_value=True)) as h:
         r = client.post("/webhook/yookassa", json=WEBHOOK, headers=headers)
     assert r.status_code == 200
     h.assert_awaited_once()
 
-    with patch.object(api_main, "bot_instance", object()), \
+    yk_ip = patch.object(api_main, "_get_client_ip", return_value="185.71.76.5")
+    with yk_ip, patch.object(api_main, "bot_instance", object()), \
          patch.object(api_main, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
          patch("app.services.payments.refunds.handle_refund_webhook",
                AsyncMock(side_effect=WebhookRetryableError("x"))):

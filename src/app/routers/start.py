@@ -30,6 +30,7 @@ from app.ui.helpers import get_main_menu_viewmodel
 from app.config import is_admin, settings
 from app.navigation.callback_schema import CallbackAction
 from datetime import datetime
+from html import escape as _he  # имена юзеров в HTML-сообщениях админам
 
 router = Router(name="start")
 
@@ -1108,9 +1109,9 @@ async def _handle_promo_command_locked(
 
     admin_msg = (
         f"🎁 <b>ПРОМОКОД {promo_code.upper()} АКТИВИРОВАН</b>\n\n"
-        f"👤 <b>Пользователь:</b> {username}\n"
+        f"👤 <b>Пользователь:</b> {_he(username)}\n"
         f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
-        f"📝 <b>Имя:</b> {name}\n\n"
+        f"📝 <b>Имя:</b> {_he(name)}\n\n"
         f"📦 <b>Тариф:</b> {plan_label} {days} дней\n"
         f"📅 <b>Действует до:</b> {expires_at.strftime('%d.%m.%Y')}\n"
         f"🔗 <b>Remnawave ID:</b> <code>{remna_id}</code>\n"
@@ -1230,9 +1231,9 @@ async def _sun718_notify_admins(
     """
     text = (
         f"<b>{title}</b>\n\n"
-        f"👤 <b>Пользователь:</b> {username}\n"
+        f"👤 <b>Пользователь:</b> {_he(username)}\n"
         f"🆔 <b>Telegram ID:</b> <code>{user_id}</code>\n"
-        f"📝 <b>Имя:</b> {name}\n\n"
+        f"📝 <b>Имя:</b> {_he(name)}\n\n"
         f"{body}"
     )
     for admin_id in (settings.ADMINS or []):
@@ -1327,7 +1328,7 @@ async def _cmd_sun718_locked(message: types.Message):
                 message.bot,
                 user_id=user_id, username=username, name=name,
                 title="❌ SUN718: ошибка проверки повтора",
-                body=f"DB error: <code>{str(e)[:200]}</code>",
+                body=f"DB error: <code>{_he(str(e)[:200])}</code>",
             )
             return
 
@@ -1371,7 +1372,7 @@ async def _cmd_sun718_locked(message: types.Message):
         await _sun718_notify_admins(
             message.bot, user_id=user_id, username=username, name=name,
             title="❌ SUN718: ошибка sync",
-            body=f"<code>{str(e)[:200]}</code>",
+            body=f"<code>{_he(str(e)[:200])}</code>",
         )
         return
 
@@ -1645,8 +1646,8 @@ async def cmd_friend(message: types.Message):
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or message.from_user.username or f"User_{user_id}"
     admin_msg = (
         f"👤 <b>Запрос на доступ (/friend)</b>\n\n"
-        f"Имя: {name}\n"
-        f"Username: @{message.from_user.username or 'не указан'}\n"
+        f"Имя: {_he(name)}\n"
+        f"Username: @{_he(message.from_user.username or 'не указан')}\n"
         f"Telegram ID: <code>{user_id}</code>\n\n"
         f"Выдайте Premium или отклоните запрос."
     )

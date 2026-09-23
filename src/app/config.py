@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     BOT_SECRET_TOKEN: Union[str, None] = None  # X-Telegram-Bot-Api-Secret-Token для webhook
     YOOKASSA_WEBHOOK_URL: Union[str, None] = None  # URL для YooKassa webhook
     WEBHOOK_API_PORT: Union[int, None] = 8001  # Порт для FastAPI webhook сервера
+    # Откуда принимать X-Real-IP (nginx на хосте приходит в контейнер с адреса
+    # docker-шлюза из 172.16.0.0/12). Остальным заголовкам IP не верим.
+    WEBHOOK_TRUSTED_PROXIES: str = "127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
 
     # Базовый URL subscription-сервера (например https://sub.example.com).
     # Если задан — используется для domain override в subscription URL из API

@@ -79,8 +79,8 @@ async def _handle_admin_promo_request(message: types.Message):
     name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or message.from_user.username or f"User_{user_id}"
     admin_msg = (
         f"👤 <b>Запрос на доступ (промокод /admin)</b>\n\n"
-        f"Имя: {name}\n"
-        f"Username: @{message.from_user.username or 'не указан'}\n"
+        f"Имя: {escape_html(name)}\n"
+        f"Username: @{escape_html(message.from_user.username or 'не указан')}\n"
         f"Telegram ID: <code>{user_id}</code>\n\n"
         f"Выдайте Premium или отклоните запрос."
     )
