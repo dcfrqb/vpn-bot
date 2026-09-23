@@ -124,6 +124,60 @@ def compute_target(entitlement: Entitlement, current: Optional[datetime], now: d
     return min(target, LIFETIME)
 
 
+def _same_instant(a: Optional[datetime], b: Optional[datetime]) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) <= VERIFY_TOLERANCE
+
+
+def _parse(value) -> Optional[datetime]:
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def retry_target(record: dict, entitlement: Entitlement, current: Optional[datetime], now: datetime,
+                 months: Optional[int] = None) -> datetime:
+    """Target for a retry of a grant whose Phase A record is still pending
+    (review money B-1: a stale absolute date must never lose a paid period or
+    shorten the term).
+
+    - the panel still sits on the recorded ``base``: nothing landed, apply the
+      recorded target (idempotent);
+    - the panel sits on the recorded target and no other grant moved it: the
+      PATCH landed, apply the same target again (no second period);
+    - anything else (``moved`` by another grant, a credit, an admin edit, or a
+      record without ``base``): compute the period again on top of the
+      current panel date.
+    The result is never earlier than ``current``.
+    """
+    target = _parse(record.get("target"))
+    moved = bool(record.get("moved"))
+    if target is not None and not moved and "base" in record:
+        base = _parse(record.get("base"))
+        if _same_instant(current, base) or (current is not None and _same_instant(current, target)):
+            return max(target, current) if current is not None else target
+    fresh = compute_target(entitlement, current, now, months=months)
+    return max(fresh, current) if current is not None else fresh
+
+
+def landed_pending_keys(grants: dict, key: str, current: Optional[datetime]) -> tuple[str, ...]:
+    """Other pending grant records whose PATCH evidently landed: the panel sits
+    on their target and moved off their base. A new grant stacks on that date,
+    so these records are closed as applied (their retry adds nothing)."""
+    out = []
+    for other, rec in (grants or {}).items():
+        if other == key or not isinstance(rec, dict) or rec.get("state") != "pending" or "base" not in rec:
+            continue
+        if rec.get("moved"):
+            continue  # another grant moved the panel since: the date is not this one's
+        target, base = _parse(rec.get("target")), _parse(rec.get("base"))
+        if current is not None and _same_instant(current, target) and not _same_instant(current, base):
+            out.append(other)
+    return tuple(out)
+
+
 def target_squads(current_names: Sequence[str], plan_squad: str, *, grace_squad: Optional[str] = None,
                   clear_grace: bool = True) -> list[str]:
     """Full target list of NON-manual squad names for RemnaGateway.update_user:

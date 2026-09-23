@@ -45,15 +45,20 @@ async def add_days(
     trace_id: str,
     source: EntitlementSource = EntitlementSource.ADMIN,
     plan_code: Optional[str] = None,
-) -> Optional[SubscriptionState]:
+) -> Any:
     """+``days`` to the main subscription. None when there is nothing to
     extend (no subscription and no ``plan_code``, or a lifetime one).
+    Returns the new expiry (native ProvisioningService.add_days) or the new
+    SubscriptionState (``plan_code`` given: a grant on that plan).
 
     Idempotent per ``trace_id`` (ProvisioningService contract)."""
     tg = int(telegram_id)
     native = getattr(provisioning, "add_days", None)
     if native is not None and plan_code is None:
-        return await native(tg, int(days), trace_id=trace_id, source=source)
+        # ProvisioningService.add_days(tg, days, *, trace_id, reason) returns the
+        # new expiry or None. It has no ``source`` argument: passing one raised
+        # TypeError on every broadcast credit (review money M-3).
+        return await native(tg, int(days), trace_id=trace_id, reason=f"{source.value}:{trace_id}")
     state = await status.get_state(tg, force=True)
     if state.is_lifetime:
         return None

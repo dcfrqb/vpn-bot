@@ -84,7 +84,7 @@ async def test_add_days_uses_native_provisioning_add_days_when_present():
     calls = []
 
     class P:
-        async def add_days(self, tg, days, *, trace_id, source):
+        async def add_days(self, tg, days, *, trace_id, reason=""):  # the real signature
             calls.append((tg, days, trace_id))
             return "state"
 

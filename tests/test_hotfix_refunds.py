@@ -42,10 +42,29 @@ def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class _RecordingObhod:
+    def __init__(self):
+        self.granted, self.revoked = [], []
+
+    async def on_main_granted(self, tg, plan, until, trace):
+        self.granted.append((tg, plan, until))
+
+    async def on_main_revoked(self, tg, trace):
+        self.revoked.append(tg)
+
+
 def _setup(expire_in_days: float, amount=129.0, refunded=129.0, period=1, plan="lite"):
+    """3.0: the webhook rolls back through ProvisioningService (review
+    architecture R1), so the panel side is the real service over FakeRemna and
+    an in-memory accounts repo; ``fake.repo`` / ``fake.obhod`` expose them."""
+    from tests.panel.conftest import InMemoryAccountsRepo
+
     fake = FakeRemna()
-    fake.add_user(9, "tg_a", telegram_id=555, squads=["lite"],
-                  expire=_iso(datetime.now(timezone.utc) + timedelta(days=expire_in_days)))
+    until = datetime.now(timezone.utc) + timedelta(days=expire_in_days)
+    fake.add_user(9, "tg_a", telegram_id=555, squads=["lite"], expire=_iso(until))
+    fake.repo = InMemoryAccountsRepo()
+    fake.repo.add_row(555, plan=plan, panel_id=9, until=until.replace(microsecond=0))
+    fake.obhod = _RecordingObhod()
     payment = SimpleNamespace(
         id=1, external_id="pay-1", telegram_user_id=555, amount=amount, currency="RUB",
         status="succeeded", subscription_id=7, updated_at=None,
@@ -61,13 +80,21 @@ def _setup(expire_in_days: float, amount=129.0, refunded=129.0, period=1, plan="
     return fake, payment, sub, session, refund, api_payment
 
 
+def _main_row(fake):
+    return next(r for r in fake.repo.subs.values() if r.sub_kind == "main")
+
+
 def _run(fake, session, refund, api_payment, bot, redis=None):
+    from app.services.provisioning import PanelProvisioningService
+    from tests.fakes.remnawave import FakeRemnaGateway
+
+    svc = PanelProvisioningService(FakeRemnaGateway(fake), fake.repo, notifier=AsyncMock(), obhod=fake.obhod,
+                                   late_patch_delay_s=0)
     return [
         patch.object(rf, "fetch_refund", AsyncMock(return_value=refund)),
         patch("app.services.payments.yookassa.check_payment_status", AsyncMock(return_value=api_payment)),
         patch("app.db.session.SessionLocal", session),
-        patch("app.remnawave.client.RemnaClient", return_value=fake),
-        patch("app.services.obhod_service.deactivate_obhod", AsyncMock(return_value=False)),
+        patch.object(rf, "_provisioning", return_value=svc),
         patch("app.services.cache.get_redis_client", return_value=redis),
         patch.object(rf.settings, "ADMINS", [900]),
     ]
@@ -98,8 +125,10 @@ async def test_full_refund_of_first_purchase_expires_access_without_disable():
     assert fake.users[9]["status"] != "DISABLED"
     new_exp = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
     assert timedelta(0) < new_exp - datetime.now(timezone.utc) <= timedelta(minutes=6)
-    assert sub.active is False
-    assert sub.provisioning_state == "expired"
+    row = _main_row(fake)
+    assert row.active is False
+    assert row.provisioning_state == "expired"
+    assert fake.obhod.revoked == [555]
     assert payment.status == "refunded"
     assert payment.payment_metadata["refunds"]["rf-1"]["state"] == "done"
     assert payment.payment_metadata["refunded_amount"] == 129.0
@@ -114,8 +143,9 @@ async def test_full_refund_of_renewal_rolls_back_one_period():
     assert fake.disabled == []
     after = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
     assert 27 <= (before - after).days <= 31
-    assert sub.active is True
-    assert sub.valid_until is not None
+    row = _main_row(fake)
+    assert row.active is True
+    assert row.valid_until == after
     assert payment.status == "refunded"
 
 
@@ -140,13 +170,15 @@ async def test_refund_is_idempotent_and_retry_does_not_double_subtract():
     fake.update_user = AsyncMock(side_effect=RuntimeError("panel down"))
     with pytest.raises(WebhookRetryableError):
         await _call(fake, session, refund, api_payment, AsyncMock(), redis)
-    target = payment.payment_metadata["refunds"]["rf-1"]["target_expire"]
-    assert redis.store == {}, "маркер снят, повтор YooKassa пройдет"
+    rec = _main_row(fake).config_data["rollbacks"]["refund:rf-1"]
+    assert rec["state"] == "pending"
+    assert redis.store == {}, "маркер и лок сняты, повтор YooKassa пройдет"
 
     # 2-я доставка: применяется та же абсолютная цель
     fake.update_user = orig_update
     assert await _call(fake, session, refund, api_payment, AsyncMock(), redis) is True
-    assert fake.users[9]["expireAt"] == target
+    assert datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00")) == \
+        datetime.fromisoformat(rec["target"])
 
     # 3-я доставка того же события: дубль, ничего не меняется
     patches_before = len(fake.patches)

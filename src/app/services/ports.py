@@ -179,8 +179,12 @@ class ProvisioningService(Protocol):
         """Apply an entitlement (extend from max(now, current expiry)).
         Idempotent per (entitlement.payment_id or trace_id)."""
 
-    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str) -> bool:
-        """Cut access (refund). Never shortens a lifetime/manual subscription."""
+    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str,
+                     months: Optional[int] = None) -> bool:
+        """Take access back for a refund: exactly ``months`` paid months from the
+        current expiry, or a full cut when ``months`` is None or nothing would
+        be left. Never touches a lifetime/manual subscription. Idempotent per
+        trace_id; runs under the same per-user lock as ``grant``."""
 
 
 @runtime_checkable

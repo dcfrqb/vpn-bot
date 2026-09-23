@@ -33,6 +33,9 @@ M_FULFILLED_AT = "fulfilled_at"
 # only when 2.x itself flagged them, exactly as 2.1 did. No double grants on
 # the first 3.0 deploy.
 M_CREATED_V3 = "v3"
+# Written by the 24h refund flow before the money goes back: the payment is
+# never granted after that (fulfillment and recovery skip it).
+M_REFUND_24H = "refund_24h"
 
 
 def stuck_is_recoverable(meta: Mapping[str, Any], since: Optional[datetime], now: datetime,
@@ -40,6 +43,8 @@ def stuck_is_recoverable(meta: Mapping[str, Any], since: Optional[datetime], now
     """A paid, unfulfilled, not held row the recovery sweep should grant again."""
     if meta.get(M_REVIEW_REJECTED) or (meta.get(M_NEEDS_REVIEW) and not meta.get(M_REVIEW_APPROVED)):
         return False
+    if meta.get(M_REFUND_24H):
+        return False  # review money M-2: refunded money is never granted by the sweep
     if meta.get(M_NEEDS_PROVISIONING):
         return True
     return bool(meta.get(M_CREATED_V3)) and since is not None and since < now - stuck_age

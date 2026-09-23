@@ -12,7 +12,8 @@
    - payments.status = 'refunded' (выпадает из выручки/статистики, где фильтр
      status='succeeded');
    - оплата тарифа, по которой выдавалась подписка: откатываем ровно
-     оплаченный период от текущего expireAt в Remnawave. Подписка у юзера одна,
+     оплаченный период от текущего expireAt в Remnawave. С 3.0 это делает
+     ProvisioningService.rollback под тем же локом, что и выдача. Подписка у юзера одна,
      поэтому возврат старого платежа тоже вычитается из текущей даты.
      Если после отката срок уже в прошлом, юзер НЕ отключается (disable), а
      получает expireAt = сейчас + 5 минут: панель сама переводит его в EXPIRED,
@@ -20,31 +21,22 @@
      (фикс-раунд 1, ревью M1: DISABLED ничем не снимался, человек платил
      повторно и оставался без VPN). Подписка и обход гасятся.
      Если срок остался в будущем, для Pro тот же срок ставится и обходу.
-     Цель отката вычисляется один раз и сохраняется, поэтому повтор вебхука
-     не отнимет период дважды;
+     Откат идемпотентен по refund_id (config_data.rollbacks), поэтому повтор
+     вебхука не отнимет период дважды и не сотрет выдачу, случившуюся между;
    - пакет обхода или платеж без выданной подписки: доступ не трогаем, только
      алерт (решает админ).
 4. Частичный возврат: только запись и алерт админу.
 Админу всегда уходит сообщение о возврате (один раз на refund_id).
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from html import escape as _he
 from typing import Any, Dict, Optional
 
-from dateutil.relativedelta import relativedelta
 from sqlalchemy import select
 
 from app.config import settings
 from app.logger import logger
 from app.services.payments.errors import WebhookRetryableError
-
-# Цель «истечь сейчас»: при каждом применении это now + REFUND_EXPIRE_GRACE
-# (панель отклоняет expireAt в прошлом). "disable" — значение из ранней версии
-# 2.1, трактуется так же.
-REFUND_EXPIRE_NOW = "expire_now"
-_LEGACY_DISABLE = "disable"
-REFUND_EXPIRE_GRACE = timedelta(minutes=5)
-
 
 def _rub(value: Any) -> str:
     """129.0 -> "129", 129.5 -> "129.50"."""
@@ -71,18 +63,6 @@ async def fetch_refund(refund_id: str) -> Optional[Dict[str, Any]]:
     return await default_gateway().get_refund(refund_id)
 
 
-def _parse_expire(raw: Any) -> Optional[datetime]:
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
 async def _notify_admins(bot, text: str) -> None:
     for admin_id in (settings.ADMINS or []):
         try:
@@ -91,33 +71,11 @@ async def _notify_admins(bot, text: str) -> None:
             logger.warning(f"refund alert to admin {admin_id} failed: {e}")
 
 
-async def _shorten_obhod(session, telegram_user_id: int, plan_code: Optional[str],
-                         target: str, naive: Optional[datetime], refund_id: str) -> str:
-    """Возврат продления Pro: обходу ставится тот же укороченный срок (ревью m2).
+def _provisioning():
+    """ProvisioningService of the running process (bot or webhook API)."""
+    from app.container import get_container
 
-    Возвращает пометку для алерта админу ("" если все хорошо или трогать нечего).
-    """
-    from app.core.plans import is_obhod_eligible_plan
-
-    if not is_obhod_eligible_plan(plan_code):
-        return ""
-    try:
-        from app.services.obhod_service import get_obhod_subscription
-        obhod = await get_obhod_subscription(session, telegram_user_id)
-        if not obhod or not obhod.active or not obhod.remna_user_id:
-            return ""
-        from app.remnawave.client import RemnaClient
-
-        client = RemnaClient()
-        try:
-            await client.update_user(str(obhod.remna_user_id), expire_at=target)
-        finally:
-            await client.close()
-        obhod.valid_until = naive
-        return " Срок обхода укорочен так же."
-    except Exception as e:
-        logger.warning(f"refund {refund_id}: obhod shorten failed: {e}")
-        return f" Срок обхода укоротить НЕ удалось ({e}), поправьте вручную."
+    return get_container().provisioning
 
 
 async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
@@ -206,101 +164,54 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             and period_months > 0
         )
 
-        from app.remnawave.client import RemnaClient, normalize_expire_at
-
         user_text = None
         new_expire_for_notices: Optional[datetime] = None
         if can_revoke:
-            client = RemnaClient()
+            # 3.0 (review architecture R1): the rollback goes through
+            # ProvisioningService under the same per-user lock as grants, so a
+            # grant or autopay landing at the same time is never erased. The
+            # rollback is idempotent per refund id (config_data.rollbacks).
             try:
-                target = entry.get("target_expire")
-                if not target:
-                    # Фиксируем цель один раз, чтобы повтор не отнял период дважды.
-                    try:
-                        data = await client.get_user_by_id(str(subscription.remna_user_id))
-                    except Exception as e:
-                        raise WebhookRetryableError(f"remnawave read failed: {e}") from e
-                    raw = data.get("response", data) if isinstance(data, dict) else {}
-                    current = _parse_expire((raw or {}).get("expireAt"))
-                    now = datetime.now(timezone.utc)
-                    if current is None:
-                        target = REFUND_EXPIRE_NOW
-                    else:
-                        new_expire = current - relativedelta(months=period_months)
-                        target = (
-                            REFUND_EXPIRE_NOW if new_expire <= now + REFUND_EXPIRE_GRACE
-                            else normalize_expire_at(new_expire)
-                        )
-                    entry.update({"state": "pending", "target_expire": target})
-                    refunds[refund_id] = entry
-                    meta["refunds"] = refunds
-                    payment.payment_metadata = dict(meta)
-                    await session.commit()
-                    # после commit лок снят — берем заново
-                    res = await session.execute(
-                        select(PaymentModel).where(PaymentModel.id == payment.id).with_for_update()
-                    )
-                    payment = res.scalar_one_or_none()
-
-                try:
-                    if target in (REFUND_EXPIRE_NOW, _LEGACY_DISABLE):
-                        expire_dt = datetime.now(timezone.utc) + REFUND_EXPIRE_GRACE
-                        await client.update_user(
-                            str(subscription.remna_user_id), expire_at=normalize_expire_at(expire_dt)
-                        )
-                        naive = expire_dt.replace(tzinfo=None)
-                        new_expire_for_notices = expire_dt
-                        subscription.active = False
-                        subscription.valid_until = naive
-                        subscription.remnawave_expected_expire_at = naive
-                        subscription.provisioning_state = "expired"
-                        subscription.last_provisioning_error = f"refund {refund_id}"
-                        try:
-                            from app.services.obhod_service import deactivate_obhod
-                            await deactivate_obhod(session, payment.telegram_user_id, trace_id=f"refund_{refund_id}")
-                        except Exception as e:
-                            logger.warning(f"refund {refund_id}: obhod deactivate soft-fail: {e}")
-                            obhod_note = f" Обход погасить не удалось ({e}), проверьте вручную."
-                        action = "expired"
-                        action_note = (
-                            "Срок после отката уже в прошлом: юзеру поставлен expireAt = сейчас "
-                            "(панель переведет в EXPIRED), подписка и обход погашены. "
-                            "Повторная оплата или выдача снова включит доступ."
-                        )
-                        user_text = (
-                            "↩️ <b>Возврат оформлен</b>\n\n"
-                            "Деньги по платежу возвращены, доступ по этой оплате закончился. "
-                            "Если захотите вернуться, оформите подписку в меню."
-                        )
-                    else:
-                        await client.update_user(str(subscription.remna_user_id), expire_at=target)
-                        new_dt = _parse_expire(target)
-                        naive = new_dt.replace(tzinfo=None) if new_dt else None
-                        new_expire_for_notices = new_dt
-                        subscription.valid_until = naive
-                        subscription.remnawave_expected_expire_at = naive
-                        action = "shortened"
-                        action_note = (
-                            f"Срок откатан на {period_months} мес. от текущей даты окончания "
-                            f"(подписка одна на юзера): до {naive:%d.%m.%Y}." if naive else ""
-                        )
-                        obhod_note = await _shorten_obhod(
-                            session, payment.telegram_user_id, plan_code, target, naive, refund_id
-                        )
-                        user_text = (
-                            "↩️ <b>Возврат оформлен</b>\n\n"
-                            "Деньги по платежу возвращены, оплаченный период снят. "
-                            + (f"Подписка действует до {naive:%d.%m.%Y}." if naive else "")
-                        )
-                except WebhookRetryableError:
-                    raise
-                except Exception as e:
-                    raise WebhookRetryableError(f"remnawave revoke failed: {e}") from e
-            finally:
-                try:
-                    await client.close()
-                except Exception:
-                    pass
+                result = await _provisioning().rollback(
+                    payment.telegram_user_id, months=period_months,
+                    reason=f"refund {refund_id}", trace_id=f"refund:{refund_id}",
+                )
+            except Exception as e:
+                raise WebhookRetryableError(f"revoke through provisioning failed: {type(e).__name__}: {e}") from e
+            new_dt = result.expire_at
+            naive = new_dt.astimezone(timezone.utc).replace(tzinfo=None) if new_dt else None
+            if result.action == "expired":
+                new_expire_for_notices = new_dt
+                action = "expired"
+                action_note = (
+                    "Срок после отката уже в прошлом: юзеру поставлен expireAt = сейчас "
+                    "(панель переведет в EXPIRED), подписка и обход погашены. "
+                    "Повторная оплата или выдача снова включит доступ."
+                )
+                user_text = (
+                    "↩️ <b>Возврат оформлен</b>\n\n"
+                    "Деньги по платежу возвращены, доступ по этой оплате закончился. "
+                    "Если захочешь вернуться, оформи подписку в меню."
+                )
+            elif result.action == "shortened":
+                new_expire_for_notices = new_dt
+                action = "shortened"
+                action_note = (
+                    f"Срок откатан на {period_months} мес. от текущей даты окончания "
+                    f"(подписка одна на юзера): до {naive:%d.%m.%Y}." if naive else ""
+                )
+                user_text = (
+                    "↩️ <b>Возврат оформлен</b>\n\n"
+                    "Деньги по платежу возвращены, оплаченный период снят. "
+                    + (f"Подписка действует до {naive:%d.%m.%Y}." if naive else "")
+                )
+            else:
+                action = result.action
+                action_note = (
+                    "Доступ НЕ менялся: подписка навсегда или ручной сквад. Решите вручную."
+                    if result.action == "skipped" else
+                    "Доступ НЕ менялся: аккаунт в панели не найден. Проверьте вручную."
+                )
         elif by_request:
             action = "by_request"
             action_note = (

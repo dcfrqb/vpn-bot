@@ -9,8 +9,12 @@ grant(telegram_id, entitlement, trace_id):
   1. telegram_users row first (FK invariant);
   2. idempotency: key = ``pay:<payment_id>`` or ``trace:<trace_id>``. The
      target date is computed ONCE and recorded in the main row
-     (config_data.grants[key]) before the panel is touched; a retry re-applies
-     the same absolute date, an applied key returns without any write;
+     (config_data.grants[key], with the panel date it was computed from as
+     ``base``) before the panel is touched; a retry re-applies the same date
+     only while the panel still sits on that base (or on the target, when the
+     PATCH landed); if another grant, a credit or an admin moved the panel in
+     between, the period is recomputed on top of the new date and never
+     shortens it (review money B-1); an applied key returns without any write;
   3. main panel account: stored link / telegramId lookup; created here and
      only here (takeover-safe username policy of hotfix A-2);
   4. target expiry = max(now, current) + days | until | 2099-12-31, and never
@@ -34,9 +38,12 @@ grant(telegram_id, entitlement, trace_id):
   7. DB: row active/synced, valid_until = the panel date, grace mark cleared;
      obhod follows Pro (ensure/deactivate); status cache invalidated.
 
-revoke: full cut for a refund: expireAt = now + 5 min (the panel refuses past
-dates and turns the user EXPIRED itself), row inactive, obhod off. Lifetime
-users and users with manual squads are never cut (admin alert instead).
+revoke / rollback (refunds, under the same lock): take back exactly the
+refunded months from the current expiry (review money M-1); if nothing would
+be left, a full cut: expireAt = now + 5 min (the panel refuses past dates and
+turns the user EXPIRED itself), row inactive, obhod off. Lifetime users and
+users with manual squads are never cut (admin alert instead). Both the 24h
+refund and the YooKassa refund.succeeded webhook go through here.
 
 add_days / add_traffic / add_devices: credits for EXISTING accounts only
 (no creation), never lowering, idempotent per trace_id (Redis marker).
@@ -70,6 +77,8 @@ from app.services.provisioning_rules import (  # noqa: F401 (re-exported)
     _now,
     compute_target,
     grant_key,
+    landed_pending_keys,
+    retry_target,
     target_squads,
 )
 from app.services.remna_tariff import is_manual_squad_name, managed_tariff_squad_names, resolve_device_limit
@@ -290,13 +299,17 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
             current = row.valid_until  # never the grace end: grace is not paid time
         if current is not None and current.year < 2020:
             current = None  # 2000-01-01 sentinel of 2.x /start users
+        grants_before = ((row.config_data if row else {}) or {}).get("grants", {})
         if record and record.get("target"):
-            target = datetime.fromisoformat(record["target"])
+            target = retry_target(record, ent, current, now, months=months)
         else:
             target = compute_target(ent, current, now, months=months)
+        if current is not None and target < current:
+            target = current  # never shorten, whatever the record says (review money B-1)
 
         # Phase A: the intent is recorded before the panel is touched.
-        row = self._phase_a(row, tg, ent, key, target, now)
+        row = self._phase_a(row, tg, ent, key, target, now, base=current,
+                            landed=landed_pending_keys(grants_before, key, current))
         row = await self.repo.save_subscription(row)
 
         try:
@@ -336,13 +349,18 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
         return build_state(tg, user=verified, main_row=row, now=self.clock())
 
     def _phase_a(self, row: Optional[SubRow], tg: int, ent: Entitlement, key: str, target: datetime,
-                 now: datetime) -> SubRow:
+                 now: datetime, *, base: Optional[datetime] = None, landed: tuple[str, ...] = ()) -> SubRow:
         if row is None:
             row = SubRow(telegram_user_id=tg, sub_kind=SubKind.MAIN.value, plan_code=ent.plan_code)
         cfg = dict(row.config_data or {})
         grants = dict(cfg.get("grants") or {})
+        for other in landed:
+            # An earlier pending grant whose PATCH did land (the panel sits on its
+            # target): it is done, a later retry must not add its period again.
+            grants[other] = {**grants[other], "state": "applied", "landed_seen_by": key}
         grants[key] = {"target": target.isoformat(), "state": "pending", "plan": ent.plan_code,
-                       "source": ent.source.value, "at": now.isoformat()}
+                       "source": ent.source.value, "at": now.isoformat(),
+                       "base": base.isoformat() if base is not None else None}
         if len(grants) > MAX_GRANT_RECORDS:
             for old in sorted(grants, key=lambda k: grants[k].get("at", ""))[: len(grants) - MAX_GRANT_RECORDS]:
                 grants.pop(old, None)
@@ -369,6 +387,11 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
         rec = dict(grants.get(key) or {})
         rec["state"] = "applied"
         grants[key] = rec
+        for other, orec in list(grants.items()):
+            if other != key and isinstance(orec, dict) and orec.get("state") == "pending":
+                # This grant moved the panel date past the other one's base: its
+                # retry must stack on the new date (review money B-1).
+                grants[other] = {**orec, "moved": True}
         cfg["grants"] = grants
         cfg["last_source"] = ent.source.value
         if ent.payment_id:

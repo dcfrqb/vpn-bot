@@ -43,6 +43,7 @@ from app.services.payments.pricing import (
 from app.services.payments.store import (
     M_NEEDS_PROVISIONING,
     M_NEEDS_REVIEW,
+    M_REFUND_24H,
     M_REVIEW_APPROVED,
     M_REVIEW_REJECTED,
     PENDING_STATUSES,
@@ -222,6 +223,11 @@ class Fulfillment(FulfillmentNotices):
                 await self._notify(rec, None, trace)
                 return FulfilResult(Outcome.ALREADY, rec)
             meta = rec.meta
+            if meta.get(M_REFUND_24H):
+                # Money is (being) returned for this payment: never grant it
+                # afterwards, whoever retries (review money M-2).
+                logger.warning(f"[{trace}] payment {rec.id} has a 24h refund, not granting")
+                return FulfilResult(Outcome.REFUNDED, rec)
             if meta.get(M_REVIEW_REJECTED):
                 return FulfilResult(Outcome.REJECTED, rec)
             approved = bool(meta.get(M_REVIEW_APPROVED))

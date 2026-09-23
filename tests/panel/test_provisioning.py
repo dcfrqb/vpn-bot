@@ -417,3 +417,228 @@ async def test_repeat_of_applied_grant_with_panel_down_answers_from_db(svc, fake
     fake.fail_lookup_tg = fake.fail_get_user = True
     st = await svc.grant(7, ent, trace_id="x", months=1)
     assert st.stale and st.active
+
+
+# ------------------------------------------------------------------ review money B-1: retry vs a moved panel
+
+def _fail_next_patch(fake):
+    real = fake.update_user
+    state = {"left": 1}
+
+    async def flaky(user_id, **kw):
+        if state["left"]:
+            state["left"] -= 1
+            raise httpx.ReadTimeout("lost")  # the PATCH never landed
+        return await real(user_id, **kw)
+
+    fake.update_user = flaky
+
+
+def _pay(pid, plan="lite"):
+    return Entitlement(plan_code=plan, source=Src.PAYMENT, payment_id=pid)
+
+
+OCT1 = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+
+async def test_retry_after_another_payment_stacks_and_never_loses_a_month(svc, fake, repo):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    _fail_next_patch(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)  # A: pending, target 01.11
+    await svc.grant(7, _pay(2), trace_id="b", months=1)       # B: 01.10 -> 01.11
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 11, 1, tzinfo=timezone.utc))
+    await svc.grant(7, _pay(1), trace_id="a2", months=1)      # retry of A stacks
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 1, tzinfo=timezone.utc))
+    grants = (await repo.get_subscription(7)).config_data["grants"]
+    assert grants["pay:1"]["state"] == "applied" and grants["pay:2"]["state"] == "applied"
+
+
+async def test_retry_after_payment_and_promo_never_shortens(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    _fail_next_patch(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)
+    await svc.grant(7, _pay(2), trace_id="b", months=1)                                          # 01.11
+    await svc.grant(7, Entitlement(plan_code="lite", source=Src.PROMO, days=10), trace_id="promo")  # 11.11
+    await svc.grant(7, _pay(1), trace_id="a2", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 11, tzinfo=timezone.utc))
+
+
+async def test_retry_after_add_days_credit_recomputes(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    _fail_next_patch(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)
+    await svc.add_days(7, 3, trace_id="bc:1:7")  # 04.10, no grant record
+    await svc.grant(7, _pay(1), trace_id="a2", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 11, 4, tzinfo=timezone.utc))
+
+
+async def test_landed_but_unverified_payment_is_not_granted_twice(svc, fake, repo):
+    """A's PATCH landed but the verify and the late probe both failed: the panel
+    sits on A's target. B stacks on it, and A's retry adds nothing."""
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    real_get = fake.get_user_by_id
+    calls = {"n": 0}
+
+    async def get_fails_after_patch(user_id):
+        if fake.patches and calls["n"] < 2:
+            calls["n"] += 1
+            raise httpx.ConnectError("verify lost")
+        return await real_get(user_id)
+
+    fake.get_user_by_id = get_fails_after_patch
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 11, 1, tzinfo=timezone.utc))  # it landed
+    await svc.grant(7, _pay(2), trace_id="b", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 1, tzinfo=timezone.utc))
+    patches = len(fake.patches)
+    await svc.grant(7, _pay(1), trace_id="a2", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 1, tzinfo=timezone.utc))
+    assert len(fake.patches) == patches  # closed as applied, no write
+    assert (await repo.get_subscription(7)).config_data["grants"]["pay:1"]["state"] == "applied"
+
+
+async def test_retry_with_panel_on_recorded_target_is_idempotent(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    real_get = fake.get_user_by_id
+    calls = {"n": 0}
+
+    async def get_fails_after_patch(user_id):
+        if fake.patches and calls["n"] < 2:
+            calls["n"] += 1
+            raise httpx.ConnectError("verify lost")
+        return await real_get(user_id)
+
+    fake.get_user_by_id = get_fails_after_patch
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)
+    await svc.grant(7, _pay(1), trace_id="a2", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 11, 1, tzinfo=timezone.utc))
+
+
+def test_retry_target_rules():
+    from app.services.provisioning_rules import retry_target
+
+    ent = _pay(1)
+    rec = {"target": datetime(2026, 11, 1, tzinfo=timezone.utc).isoformat(), "base": OCT1.isoformat()}
+    nov1, dec1 = datetime(2026, 11, 1, tzinfo=timezone.utc), datetime(2026, 12, 1, tzinfo=timezone.utc)
+    assert retry_target(rec, ent, OCT1, NOW, months=1) == nov1                    # nothing landed
+    assert retry_target(rec, ent, nov1, NOW, months=1) == nov1                    # it landed
+    assert retry_target({**rec, "moved": True}, ent, nov1, NOW, months=1) == dec1  # another grant moved it
+    far = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    assert retry_target(rec, ent, far, NOW, months=1) == datetime(2027, 4, 1, tzinfo=timezone.utc)
+    legacy = {"target": nov1.isoformat()}  # no base recorded: recompute, never shorten
+    assert retry_target(legacy, ent, dec1, NOW, months=1) == datetime(2027, 1, 1, tzinfo=timezone.utc)
+
+
+# ------------------------------------------------------------------ review money M-3: broadcast credit contract
+
+async def test_broadcast_credit_reaches_the_real_provisioning_service(svc, fake):
+    """grants.add_days -> PanelProvisioningService.add_days with the real
+    signature (it raised TypeError on every call before the fix)."""
+    from app.services.broadcast import BroadcastCredits
+    from app.services.grants import add_days
+    from tests.growth.fakes import MemoryLedger
+
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    new = await add_days(svc, None, 7, 3, trace_id="bc:1:7")
+    assert new == NOW + timedelta(days=4)
+
+    fake.add_user(502, "v", telegram_id=8, squads=["pro"], limit=10, expire=iso(NOW + timedelta(days=2)))
+    fake.add_user(503, "w", telegram_id=9, squads=["pro"], limit=10, expire="2099-12-31T23:59:59Z")
+    ledger = MemoryLedger()
+    credit = BroadcastCredits(provisioning=svc, status=None, ledger=ledger)
+    assert await credit(5, 8, 7) == "applied"
+    assert fake.users[502]["expireAt"] == iso(NOW + timedelta(days=9))
+    assert await credit(5, 8, 7) == "dup"
+    assert await credit(5, 9, 7) == "skipped"   # lifetime: nothing to add
+    assert await credit(5, 10, 7) == "skipped"  # no panel account: nothing created
+    assert fake.users[502]["expireAt"] == iso(NOW + timedelta(days=9))
+    assert not fake.created
+
+
+async def test_failed_credit_patch_can_be_retried(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _fail_next_patch(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.add_days(7, 3, trace_id="bc:2:7")
+    assert await svc.add_days(7, 3, trace_id="bc:2:7") == NOW + timedelta(days=4)
+
+
+async def test_credit_sweep_alerts_admins_on_failures(monkeypatch):
+    from app.services import broadcast as bc
+
+    sent = []
+
+    class N:
+        async def notify_admins(self, topic, text, **kw):
+            sent.append((topic, text))
+
+    class _Res:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _S:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, *a, **k):
+            return _Res([(1,), (2,)])
+
+    import app.db.session as db_session
+
+    monkeypatch.setattr(db_session, "SessionLocal", lambda: _S())
+    monkeypatch.setattr("app.container.get_container", lambda: SimpleNamespace(notifier=N()))
+
+    async def credit(bid, uid, days):
+        return "failed" if uid == 2 else "applied"
+
+    assert await bc._credit_sweep(3, 5, credit, asyncio.Event()) == 1
+    assert len(sent) == 1 and "1 получател" in sent[0][1]
+
+
+# ------------------------------------------------------------------ review money M-1: rollback of one period
+
+async def test_refund_of_one_month_keeps_earlier_paid_months(svc, fake, repo, obhod):
+    until = datetime(2027, 3, 1, tzinfo=timezone.utc)  # 5 paid months + 1 renewal
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], limit=10, expire=iso(until))
+    repo.add_row(7, plan="pro", panel_id=501, until=until)
+    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1) is True
+    assert fake.users[501]["expireAt"] == iso(datetime(2027, 2, 1, tzinfo=timezone.utc))
+    row = await repo.get_subscription(7)
+    assert row.active and row.valid_until == datetime(2027, 2, 1, tzinfo=timezone.utc)
+    assert obhod.revoked == [] and obhod.granted[-1][2] == datetime(2027, 2, 1, tzinfo=timezone.utc)
+    # idempotent per trace
+    patches = len(fake.patches)
+    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1) is True
+    assert len(fake.patches) == patches
+
+
+async def test_refund_of_the_only_month_is_a_full_cut(svc, fake, repo, obhod):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=30)))
+    repo.add_row(7, plan="lite", panel_id=501, until=NOW + timedelta(days=30))
+    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-1")
+    assert res.action == "expired" and fake.users[501]["expireAt"] == iso(NOW + timedelta(minutes=5))
+    assert not (await repo.get_subscription(7)).active and obhod.revoked == [7]
+
+
+async def test_rollback_retry_after_a_new_grant_does_not_erase_it(svc, fake, repo):
+    until = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(until))
+    repo.add_row(7, plan="lite", panel_id=501, until=until)
+    _fail_next_patch(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2")  # target 01.12 pending
+    await svc.grant(7, _pay(9), trace_id="p9", months=1)  # 01.01 -> 01.02
+    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2")
+    assert res.action == "shortened"
+    assert fake.users[501]["expireAt"] == iso(until)  # 01.02 - 1 month, the new payment survives

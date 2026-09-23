@@ -317,13 +317,34 @@ async def _credit_sweep(broadcast_id: int, days: int, credit: CreditFn, cancel_f
     async with SessionLocal() as session:
         ids = [r[0] for r in (await session.execute(select(BroadcastRecipient.user_telegram_id).where(
             BroadcastRecipient.broadcast_id == broadcast_id, BroadcastRecipient.status == "sent"))).all()]
-    n = 0
+    n = failed = 0
     for uid in ids:
         if cancel_flag.is_set():
             break
-        if await credit(broadcast_id, uid, days) == "applied":
-            n += 1
+        res = await credit(broadcast_id, uid, days)
+        n += res == "applied"
+        failed += res == "failed"
+    if failed:
+        await _alert_credit_failures(broadcast_id, days, failed)
     return n
+
+
+async def _alert_credit_failures(broadcast_id: int, days: int, failed: int) -> None:
+    """Review money M-3: a promised credit that did not land must reach the
+    admins, not only a log line. The final sweep already retried each one."""
+    logger.error(f"broadcast {broadcast_id}: {failed} credit(s) of +{days}d failed after the final sweep")
+    try:
+        from app.container import get_container
+        from app.domain.models import AdminTopic
+
+        await get_container().notifier.notify_admins(
+            AdminTopic.BROADCAST,
+            f"Рассылка #{int(broadcast_id)}: не начислено +{int(days)} дн. у {int(failed)} получателей.\n"
+            "Причина в логах бота (broadcast credit ... failed). Начислить вручную: /grant.",
+            dedup_key=f"bc_credit_failed:{int(broadcast_id)}",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"broadcast {broadcast_id}: credit failure alert not sent ({type(e).__name__})")
 
 
 async def _run_worker(sender: BroadcastSender, broadcast_id: int, cancel_flag: asyncio.Event,

@@ -6,8 +6,12 @@ Flow (REFUND_24H_ENABLED):
     -> admins get «Вернуть / Отклонить» (REFUNDS topic, DM fallback);
   «Вернуть»: pending|failed -> approved (compare-and-set = the lock), money
     back (YooKassa refund with Idempotence-Key rr:<id>, or refundStarPayment),
-    access cut through ProvisioningService.revoke, autorenew off, user told;
-    request -> refunded. A failed money refund -> failed, the admin may retry.
+    exactly the refunded months taken back through ProvisioningService.revoke
+    (full cut only when nothing is left), autorenew off, user told;
+    request -> refunded. Only a delivered payment is eligible; the
+    ``refund_24h`` marker is written before the money goes back, and
+    fulfillment/recovery never grant a payment that carries it.
+    A failed money refund -> failed, the admin may retry.
   «Отклонить»: pending -> rejected, user told.
 The YooKassa refund.succeeded webhook sees ``refund_24h`` in the payment meta
 and only records the money (no second rollback, no second user message).
@@ -20,7 +24,7 @@ from typing import Any, Optional
 from app.domain.models import AdminTopic, SubKind
 from app.domain.texts import checkout as T
 from app.logger import logger
-from app.services.payments.store import PaymentRecord
+from app.services.payments.store import M_NEEDS_PROVISIONING, M_NEEDS_REVIEW, PaymentRecord
 
 REFUND_WINDOW = timedelta(hours=24)
 REASON_NOT_CONNECTED = "not_connected"
@@ -45,6 +49,10 @@ class RefundRequests:
         if rec is None or rec.telegram_id != int(telegram_id):
             return False
         if rec.status != "succeeded" or rec.kind != "subscription" or rec.method not in ("yookassa", "stars"):
+            return False
+        # Only a delivered payment (review money M-2): a held or not-yet-granted
+        # one goes to the admin as a normal support case, not a 24h refund.
+        if not rec.fulfilled or rec.meta.get(M_NEEDS_REVIEW) or rec.meta.get(M_NEEDS_PROVISIONING):
             return False
         if rec.method == "stars" and not rec.telegram_charge_id:
             return False
@@ -99,6 +107,9 @@ class RefundRequests:
         if rec is None or rec.status != "succeeded":
             await store.transition_refund_request(request_id, ("approved",), "failed")
             return "failed:платеж не в статусе succeeded"
+        if not rec.fulfilled:
+            await store.transition_refund_request(request_id, ("approved",), "failed")
+            return "failed:доступ по платежу еще не выдан, реши вручную"
         marker = dict(rec.meta.get("refund_24h") or {})
         marker.update({"rid": rr.id, "state": "refunding"})
         await store.patch_meta(rec.id, {"refund_24h": marker})
@@ -115,8 +126,11 @@ class RefundRequests:
             await store.set_status(rec.id, ("succeeded",), "refunded")
         revoked = False
         try:
+            # Only the refunded period goes (review money M-1): earlier paid
+            # months stay; a full cut only when nothing would be left.
             revoked = await self.d.provisioning.revoke(rec.telegram_id, sub_kind=SubKind.MAIN,
-                                                       reason=f"refund_24h:{rr.id}", trace_id=f"rr:{rr.id}")
+                                                       reason=f"refund_24h:{rr.id}", trace_id=f"rr:{rr.id}",
+                                                       months=int(rec.period_months or 0) or None)
         except Exception as e:  # noqa: BLE001 - money is back already; the admin is told
             logger.error(f"refund request #{request_id}: revoke failed {type(e).__name__}: {e}")
         try:

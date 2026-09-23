@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.payments import refunds as rf
 from tests.fakes.remnawave import FakeRemna
 from tests.test_hotfix_refunds import _call, _setup
 
@@ -64,19 +63,21 @@ async def _repay(fake, months=1, plan="lite", approved=False):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tariff", ["trial_standard_5d", "premium_1"])
-async def test_refund_then_trial_or_admin_grant_gives_access(tariff):
-    """/trial (trial_standard_5d) и выдача админом (premium_1) идут через provision_tariff.
-    После возврата юзер EXPIRED, выдача его оживляет."""
-    from app.services import remna_service
+async def test_refund_then_trial_or_admin_grant_gives_access():
+    """3.0: /trial and admin grants go through ProvisioningService.grant. After a
+    refund the user is EXPIRED; a grant revives them by the date alone."""
+    from app.domain.models import Entitlement, EntitlementSource
+    from app.services.provisioning import PanelProvisioningService
+    from tests.fakes.remnawave import FakeRemnaGateway
 
     fake, _ = await _refund_first_purchase()
     assert fake.users[9]["status"] == "EXPIRED"
-    with patch.object(remna_service, "RemnaClient", return_value=fake), \
-         patch.object(remna_service, "ensure_user_in_remnawave", AsyncMock(return_value="9")), \
-         patch("app.db.session.SessionLocal", None):
-        ok = await remna_service.provision_tariff(TG_ID, tariff, req_id="t")
-    assert ok is True
+    svc = PanelProvisioningService(FakeRemnaGateway(fake), fake.repo, notifier=AsyncMock(), obhod=fake.obhod,
+                                   late_patch_delay_s=0)
+    with patch("app.services.cache.get_redis_client", return_value=None):
+        st = await svc.grant(TG_ID, Entitlement(plan_code="standard", source=EntitlementSource.TRIAL, days=5),
+                             trace_id="t")
+    assert st.active
     assert fake.users[9]["status"] == "ACTIVE"
     assert fake.enabled == []
     exp = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
@@ -122,14 +123,10 @@ async def test_refund_texts_without_plan_have_no_none():
 @pytest.mark.asyncio
 async def test_refund_of_pro_renewal_shortens_obhod_too():
     fake, payment, sub, session, refund, api_payment = _setup(expire_in_days=70, plan="pro", amount=499.0, refunded=499.0)
-    fake.add_user(19, "tg_555_obhod", squads=["obhod"],
-                  expire=fake.users[9]["expireAt"])
-    obhod = SimpleNamespace(active=True, remna_user_id="19", valid_until=None, sub_kind="obhod")
     bot = AsyncMock()
-    with patch("app.services.obhod_service.get_obhod_subscription", AsyncMock(return_value=obhod)):
-        assert await _call(fake, session, refund, api_payment, bot) is True
-    assert fake.users[19]["expireAt"] == fake.users[9]["expireAt"]
-    assert obhod.valid_until == sub.valid_until
+    assert await _call(fake, session, refund, api_payment, bot) is True
+    new_exp = datetime.fromisoformat(fake.users[9]["expireAt"].replace("Z", "+00:00"))
+    assert fake.obhod.granted == [(TG_ID, "pro", new_exp)]  # obhod gets the same shortened date
+    assert fake.obhod.revoked == []
     admin = [c.kwargs["text"] for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 900][0]
-    assert "обхода укорочен" in admin
-    assert rf.REFUND_EXPIRE_NOW  # константа на месте
+    assert "Срок откатан на 1 мес." in admin

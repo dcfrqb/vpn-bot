@@ -113,3 +113,48 @@ async def test_gift_and_autorenew_payments_are_not_eligible():
     m, deps = make_money(REFUND_24H_ENABLED=True)
     rec = deps.store.add_payment(TG, kind="gift", status="succeeded", plan_code="lite", period_months=1)
     assert await m.refunds.request(TG, rec.id) == "not_eligible"
+
+
+# ----------------------------------------------------------------- review money M-1 / M-2
+
+
+async def test_approve_takes_back_only_the_refunded_period():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec = await _paid(m, deps)
+    await m.refunds.request(TG, rec.id)
+    rid = next(iter(deps.store.requests))
+    assert await m.refunds.decide(rid, 111, approve=True) == "done"
+    assert deps.provisioning.revoke_months == [rec.period_months]
+
+
+async def test_undelivered_payment_is_not_eligible_and_never_granted_after_refund():
+    from app.services.payments.store import M_NEEDS_PROVISIONING, stuck_is_recoverable
+
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec = deps.store.add_payment(TG, kind="subscription", status="succeeded", plan_code="standard",
+                                 period_months=1)
+    await deps.store.patch_meta(rec.id, {M_NEEDS_PROVISIONING: True})
+    assert await m.refunds.request(TG, rec.id) == "not_eligible"  # not delivered yet
+
+    # Reverse race: a refund marker already on the row (approval in flight):
+    # neither the recovery sweep nor a later process() grants it.
+    await deps.store.patch_meta(rec.id, {"refund_24h": {"rid": 1, "state": "refunding"}})
+    fresh = await deps.store.get(rec.id)
+    assert not stuck_is_recoverable(fresh.meta, fresh.created_at, deps.clock().replace(tzinfo=None),
+                                    __import__("datetime").timedelta(minutes=5))
+    r = await m.fulfillment.process(rec.id, source="recovery")
+    assert r.outcome is Outcome.REFUNDED
+    assert not deps.provisioning.by_payment
+
+
+async def test_approval_of_a_request_whose_payment_is_not_delivered_fails_safely():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec = await _paid(m, deps)
+    await m.refunds.request(TG, rec.id)
+    rid = next(iter(deps.store.requests))
+    # simulate a row that lost its delivery marks (2.x data): approval refuses
+    row = deps.store.payments[rec.id]
+    row.subscription_id = None
+    row.meta.pop("fulfilled_at", None)
+    assert (await m.refunds.decide(rid, 111, approve=True)).startswith("failed:")
+    assert not deps.payments.refunds and not deps.provisioning.revokes

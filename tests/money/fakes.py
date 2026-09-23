@@ -255,6 +255,7 @@ class FakeProvisioning:
         self.clock = clock or Clock()
         self.grants: list[tuple[int, Entitlement]] = []
         self.revokes: list[tuple[int, str]] = []
+        self.revoke_months: list = []
         self.by_payment: dict[int, SubscriptionState] = {}
         self.fail_times = 0
         self.fail_with: Exception = RuntimeError("panel down")
@@ -291,8 +292,10 @@ class FakeProvisioning:
         self.by_payment[entitlement.payment_id] = state
         return state
 
-    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str) -> bool:
+    async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str,
+                     months: Optional[int] = None) -> bool:
         self.revokes.append((telegram_id, reason))
+        self.revoke_months.append(months)
         return self.revoke_result
 
 
