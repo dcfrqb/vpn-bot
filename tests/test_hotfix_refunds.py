@@ -173,20 +173,21 @@ async def test_api_unavailable_is_retryable():
 def test_webhook_endpoint_routes_refund_and_503_on_retry():
     from fastapi.testclient import TestClient
     from app.api import main as api_main
+    from app.api.routes import yookassa as yk_routes
 
     client = TestClient(api_main.app)
     headers = {}
-    yk_ip = patch.object(api_main, "_get_client_ip", return_value="185.71.76.5")
-    with yk_ip, patch.object(api_main, "bot_instance", object()), \
-         patch.object(api_main, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
+    yk_ip = patch.object(yk_routes, "_get_client_ip", return_value="185.71.76.5")
+    with yk_ip, patch.object(yk_routes, "bot_instance", object()), \
+         patch.object(yk_routes, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
          patch("app.services.payments.refunds.handle_refund_webhook", AsyncMock(return_value=True)) as h:
         r = client.post("/webhook/yookassa", json=WEBHOOK, headers=headers)
     assert r.status_code == 200
     h.assert_awaited_once()
 
-    yk_ip = patch.object(api_main, "_get_client_ip", return_value="185.71.76.5")
-    with yk_ip, patch.object(api_main, "bot_instance", object()), \
-         patch.object(api_main, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
+    yk_ip = patch.object(yk_routes, "_get_client_ip", return_value="185.71.76.5")
+    with yk_ip, patch.object(yk_routes, "bot_instance", object()), \
+         patch.object(yk_routes, "_webhook_rate_limit_ok", AsyncMock(return_value=True)), \
          patch("app.services.payments.refunds.handle_refund_webhook",
                AsyncMock(side_effect=WebhookRetryableError("x"))):
         r = client.post("/webhook/yookassa", json=WEBHOOK, headers=headers)

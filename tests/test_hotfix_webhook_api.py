@@ -7,6 +7,7 @@ from aiogram import types
 from fastapi.testclient import TestClient
 
 from app.api import main as api_main
+from app.api.routes import yookassa as yk_routes
 
 
 def _req(peer: str, headers: dict):
@@ -26,7 +27,7 @@ def docker_gateway_172_18():
     """Как в контейнере: шлюз сети compose 172.18.0.1 (фикс-раунд 1: доверяем
     только ему и localhost, а не всем частным сетям)."""
     api_main._parse_trusted_proxies.cache_clear()
-    with patch.object(api_main, "_docker_default_gateway", return_value="172.18.0.1"):
+    with patch.object(yk_routes, "_docker_default_gateway", return_value="172.18.0.1"):
         yield
     api_main._parse_trusted_proxies.cache_clear()
 
@@ -51,7 +52,7 @@ def test_other_container_on_bridge_is_not_trusted(docker_gateway_172_18):
 
 def test_localhost_is_trusted_without_docker(monkeypatch):
     api_main._parse_trusted_proxies.cache_clear()
-    with patch.object(api_main, "_docker_default_gateway", return_value=None):
+    with patch.object(yk_routes, "_docker_default_gateway", return_value=None):
         assert api_main._get_client_ip(_req("127.0.0.1", {"X-Real-IP": "185.71.77.3"})) == "185.71.77.3"
         assert api_main._get_client_ip(_req("172.18.0.1", {"X-Real-IP": "185.71.77.3"})) == "172.18.0.1"
     api_main._parse_trusted_proxies.cache_clear()
@@ -101,7 +102,7 @@ def test_health_does_not_leak_error_text():
 
 def test_webhook_rejects_spoofed_cf_header():
     client = TestClient(api_main.app)  # peer = "testclient" (не доверенный прокси)
-    with patch.object(api_main, "bot_instance", object()):
+    with patch.object(yk_routes, "bot_instance", object()):
         r = client.post("/webhook/yookassa", json={"event": "payment.succeeded", "object": {"id": "x"}},
                         headers={"CF-Connecting-IP": "185.71.76.1"})
     assert r.status_code == 403

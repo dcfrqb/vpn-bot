@@ -383,13 +383,13 @@ async def test_webhook_returns_503_on_provisioning_pending():
     from fastapi.testclient import TestClient
     from app.api.main import app
 
-    with patch('app.api.main._is_yookassa_ip', return_value=True), \
-         patch('app.api.main._webhook_rate_limit_ok', new_callable=AsyncMock, return_value=True), \
+    with patch('app.api.routes.yookassa._is_yookassa_ip', return_value=True), \
+         patch('app.api.routes.yookassa._webhook_rate_limit_ok', new_callable=AsyncMock, return_value=True), \
          patch('app.services.payments.yookassa.process_payment_webhook',
                new_callable=AsyncMock,
                side_effect=ProvisioningPendingError("Remnawave timeout")):
         # bot_instance must be truthy
-        with patch('app.api.main.bot_instance', new=AsyncMock()):
+        with patch('app.api.routes.yookassa.bot_instance', new=AsyncMock()):
             client = TestClient(app)
             r = client.post(
                 "/webhook/yookassa",

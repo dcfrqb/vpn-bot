@@ -1,0 +1,274 @@
+"""
+Webhook ЮKassa: POST /webhook/yookassa.
+Полноценная обработка: IP whitelist, идемпотентность, provision.
+Webhook используется только как триггер — статус платежа всегда верифицируется через YooKassa API.
+
+3.0 Foundation: перенесено из app/api/main.py без изменений логики (маршрут
+стал APIRouter). app.api.main реэкспортирует эти имена. Владелец: поток A.
+"""
+import functools
+import ipaddress
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from aiogram import Bot
+
+from app.config import settings
+from app.logger import logger
+
+router = APIRouter()
+
+# IP-адреса YooKassa. Сверено с https://yookassa.ru/developers/using-api/webhooks
+# 23.09.2026: пять сетей и два одиночных адреса 77.75.156.11 и 77.75.156.35
+# (одиночных раньше не было в списке).
+_YOOKASSA_NETWORKS = [
+    ipaddress.ip_network("185.71.76.0/27"),
+    ipaddress.ip_network("185.71.77.0/27"),
+    ipaddress.ip_network("77.75.153.0/25"),
+    ipaddress.ip_network("77.75.154.128/25"),
+    ipaddress.ip_network("77.75.156.11/32"),
+    ipaddress.ip_network("77.75.156.35/32"),
+    ipaddress.ip_network("2a02:5180::/32"),
+]
+
+DOCKER_GATEWAY_TOKEN = "docker-gateway"
+_PROC_NET_ROUTE = "/proc/net/route"
+
+
+def _docker_default_gateway(route_file: str = _PROC_NET_ROUTE) -> str | None:
+    """IPv4 шлюза по умолчанию внутри контейнера (адрес docker-моста).
+
+    Nginx на хосте ходит на опубликованный 127.0.0.1:8001, и docker-proxy/NAT
+    приводит соединение в контейнер именно с адреса шлюза сети compose.
+    Вне Linux/контейнера файла нет -> None.
+    """
+    try:
+        with open(route_file) as f:
+            next(f, None)
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3 and fields[1] == "00000000":
+                    gw = int(fields[2], 16)
+                    if gw == 0:
+                        continue
+                    return str(ipaddress.IPv4Address(gw.to_bytes(4, "little")))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def _parse_trusted_proxies(raw: str) -> tuple:
+    nets = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part == DOCKER_GATEWAY_TOKEN:
+            gw = _docker_default_gateway()
+            if gw:
+                nets.append(ipaddress.ip_network(f"{gw}/32"))
+            else:
+                logger.info("WEBHOOK_TRUSTED_PROXIES: docker-gateway не определен (не в контейнере?)")
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning(f"WEBHOOK_TRUSTED_PROXIES: пропускаю невалидную сеть {part!r}")
+    return tuple(nets)
+
+
+def _trusted_proxy_networks() -> list:
+    """Адреса, от которых принимаем X-Real-IP: localhost и шлюз docker-сети
+    (через него приходит nginx хоста). Раньше доверяли всем частным сетям, и
+    любой соседний контейнер мог подставить X-Real-IP (ревью m-1)."""
+    return list(_parse_trusted_proxies(settings.WEBHOOK_TRUSTED_PROXIES or ""))
+
+
+def _get_client_ip(request: Request) -> str | None:
+    """IP клиента для allow-list YooKassa.
+
+    Хотфикс 2.1: заголовкам верим ТОЛЬКО если соединение пришло от доверенного
+    прокси (nginx на хосте -> docker-шлюз / localhost). И берем только
+    X-Real-IP: nginx перезаписывает его своим $remote_addr. CF-Connecting-IP и
+    X-Forwarded-For клиент может прислать сам (pay.* без Cloudflare, nginx их
+    не чистит), поэтому раньше allow-list обходился подделкой заголовка.
+    """
+    peer = request.client.host if request.client else None
+    try:
+        peer_ip = ipaddress.ip_address(peer) if peer else None
+    except ValueError:
+        peer_ip = None
+    if peer_ip is not None and any(peer_ip in net for net in _trusted_proxy_networks()):
+        real_ip = (request.headers.get("X-Real-IP") or "").strip()
+        if real_ip:
+            return real_ip
+    return peer
+
+
+def _is_yookassa_ip(ip_str: str | None) -> bool:
+    """Проверяет, входит ли IP в разрешенные диапазоны YooKassa."""
+    if not ip_str:
+        return False
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return any(ip in net for net in _YOOKASSA_NETWORKS)
+    except ValueError:
+        return False
+
+
+# Глобальная переменная для хранения экземпляра бота
+bot_instance: Bot = None
+
+# Идемпотентность webhook обеспечивается через local DB в process_payment_webhook():
+# - проверка payment.status (FSM transitions)
+# - проверка payment.subscription_id
+# - проверка payment_metadata["notified"]
+# In-memory set НЕ используется (не устойчив к рестарту).
+
+
+# Простой per-IP rate-limiter для webhook (60 req/min).
+# YooKassa IP-whitelist выше — это вторая линия защиты от burst/misbehaviour.
+_WEBHOOK_RATE_LIMIT_PER_MIN = 60
+
+
+async def _webhook_rate_limit_ok(client_ip: str | None) -> bool:
+    if not client_ip:
+        return True
+    try:
+        from app.services.cache import get_redis_client
+        redis_client = get_redis_client()
+        if not redis_client:
+            return True
+        key = f"rl:yk_webhook:{client_ip}"
+        count = await redis_client.incr(key)
+        if count == 1:
+            await redis_client.expire(key, 60)
+        if int(count) > _WEBHOOK_RATE_LIMIT_PER_MIN:
+            return False
+    except Exception as e:
+        logger.debug(f"webhook rate-limit check soft-fail: {e}")
+        return True
+    return True
+
+
+@router.post("/webhook/yookassa")
+async def yookassa_webhook(request: Request):
+    """
+    Эндпоинт для обработки webhook'ов от ЮKassa.
+
+    События:
+    - payment.succeeded - успешный платеж → provision
+    - payment.waiting_for_capture - ожидает подтверждения (игнорируем)
+    - payment.canceled - отмена платежа (логируем)
+    - refund.succeeded - возврат (логируем)
+
+    Идемпотентность: local DB (payment.subscription_id + metadata.notified).
+    """
+    # --- SECURITY: IP whitelist ---
+    client_ip = _get_client_ip(request)
+    if not _is_yookassa_ip(client_ip):
+        logger.warning(f"Webhook YooKassa отклонен: неизвестный IP {client_ip!r}")
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # --- SECURITY: rate-limit (вторая линия защиты за IP whitelist) ---
+    if not await _webhook_rate_limit_ok(client_ip):
+        logger.warning(f"Webhook YooKassa: rate limit exceeded for {client_ip}")
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+
+    # NOTE: YooKassa does not send X-Webhook-Secret headers by default.
+    # Security: IP whitelist (above) + direct API verification of every payment inside process_payment_webhook.
+    # The webhook payload is treated as a trigger only — status is never trusted from it.
+
+    try:
+
+        # Парсим JSON
+        try:
+            data = await request.json()
+        except Exception as e:
+            logger.error(f"Ошибка парсинга JSON webhook: {e}")
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        if not data:
+            logger.error("Получен пустой webhook")
+            raise HTTPException(status_code=400, detail="Empty request body")
+
+        event = data.get("event", "unknown")
+        payment_obj = data.get("object", {})
+        payment_id = payment_obj.get("id", "unknown")
+
+        logger.info(f"Webhook YooKassa: event={event} payment_id={payment_id}")
+
+        # Проверяем бот
+        if not bot_instance:
+            logger.error("Бот не инициализирован")
+            raise HTTPException(status_code=500, detail="Bot not initialized")
+
+        # Обрабатываем в зависимости от события
+        if event == "payment.succeeded":
+            # Единая точка обработки: local DB + Remnawave + уведомление пользователя
+            from app.services.payments.yookassa import process_payment_webhook
+            from app.services.payments.errors import ProvisioningError
+            try:
+                success = await process_payment_webhook(data, bot_instance)
+            except ProvisioningError as ppe:
+                # Phase B провалилась (Remnawave недоступен / не подтвердил). Local DB
+                # уже помечена provisioning_state='failed'. Отвечаем 503 — YooKassa
+                # повторит webhook; reconciler страхует на случай долгой недоступности.
+                logger.error(
+                    f"Webhook {payment_id}: provisioning pending — returning 503 to "
+                    f"trigger YooKassa retry. err={ppe}"
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "retry", "reason": "provisioning_pending"},
+                )
+            logger.info(f"Webhook {payment_id}: process_payment_webhook returned success={success}")
+            return JSONResponse(status_code=200, content={"status": "ok", "processed": success})
+
+        elif event == "payment.canceled":
+            logger.info(f"Webhook {payment_id}: payment canceled")
+            from app.services.jsonl_logger import log_payment_event
+            log_payment_event(
+                event="yookassa_payment_canceled",
+                req_id=f"yookassa_{payment_id}",
+                payload=data.get("object", {}),
+            )
+            return JSONResponse(status_code=200, content={"status": "ok", "event": "canceled"})
+
+        elif event == "refund.succeeded":
+            # payment_id выше = id возврата (object.id). Возврат сверяется через API
+            # YooKassa, записывается в платеж, полный возврат отзывает оплаченный период.
+            logger.info(f"Webhook refund {payment_id}: refund succeeded")
+            from app.services.jsonl_logger import log_payment_event
+            log_payment_event(
+                event="yookassa_refund",
+                req_id=f"yookassa_{payment_id}",
+                payload=data.get("object", {}),
+            )
+            from app.services.payments.errors import ProvisioningError
+            from app.services.payments.refunds import handle_refund_webhook
+            try:
+                processed = await handle_refund_webhook(data, bot_instance)
+            except ProvisioningError as rre:
+                logger.error(f"Webhook refund {payment_id}: retryable failure, returning 503. err={rre}")
+                return JSONResponse(status_code=503, content={"status": "retry", "reason": "refund_pending"})
+            return JSONResponse(status_code=200, content={"status": "ok", "event": "refund", "processed": processed})
+
+        else:
+            # waiting_for_capture и другие — просто ACK
+            logger.info(f"Webhook {payment_id}: event={event} (ignored)")
+            return JSONResponse(status_code=200, content={"status": "ok", "event": event})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка обработки webhook YooKassa: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        # Возвращаем 503, чтобы YooKassa повторила webhook при инфраструктурных сбоях.
+        # needs_provisioning=True уже выставлен — SubscriptionChecker подхватит при восстановлении.
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error"}
+        )
