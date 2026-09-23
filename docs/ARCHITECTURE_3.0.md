@@ -24,9 +24,9 @@ app/
     telegram_stars.py
   services/
     ports.py     Protocols every consumer depends on
-    shims.py     ports over 2.1.1 code (replaced stream by stream)
     notifications.py  TelegramNotifier (admin topics + DM fallback)
-    ...          2.x services, unchanged
+    ...          3.0 services (checkout, fulfillment, provisioning, status, promo, ...)
+                 and the 2.x services that are still used (users, obhod_service, ...)
   bot/
     callbacks.py       every CallbackData class
     legacy_aliases.py  2.x callback strings -> packed callbacks
@@ -36,10 +36,10 @@ app/
     views/             btn, url_btn, kb, render
   worker/
     scheduler.py       one loop, leader lock, JOBS registry (build_jobs)
-    jobs/              one module per job (legacy.py wraps 2.x tasks)
+    jobs/              one module per job (legacy.py: 2.x expiry notifier + reconciler)
   api/
     app.py             FastAPI assembly; api/main.py and api/server.py are shims
-    routes/            yookassa (moved verbatim), remnawave (501 stub), health
+    routes/            yookassa, remnawave (panel webhook), health
     internal_site.py   /internal/site/* for the site, contract frozen
   container.py         composition root (the only place that picks implementations)
 ```
@@ -50,18 +50,22 @@ Nothing in `domain` or `services` imports aiogram or FastAPI.
 
 ## Ports (`app/services/ports.py`)
 
-| Port | Owner | Foundation implementation |
+| Port | Owner | Implementation (wired in `container.build_container`) |
 |---|---|---|
-| RemnaGateway | B | `infra.remnawave.gateway.HttpRemnaGateway` (shim name `LegacyRemnaGateway` is an alias) |
-| PaymentGateway | A | `shims.LegacyPaymentGateway` (create/get real) |
-| StarsGateway | A | `shims.DisabledStarsGateway` (raises) |
-| ProvisioningService | B | `services.provisioning.PanelProvisioningService` (alias `LegacyProvisioningService`) |
-| StatusService | B | `services.status.PanelStatusService` (alias `LegacyStatusService`) |
-| DevicesService | B | `services.devices.PanelDevicesService` (alias `UnavailableDevicesService`) |
-| CheckoutService | A | `shims.LegacyCheckoutService` (quote/start real) |
-| PromoService | E | placeholder (raises) |
+| RemnaGateway | B | `infra.remnawave.gateway.HttpRemnaGateway` (one per process) |
+| PaymentGateway | A | `infra.yookassa.gateway.YooKassaGateway` |
+| StarsGateway | A | `infra.telegram_stars.TelegramStarsGateway` |
+| ProvisioningService | B | `services.provisioning.PanelProvisioningService` |
+| StatusService | B | `services.status.PanelStatusService` |
+| DevicesService | B | `services.devices.PanelDevicesService` |
+| CheckoutService | A | `services.checkout.ContainerCheckout` -> `money(container).checkout` |
+| PromoService | E | `services.promo.PromoEngine` |
 | Notifier | Foundation | `notifications.TelegramNotifier` |
-| MaintenanceGuard | C | `shims.RedisMaintenanceGuard` (manual flag) |
+| MaintenanceGuard | C | `services.maintenance.RedisMaintenanceGuard` |
+
+Services that depend on an overridden port are built over the override
+(`build_container(bot, remna=Fake...)` gives provisioning/status/devices over the fake).
+`services/shims.py` was deleted at the cutover.
 
 Handlers get ports from DI by name: `container, remna, payments, stars,
 provisioning, status_service, devices, checkout, promo, notifier, maintenance`.
@@ -91,36 +95,25 @@ fakes: `build_container(bot, remna=FakeRemnaGateway(), notifier=RecordingNotifie
 - Jobs (default off): `panel_sync` (DB <- panel, never writes the panel),
   `device_cleanup` (dry run by default), `obhod_lifecycle`.
 
-## Frozen files
+## Former frozen files
 
-Change only through an orchestrator commit on `release/3.0` (then everyone rebases):
-`bot/callbacks.py`, `services/ports.py`, `domain/models.py`, `container.py`,
-`bot/routers/__init__.py`, `worker/scheduler.py`, `api/app.py`, section headers
-of `config.py`, `requirements.txt`.
-
-Do not edit 2.x UI files in streams (`routers/start.py`, `routers/admin.py`,
-`ui/*`, `navigation/*`, `keyboards/*`, `legacy/*`, `payments/ui/*`,
-`routers/ui.py`, `routers/legacy_callbacks.py`, `routers/menu_builder.py`,
-`routers/subscription_view.py`). The cutover agent deletes them.
+The streams are merged; the seams (`bot/callbacks.py`, `services/ports.py`,
+`domain/models.py`, `container.py`, `bot/routers/__init__.py`,
+`worker/scheduler.py`, `api/app.py`) are ordinary files now. The 2.x UI
+stack (`ui/`, `navigation/`, `keyboards/`, `legacy/`, `payments/ui/`, the 2.x
+routers except `routers/site_login.py`) was deleted at the cutover.
 
 ## Router order
 
 ```
 site_login                     2.x, first: /start login_* and sitelogin: never reach others
 r3_promo_deeplink  (E)         /start <code>, /start g_<code>
-r3_start           (D)
-r3_menu            (D)
-r3_checkout        (A)
-r3_connect         (D)
-r3_devices         (D over B)
-r3_support         (D)
-r3_refund          (A)
-r3_admin_payments  (A)
-r3_admin_promo     (E)
-r3_admin_broadcast (E)
-r3_admin_obhod     (E)
-r3_admin_panel     (C)
-ui, start, legacy_payments, admin_broadcast, admin, legacy_callbacks   2.x, 2.1.1 order
+r3_trial_promo     (E)         /trial /promo /solokhin /sun718 /friend, promo buttons
+r3_start           (D)         /start /help /devices /myid /profile
+r3_menu, r3_checkout (A), r3_connect, r3_devices, r3_support, r3_refund (A)
+r3_admin_payments (A), r3_admin_home, r3_admin_users, r3_admin_grants, r3_admin_ops,
+r3_admin_promo, r3_admin_broadcast, r3_admin_obhod (E), r3_admin_panel (C)
+r3_fallback        (D)         any callback nobody took: answer + main menu (last)
 tg_errors_global               Telegram API errors
 ```
 
@@ -137,11 +130,11 @@ maintenance (no-op unless `maintenance:state` is set in Redis; admins pass);
 `bot/legacy_aliases.py` maps every 2.x callback string to a packed callback
 (ordered table `ALIASES`). For each old button press it increments
 `legacy_hits:<alias key>` in Redis, builds the packed callback and checks
-whether any handler of the NEW routers accepts it. If yes, the event continues
+whether any handler of the 3.0 routers accepts it. If yes, the event continues
 with the new data (a `model_copy`, still bound to the Bot); if no, the original
-event goes to the 2.x handler unchanged. So retargeting an alias needs no edit
-of the alias table: register a handler for the target (e.g. `Nav.filter(F.s == "main")`)
-and old `back_to_main` buttons start landing there.
+event continues (only site_login and `r3_fallback` are left for it).
+`tests/flows/test_callback_matrix.py` lists every string the 2.1.1 code
+produced and proves each reaches exactly one specific 3.0 handler.
 
 `pay_yookassa_<plan>_<months>_<amount>` becomes `Period(plan, months)`; the
 amount is ignored. `bc:unsub` / `bc:close` are already valid `Bc` callbacks.
@@ -179,8 +172,10 @@ A new router module is an orchestrator commit to `NEW_ROUTER_MODULES`.
 
 **A job.** Module `worker/jobs/<name>.py` with `async def run(ctx)`, setting
 `TASK_<NAME>_ENABLED: bool = False` in your config section, one
-`Job("<name>", run, interval_s, flag="<NAME>")` line in `scheduler.build_jobs`
-(orchestrator commit). The scheduler never overlaps a job with itself and runs
+`Job("<name>", run, interval_s, flag="<NAME>")` line in `scheduler.build_jobs`.
+Registered jobs: payment_recovery, autopay, panel_sync, device_cleanup,
+obhod_lifecycle, reminders, grace, panel_health, sun718_revert,
+broadcast_resume, and the 2.x expiry_notifier / reconciler (retire in 3.0.1). The scheduler never overlaps a job with itself and runs
 jobs only on the leader (`scheduler:leader` in Redis; Redis down = run).
 
 **An API route.** Module `api/routes/<name>.py` with an `APIRouter`, included

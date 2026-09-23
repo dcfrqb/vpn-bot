@@ -82,12 +82,18 @@ jobs:
         run: >
           ruff check --select F
           src/app/bot src/app/domain src/app/infra src/app/worker src/app/api/routes src/app/api/app.py
-          src/app/container.py src/app/services/ports.py src/app/services/shims.py
-          src/app/services/notifications.py
+          src/app/container.py src/app/services/ports.py src/app/services/notifications.py
+          src/app/services/checkout.py src/app/services/fulfillment.py src/app/services/autopay.py
+          src/app/services/money.py src/app/services/payments
+          src/app/services/accounts.py src/app/services/provisioning.py src/app/services/provisioning_rules.py
+          src/app/services/credits.py src/app/services/status.py src/app/services/devices.py
+          src/app/services/obhod.py src/app/services/panel_sync.py
+          src/app/services/events_repo.py src/app/services/grace.py src/app/services/maintenance.py
           src/app/services/promo.py src/app/services/promo_types.py src/app/services/promo_repo.py
           src/app/services/referral.py src/app/services/grants.py src/app/services/broadcast.py
           src/app/services/broadcast_segments.py src/app/services/broadcast_drafts.py src/app/services/admin_stats.py
           tests/flows tests/invariants tests/contracts tests/fakes tests/growth tests/data
+          tests/money tests/panel tests/events tests/ui
 
   alembic:
     runs-on: ubuntu-latest
