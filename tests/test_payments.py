@@ -128,7 +128,9 @@ async def test_create_payment_success(mock_payment_object):
         payment_url, external_id = await create_payment(
             amount_rub=99,
             description="CRS VPN - Базовый тариф (30 дней)",
-            user_id=123456789
+            user_id=123456789,
+            plan_code="basic",
+            period_months=1,
         )
         
         # Проверки
@@ -156,7 +158,9 @@ async def test_create_payment_without_db(mock_payment_object):
             await create_payment(
                 amount_rub=99,
                 description="CRS VPN - Базовый тариф (30 дней)",
-                user_id=123456789
+                user_id=123456789,
+                plan_code="basic",
+                period_months=1,
             )
 
 
@@ -168,13 +172,16 @@ async def test_create_payment_missing_config():
         mock_settings.YOOKASSA_API_KEY = None
         
         with pytest.raises(ValueError, match="YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены"):
-            await create_payment(99, "Test", 123456789)
+            await create_payment(99, "Test", 123456789, plan_code="basic", period_months=1)
 
 
 @pytest.mark.asyncio
 async def test_process_payment_webhook_pending(webhook_data_pending):
     """Тест обработки webhook для платежа в статусе pending"""
     with patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+        patch('app.services.payments.yookassa.check_payment_status', new_callable=AsyncMock,
+              return_value={"id": "test_payment_123", "status": "pending", "amount": 99.0, "currency": "RUB",
+                            "description": "Test", "metadata": {"tg_user_id": "123456789"}, "paid": True}), \
          patch('app.services.payments.yookassa.WebhookNotification') as mock_notification:
         
         mock_session = AsyncMock()
@@ -211,6 +218,11 @@ async def test_process_payment_webhook_pending(webhook_data_pending):
 async def test_process_payment_webhook_succeeded(webhook_data_succeeded):
     """Тест обработки webhook для успешного платежа"""
     with patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+        patch('app.services.payments.yookassa.check_payment_status', new_callable=AsyncMock,
+              return_value={"id": "test_payment_456", "status": "succeeded", "amount": 249.0, "currency": "RUB",
+                            "description": "Test", "metadata": {"tg_user_id": "123456789"}, "paid": True}), \
+         patch('app.services.cache.acquire_provision_lock', new_callable=AsyncMock, return_value=True), \
+         patch('app.services.cache.release_provision_lock', new_callable=AsyncMock), \
          patch('app.services.payments.yookassa.WebhookNotification') as mock_notification, \
          patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle, \
          patch('app.services.payments.yookassa.get_or_create_remna_user_and_get_subscription_url') as mock_get_url:
@@ -411,6 +423,9 @@ async def test_process_payment_webhook_invalid_transition_canceled_to_succeeded(
         },
     }
     with patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
+        patch('app.services.payments.yookassa.check_payment_status', new_callable=AsyncMock,
+              return_value={"id": "test_payment_canceled", "status": "succeeded", "amount": 99.0, "currency": "RUB",
+                            "description": "Test", "metadata": {"tg_user_id": "123456789"}, "paid": True}), \
          patch('app.services.payments.yookassa.WebhookNotification') as mock_notification, \
          patch('app.services.payments.yookassa.handle_successful_payment') as mock_handle:
         mock_session = AsyncMock()
@@ -462,7 +477,11 @@ async def test_process_payment_webhook_missing_user_id():
         }
     }
     
-    with patch('app.services.payments.yookassa.WebhookNotification') as mock_notification:
+    with patch('app.services.payments.yookassa.SessionLocal', None), \
+        patch('app.services.payments.yookassa.check_payment_status', new_callable=AsyncMock,
+              return_value={"id": "test_payment_789", "status": "succeeded", "amount": 99.0, "currency": "RUB",
+                            "description": "Test", "metadata": {}, "paid": True}), \
+         patch('app.services.payments.yookassa.WebhookNotification') as mock_notification:
         mock_notif_obj = Mock()
         mock_notif_obj.object = Mock()
         mock_notif_obj.object.id = "test_payment_789"

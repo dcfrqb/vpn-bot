@@ -15,7 +15,7 @@ from app.db.models import Payment as PaymentModel, Subscription, TelegramUser, R
 from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.remnawave.client import RemnaClient, normalize_expire_at
-from app.services.payments.errors import ProvisioningPendingError
+from app.services.payments.errors import ProvisioningPendingError, WebhookRetryableError
 
 # Допуск при сравнении ожидаемого vs фактического expireAt в Remnawave.
 # 60s покрывает дрифт между моментом APIcall и моментом, когда Remnawave записал значение.
@@ -256,42 +256,90 @@ async def create_payment(
         raise
 
 
+WEBHOOK_DEDUP_TTL_SECONDS = 86400
+
+
+async def _acquire_webhook_dedup(webhook_data: Dict[str, Any], event: str, trace_id: str):
+    """Ставит маркер «вебхук в обработке/обработан».
+
+    Returns: ключ (str) — маркер наш; False — дубль (маркер уже стоит);
+    None — дедуп недоступен (нет id / нет Redis), обрабатываем без него.
+    """
+    event_id = webhook_data.get("id") or (webhook_data.get("object") or {}).get("id")
+    if not event_id:
+        return None
+    try:
+        from app.services.cache import get_redis_client
+        redis_client = get_redis_client()
+        if not redis_client:
+            return None
+        # Ключ по событию + объекту: payment.succeeded и refund.* одного платежа
+        # не глушат друг друга.
+        dedup_key = f"yk_event:{event}:{event_id}"
+        acquired = await redis_client.set(dedup_key, trace_id, ex=WEBHOOK_DEDUP_TTL_SECONDS, nx=True)
+        if not acquired:
+            logger.info(
+                f"[{trace_id}] webhook duplicate suppressed: event={event} id={event_id} "
+                f"(processed or in progress)"
+            )
+            return False
+        return dedup_key
+    except Exception as dedup_err:
+        logger.warning(f"[{trace_id}] webhook dedup check failed (continuing): {dedup_err}")
+        return None
+
+
+async def _release_webhook_dedup(dedup_key: str, trace_id: str) -> None:
+    """Снимает маркер после неуспешной обработки, чтобы повтор YooKassa (после
+    нашего 503) не был проглочен как дубль (дефект Д-2)."""
+    try:
+        from app.services.cache import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            await redis_client.delete(dedup_key)
+            logger.info(f"[{trace_id}] webhook dedup released for retry: {dedup_key}")
+    except Exception as e:
+        logger.warning(f"[{trace_id}] webhook dedup release failed: {e}")
+
+
 async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
     """Обрабатывает webhook от YooKassa.
 
     Идемпотентность:
-      - верхний слой — Redis dedup по event.id (24h TTL), защищает от повторной
-        доставки того же webhook до попадания в БД
+      - верхний слой — Redis-маркер yk_event:<event>:<id> (24h TTL): гасит
+        параллельную/повторную доставку уже обработанного события. Маркер
+        снимается, если обработка не удалась (исключение или False), поэтому
+        повтор YooKassa после 503 обрабатывается заново (фикс Д-2);
       - нижний слой — `with_for_update()` на payment record + FSM VALID_STATUS_TRANSITIONS
+        + гейт provisioning_state='synced'.
     """
     trace_id = str(uuid.uuid4())
+    if not webhook_data:
+        logger.error(f"[{trace_id}] webhook received: empty body")
+        return False
+    event = webhook_data.get("event")
+    if not event:
+        logger.error(f"[{trace_id}] webhook received: missing event")
+        return False
+
+    dedup_key = await _acquire_webhook_dedup(webhook_data, event, trace_id)
+    if dedup_key is False:
+        return True
+
+    success = False
     try:
-        if not webhook_data:
-            logger.error(f"[{trace_id}] webhook received: empty body")
-            return False
+        success = await _process_payment_webhook_body(webhook_data, bot, trace_id, event)
+        return success
+    finally:
+        if dedup_key and not success:
+            await _release_webhook_dedup(dedup_key, trace_id)
 
-        event = webhook_data.get("event")
-        if not event:
-            logger.error(f"[{trace_id}] webhook received: missing event")
-            return False
 
-        event_id = webhook_data.get("id") or (webhook_data.get("object") or {}).get("id")
-        if event_id:
-            try:
-                from app.services.cache import get_redis_client
-                redis_client = get_redis_client()
-                if redis_client:
-                    dedup_key = f"yk_event:{event_id}"
-                    acquired = await redis_client.set(dedup_key, trace_id, ex=86400, nx=True)
-                    if not acquired:
-                        logger.info(
-                            f"[{trace_id}] webhook duplicate suppressed: event_id={event_id} "
-                            f"(already processed within 24h)"
-                        )
-                        return True
-            except Exception as dedup_err:
-                logger.warning(f"[{trace_id}] webhook dedup check failed (continuing): {dedup_err}")
-
+async def _process_payment_webhook_body(
+    webhook_data: Dict[str, Any], bot, trace_id: str, event: str
+) -> bool:
+    """Тело обработки вебхука (после дедупа). True = обработан, повтор не нужен."""
+    try:
         logger.info(f"[{trace_id}] webhook received: event={event}")
         
         notification = WebhookNotification(webhook_data)
@@ -338,7 +386,8 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         api_data = await check_payment_status(payment_id)
         if not api_data:
             logger.error(f"[{trace_id}] API verification failed: external_id={payment_id}")
-            return False
+            # YooKassa API недоступен: вебхук должен прийти повторно (503).
+            raise WebhookRetryableError(f"YooKassa API verification unavailable for {payment_id}")
         if api_data.get("error") == "not_found":
             logger.warning(f"[{trace_id}] payment not found in YooKassa API: external_id={payment_id}")
             return False
@@ -533,7 +582,7 @@ async def process_payment_webhook(webhook_data: Dict[str, Any], bot) -> bool:
 
         return True
 
-    except ProvisioningPendingError:
+    except (ProvisioningPendingError, WebhookRetryableError):
         # Pre-marked as failed in handle_successful_payment. Propagate so the webhook
         # endpoint can answer 5xx and YooKassa will retry; reconciler is the safety net.
         raise

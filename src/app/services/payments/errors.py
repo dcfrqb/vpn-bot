@@ -13,3 +13,8 @@ class ProvisioningError(Exception):
 
 class ProvisioningPendingError(ProvisioningError):
     """Sync с Remnawave не удался; нужен retry (webhook → 503, reconciler → следующий цикл)."""
+
+
+class WebhookRetryableError(ProvisioningError):
+    """Вебхук не обработан по внешней причине (YooKassa API недоступен и т.п.);
+    эндпоинт отвечает 503, чтобы YooKassa прислала его повторно."""

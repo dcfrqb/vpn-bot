@@ -257,10 +257,10 @@ async def yookassa_webhook(request: Request):
         if event == "payment.succeeded":
             # Единая точка обработки: local DB + Remnawave + уведомление пользователя
             from app.services.payments.yookassa import process_payment_webhook
-            from app.services.payments.errors import ProvisioningPendingError
+            from app.services.payments.errors import ProvisioningError
             try:
                 success = await process_payment_webhook(data, bot_instance)
-            except ProvisioningPendingError as ppe:
+            except ProvisioningError as ppe:
                 # Phase B провалилась (Remnawave недоступен / не подтвердил). Local DB
                 # уже помечена provisioning_state='failed'. Отвечаем 503 — YooKassa
                 # повторит webhook; reconciler страхует на случай долгой недоступности.
