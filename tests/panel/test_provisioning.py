@@ -519,6 +519,61 @@ async def test_retry_with_panel_on_recorded_target_is_idempotent(svc, fake):
     assert fake.users[501]["expireAt"] == iso(datetime(2026, 11, 1, tzinfo=timezone.utc))
 
 
+def _lose_next_verify(fake):
+    """The next PATCH lands, but its verify and the late probe both fail."""
+    real_get = fake.get_user_by_id
+    start = len(fake.patches)
+    calls = {"n": 0}
+
+    async def get_fails_after_patch(user_id):
+        if len(fake.patches) > start and calls["n"] < 2:
+            calls["n"] += 1
+            raise httpx.ConnectError("verify lost")
+        return await real_get(user_id)
+
+    fake.get_user_by_id = get_fails_after_patch
+
+
+@pytest.mark.parametrize("retry_order", [("a", "b"), ("b", "a")])
+async def test_same_base_pending_pair_keeps_both_paid_months(svc, fake, repo, retry_order):
+    """Review round 2, N-1: A's PATCH never lands, B (same base 01.10) lands
+    unverified. A panel on 01.11 proves one grant, not two: in any retry order
+    the user ends on 01.12."""
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    _fail_next_patch(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(1), trace_id="a", months=1)  # A: pending, base 01.10, nothing landed
+    _lose_next_verify(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(2), trace_id="b", months=1)  # B: landed 01.11, unverified
+    nov1 = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert fake.users[501]["expireAt"] == iso(nov1)
+    grants = (await repo.get_subscription(7)).config_data["grants"]
+    assert grants["pay:1"]["moved"] is True and not grants["pay:2"].get("moved")
+    pays = {"a": 1, "b": 2}
+    for n, who in enumerate(retry_order):
+        await svc.grant(7, _pay(pays[who]), trace_id=f"{who}-retry{n}", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 1, tzinfo=timezone.utc))
+    grants = (await repo.get_subscription(7)).config_data["grants"]
+    assert grants["pay:1"]["state"] == "applied" and grants["pay:2"]["state"] == "applied"
+    patches = len(fake.patches)
+    await svc.grant(7, _pay(1), trace_id="a-again", months=1)
+    await svc.grant(7, _pay(2), trace_id="b-again", months=1)
+    assert len(fake.patches) == patches  # both closed, no third month
+
+
+async def test_same_base_pending_pair_where_neither_landed(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(OCT1))
+    for pid in (1, 2):
+        _fail_next_patch(fake)
+        with pytest.raises(ProvisioningError):
+            await svc.grant(7, _pay(pid), trace_id=f"t{pid}", months=1)
+    assert fake.users[501]["expireAt"] == iso(OCT1)
+    await svc.grant(7, _pay(2), trace_id="t2r", months=1)
+    await svc.grant(7, _pay(1), trace_id="t1r", months=1)
+    assert fake.users[501]["expireAt"] == iso(datetime(2026, 12, 1, tzinfo=timezone.utc))
+
+
 def test_retry_target_rules():
     from app.services.provisioning_rules import retry_target
 

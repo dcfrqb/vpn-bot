@@ -76,6 +76,8 @@ from app.services.provisioning_rules import (  # noqa: F401 (re-exported)
     ProvisioningBusy,
     ProvisioningError,
     _now,
+    _parse,
+    _same_instant,
     compute_target,
     grant_key,
     landed_pending_keys,
@@ -359,6 +361,15 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
             # An earlier pending grant whose PATCH did land (the panel sits on its
             # target): it is done, a later retry must not add its period again.
             grants[other] = {**grants[other], "state": "applied", "landed_seen_by": key}
+        for other, orec in list(grants.items()):
+            # Review round 2, N-1: another pending grant computed from the same
+            # panel date did not land (the panel still sits on its base). If THIS
+            # grant lands, a panel on the shared target proves only one of the
+            # two, so the other one's retry must stack on the new date.
+            if (other != key and other not in landed and isinstance(orec, dict)
+                    and orec.get("state") == "pending" and "base" in orec and not orec.get("moved")
+                    and _same_instant(_parse(orec.get("base")), base)):
+                grants[other] = {**orec, "moved": True}
         grants[key] = {"target": target.isoformat(), "state": "pending", "plan": ent.plan_code,
                        "source": ent.source.value, "at": now.isoformat(),
                        "base": base.isoformat() if base is not None else None}
