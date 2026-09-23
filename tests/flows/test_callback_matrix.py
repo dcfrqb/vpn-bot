@@ -43,7 +43,11 @@ PACKED_SAMPLES = {
     cb.Gift(a="buy").pack(): "A",
 }
 # Streams delete their entries when their handlers land.
-PENDING_PACKED = set(PACKED_SAMPLES)
+PENDING_PACKED = set(PACKED_SAMPLES) - {
+    # stream E
+    cb.PromoAct(a="enter").pack(), cb.PromoAdm(a="list").pack(), cb.Adm(s="panel", a="open").pack(),
+    cb.BcAdm(a="new").pack(),
+}
 
 # 2.x strings (every producer in the 2.1.1 code) -> (alias key, packed rewrite or None).
 LEGACY_SAMPLES = {
@@ -169,6 +173,12 @@ async def test_every_legacy_string_resolves_to_exactly_one_handler(flow, legacy)
         if new:
             return  # the alias middleware hands it to that one new handler
     found = await _accepting(flow.dp, flow.bot, legacy)
+    if legacy in NATIVE_LEGACY_STRINGS:
+        # bc:unsub / bc:close are valid packed Bc callbacks: the new Bc handler
+        # (stream E) takes them over directly, exactly one new handler.
+        new = [h for h in found if _is_new(h[0])]
+        assert len(new) == 1, f"{legacy}: expected one new Bc handler, got {new}"
+        return
     assert not [h for h in found if _is_new(h[0])], "a new handler must not take raw 2.x strings"
     specific = [h for h in found if h != CATCH_ALL]
     if legacy in KNOWN_LEGACY_OVERLAPS:

@@ -33,6 +33,11 @@ NEW_LAYER = [
     SRC / "bot", SRC / "domain", SRC / "worker", SRC / "infra", SRC / "api" / "routes",
     SRC / "container.py", SRC / "services" / "ports.py", SRC / "services" / "shims.py",
     SRC / "services" / "notifications.py",
+    # stream E
+    *[SRC / "services" / f"{m}.py" for m in (
+        "promo", "promo_types", "promo_repo", "referral", "grants", "broadcast", "broadcast_segments",
+        "broadcast_drafts", "admin_stats", "blocklist")],
+    ROOT / "tests" / "growth",
 ]
 MANUAL = ["pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "premium-friend", "arcadia"]
 
