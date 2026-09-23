@@ -1682,6 +1682,33 @@ async def _compute_extend_expire_str(client: RemnaClient, remna_user_id: str, pe
     return new_expire.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _is_remna_user_gone_error(exc: Exception) -> bool:
+    """404 (юзер удален) или 400 (id не принят панелью, legacy-UUID в 3.x)."""
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return exc.response.status_code in (400, 404)
+    return False
+
+
+async def _read_stored_remna_user(client, remna_user_id: str) -> Optional[Dict[str, Any]]:
+    """GET сохраненного юзера. None — юзера больше нет (или id legacy-формата);
+    любая другая ошибка пробрасывается (панель недоступна != юзера нет)."""
+    if not str(remna_user_id).strip().isdigit():
+        return None
+    try:
+        data = await client.get_user_by_id(str(remna_user_id))
+    except Exception as e:
+        if _is_remna_user_gone_error(e):
+            return None
+        raise
+    raw = data.get("response", data) if isinstance(data, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        # пустой ответ — не доказательство, что юзера нет: не создаем дубль
+        raise RuntimeError(f"remna user {remna_user_id}: empty response")
+    return data
+
+
 async def get_or_create_remna_user_and_get_subscription_url(
     telegram_user_id: int,
     subscription_id: int,
@@ -1718,6 +1745,29 @@ async def get_or_create_remna_user_and_get_subscription_url(
             client = RemnaClient()
             
             try:
+                stored_user_data = None
+                if telegram_user.remna_user_id:
+                    # Ревью B1: сохраненный id может указывать на удаленного в
+                    # панели юзера или на legacy-UUID, который 3.x не принимает.
+                    # Как на проде: такой id не блокирует выдачу — забываем его
+                    # и идем в поиск по telegramId / создание. Ошибки панели
+                    # (5xx, таймаут) по-прежнему фатальны: это «не знаю», а не
+                    # «юзера нет».
+                    stored_user_data = await _read_stored_remna_user(
+                        client, str(telegram_user.remna_user_id)
+                    )
+                    if stored_user_data is None:
+                        stale_id = str(telegram_user.remna_user_id)
+                        logger.warning(
+                            f"remna_user_id={stale_id} for tg_id={telegram_user_id} is gone in "
+                            f"Remnawave (404/400/legacy id) — clearing it, falling back to "
+                            f"telegramId lookup/create"
+                        )
+                        telegram_user.remna_user_id = None
+                        if subscription.remna_user_id and str(subscription.remna_user_id) == stale_id:
+                            subscription.remna_user_id = None
+                        await session.commit()
+
                 if telegram_user.remna_user_id:
                     # Если пользователь уже существует, обновляем expireAt и сквад
                     remna_user_id = str(telegram_user.remna_user_id)
@@ -1749,6 +1799,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     from app.services.remna_tariff import apply_tariff_to_remna_user
                     await apply_tariff_to_remna_user(
                         client, remna_user_id, subscription.plan_code, expire_at=new_expire_str,
+                        user_data=stored_user_data,
                     )
 
                     subscription_url = await client.get_user_subscription_url(telegram_user.remna_user_id)
@@ -1800,12 +1851,12 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     )
                     # Получаем subscription URL и сохраняем
                     subscription_url = await client.get_user_subscription_url(remna_user_id)
+                    subscription.remna_user_id = remna_user_id
                     if subscription_url:
                         if not subscription.config_data:
                             subscription.config_data = {}
                         subscription.config_data["subscription_url"] = subscription_url
-                        subscription.remna_user_id = remna_user_id
-                        await session.commit()
+                    await session.commit()
                     await client.close()
                     return subscription_url
 
