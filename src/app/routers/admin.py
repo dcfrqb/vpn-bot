@@ -526,7 +526,14 @@ async def _handle_friend_grant(callback: types.CallbackQuery, key: str) -> bool:
     from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
 
-    success = await provision_tariff(user_id, tariff_code, req_id=f"friend_admin_{callback.from_user.id}")
+    # Хотфикс 2.1: лок по получателю — два админа / две кнопки (1м и 3м, /friend
+    # и /admin) на одного юзера больше не дают двойную выдачу.
+    from app.services.user_lock import user_action_lock
+    async with user_action_lock("grant", user_id) as _grant_lock:
+        if not _grant_lock:
+            await callback.answer("⏳ Этому юзеру уже выдают доступ", show_alert=True)
+            return False
+        success = await provision_tariff(user_id, tariff_code, req_id=f"friend_admin_{callback.from_user.id}")
     if not success:
         await callback.answer("❌ Ошибка выдачи доступа. Проверьте логи.", show_alert=True)
         return False
@@ -657,7 +664,14 @@ async def _handle_admin_promo_grant(callback: types.CallbackQuery, key: str) -> 
     from app.services.remna_service import provision_tariff
     from app.keyboards import get_subscription_link_keyboard
 
-    success = await provision_tariff(user_id, tariff_code, req_id=f"admin_promo_{callback.from_user.id}")
+    # Хотфикс 2.1: лок по получателю — два админа / две кнопки (1м и 3м, /friend
+    # и /admin) на одного юзера больше не дают двойную выдачу.
+    from app.services.user_lock import user_action_lock
+    async with user_action_lock("grant", user_id) as _grant_lock:
+        if not _grant_lock:
+            await callback.answer("⏳ Этому юзеру уже выдают доступ", show_alert=True)
+            return False
+        success = await provision_tariff(user_id, tariff_code, req_id=f"admin_promo_{callback.from_user.id}")
     if not success:
         await callback.answer("❌ Ошибка выдачи доступа. Проверьте логи.", show_alert=True)
         return False

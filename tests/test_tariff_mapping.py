@@ -64,7 +64,7 @@ class TestTariffToDays:
     def test_legacy_trial_keeps_basic_squad(self):
         plan, days = TARIFF_TO_DAYS["trial_10d"]
         assert plan == "basic"
-        assert days == 10
+        assert days == 5  # триал 5 дней с 23.09.2026
 
     def test_legacy_solokhin_keeps_premium_squad(self):
         plan, days = TARIFF_TO_DAYS["solokhin_15d"]
@@ -72,9 +72,10 @@ class TestTariffToDays:
         assert days == 15
 
     def test_new_trial_routes_to_standard(self):
-        plan, days = TARIFF_TO_DAYS["trial_standard_10d"]
+        plan, days = TARIFF_TO_DAYS["trial_standard_5d"]
         assert plan == "standard"
-        assert days == 10
+        assert days == 5
+        assert TARIFF_TO_DAYS["trial_standard_10d"] == ("standard", 5)
 
 
 class TestPlanCodeToSquadAndLimit:

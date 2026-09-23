@@ -444,7 +444,7 @@ async def my_plan(callback: types.CallbackQuery):
             "❌ <b>Активная подписка:</b> Нет\n"
             "📅 <b>Срок действия:</b> Не установлен\n"
             "💳 <b>Тариф:</b> Не выбран\n\n"
-            "💡 <b>Новые пользователи получают пробный период на 2 дня!</b>\n\n"
+            "💡 <b>Новые пользователи получают пробный период на 5 дней: команда /trial</b>\n\n"
             "Для получения доступа к VPN выберите подходящий тариф:",
             reply_markup=get_main_menu_keyboard(user_id=callback.from_user.id, has_subscription=has_sub)
         )
@@ -863,6 +863,86 @@ async def _handle_promo_command(
     days: int,
     plan_label: str,
 ) -> bool:
+    """Промокод под пользовательским локом (хотфикс 2.1: параллельные /trial
+    больше не дают N выдач). Сама логика в _handle_promo_command_locked."""
+    from app.services.user_lock import user_action_lock
+
+    async with user_action_lock("promo", message.from_user.id) as acquired:
+        if not acquired:
+            await message.answer("⏳ Уже обрабатываем ваш промокод, подождите пару секунд.")
+            return True
+        return await _handle_promo_command_locked(
+            message, promo_code=promo_code, tariff=tariff, days=days, plan_label=plan_label,
+        )
+
+
+async def _record_promo_usage(user_id: int, promo_external_id: str, description: str, metadata: dict):
+    """Record-first: пишет факт использования промокода ДО выдачи.
+
+    Returns: "ok" если записали; "used" если запись уже есть (уникальный external_id);
+    None при ошибке БД (выдавать нельзя: иначе промокод станет многоразовым).
+    """
+    from app.db.session import SessionLocal
+    from app.db.models import Payment as PaymentModel
+    from sqlalchemy.exc import IntegrityError
+
+    if not SessionLocal:
+        return None
+    try:
+        async with SessionLocal() as session:
+            row = PaymentModel(
+                telegram_user_id=user_id,
+                provider="promo",
+                external_id=promo_external_id,
+                amount=0,
+                currency="RUB",
+                status="succeeded",
+                description=description,
+                paid_at=datetime.utcnow(),
+                payment_metadata=metadata,
+            )
+            session.add(row)
+            await session.commit()
+            return "ok"
+    except IntegrityError as e:
+        if "external_id" in str(e).lower() or "unique" in str(e).lower():
+            return "used"
+        logger.error(f"promo record failed (integrity) {promo_external_id}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"promo record failed {promo_external_id}: {e}")
+        return None
+
+
+async def _delete_promo_usage(promo_external_id: str) -> None:
+    """Откат record-first, если выдача не удалась (юзер сможет попробовать снова)."""
+    from app.db.session import SessionLocal
+    from app.db.models import Payment as PaymentModel
+    from sqlalchemy import delete
+
+    if not SessionLocal:
+        return
+    try:
+        async with SessionLocal() as session:
+            await session.execute(
+                delete(PaymentModel).where(
+                    PaymentModel.external_id == promo_external_id,
+                    PaymentModel.provider == "promo",
+                )
+            )
+            await session.commit()
+    except Exception as e:
+        logger.error(f"promo record rollback failed {promo_external_id}: {e}")
+
+
+async def _handle_promo_command_locked(
+    message: types.Message,
+    *,
+    promo_code: str,
+    tariff: str,
+    days: int,
+    plan_label: str,
+) -> bool:
     """
     Общая логика промокодных команд (solokhin, trial).
 
@@ -953,38 +1033,41 @@ async def _handle_promo_command(
             )
             return True
 
-    # 3. Выдаем подписку сразу
+    # 3. Record-first: фиксируем использование ДО выдачи. Уникальный external_id —
+    # последняя линия против гонки; при ошибке БД не выдаем (иначе промокод
+    # становится многоразовым).
     from app.services.payment_request import generate_req_id
     req_id = generate_req_id()
+    recorded = await _record_promo_usage(
+        user_id,
+        promo_external_id,
+        f"Promo {promo_code} {days} days",
+        {"promo_code": promo_code, "tariff": tariff, "auto": True, "req_id": req_id},
+    )
+    if recorded == "used":
+        await message.answer(
+            f"❌ Промокод {cmd} уже был использован вами ранее.\n\n"
+            "Повторная активация невозможна.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
+    if recorded is None:
+        await message.answer(
+            "❌ Произошла ошибка. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+        )
+        return True
+
+    # 4. Выдаем подписку; при неудаче откатываем запись использования
     success = await provision_tariff(user_id, tariff, req_id=req_id)
     if not success:
         logger.error(f"{cmd}: provision_tariff failed for {user_id}")
+        await _delete_promo_usage(promo_external_id)
         await message.answer(
             "❌ Не удалось активировать промокод. Попробуйте позже или обратитесь к администратору.",
             reply_markup=get_main_menu_keyboard(user_id=user_id),
         )
         return True
-
-    # 4. Записываем использование промокода в БД (для защиты от повторного использования)
-    if SessionLocal:
-        try:
-            async with SessionLocal() as session:
-                usage_record = PaymentModel(
-                    telegram_user_id=user_id,
-                    provider="promo",
-                    external_id=promo_external_id,
-                    amount=0,
-                    currency="RUB",
-                    status="succeeded",
-                    description=f"Promo {promo_code} {days} days",
-                    paid_at=datetime.utcnow(),
-                    payment_metadata={"promo_code": promo_code, "tariff": tariff, "auto": True},
-                )
-                session.add(usage_record)
-                await session.commit()
-        except Exception as e:
-            logger.error(f"{cmd}: ошибка записи использования в БД для {user_id}: {e}")
-            # Продолжаем — подписка уже выдана
 
     # 5. Логируем событие выдачи
     try:
@@ -1068,7 +1151,7 @@ async def cmd_solokhin(message: types.Message):
 
 @router.message(Command("trial"))
 async def cmd_trial(message: types.Message):
-    """Промокод Trial — Standard на 10 дней для всех.
+    """Промокод Trial — Standard на 5 дней для всех (было 10, решение владельца 23.09.2026).
 
     Юзеры с активной подпиской получают отказ внутри `_handle_promo_command`
     (active sub → отказ), так что старые юзеры с действующим тарифом не пострадают.
@@ -1079,8 +1162,8 @@ async def cmd_trial(message: types.Message):
     if await _handle_promo_command(
         message,
         promo_code="trial",
-        tariff="trial_standard_10d",
-        days=10,
+        tariff="trial_standard_5d",
+        days=5,
         plan_label="Standard",
     ):
         return
@@ -1162,6 +1245,19 @@ async def _sun718_notify_admins(
 
 @router.message(Command("sun718"))
 async def cmd_sun718(message: types.Message):
+    """/sun718 под пользовательским локом (хотфикс 2.1). Логика — _cmd_sun718_locked."""
+    if not getattr(settings, "PROMO_SUN718_ENABLED", True):
+        return
+    from app.services.user_lock import user_action_lock
+
+    async with user_action_lock("promo", message.from_user.id) as acquired:
+        if not acquired:
+            await message.answer("⏳ Уже обрабатываем ваш промокод, подождите пару секунд.")
+            return
+        await _cmd_sun718_locked(message)
+
+
+async def _cmd_sun718_locked(message: types.Message):
     """Промокод Sun718 — реферальный (Pro 5 дней).
 
     Полная матрица случаев см. в коде ниже. Алерт админу шлётся ВСЕГДА (включая
@@ -1175,9 +1271,6 @@ async def cmd_sun718(message: types.Message):
     from app.services.payment_request import generate_req_id
     from sqlalchemy import select
     from datetime import datetime, timedelta
-
-    if not getattr(settings, "PROMO_SUN718_ENABLED", True):
-        return
 
     user_id = message.from_user.id
     promo_code = "sun718"
@@ -1316,25 +1409,9 @@ async def cmd_sun718(message: types.Message):
         except Exception:
             pre_promo_expire_iso = None
 
-    # 5. Provisioning
+    # 5. Record-first: пишем активацию (для трекинга + revert metadata) ДО выдачи.
+    # Уникальный external_id закрывает гонку параллельных /sun718.
     req_id = generate_req_id()
-    if will_provision:
-        success = await provision_tariff(user_id, tariff, req_id=req_id)
-        if not success:
-            logger.error(f"{cmd}: provision_tariff failed for {user_id}")
-            await message.answer(
-                "❌ Не удалось активировать промокод. Попробуйте позже." + footer,
-                reply_markup=get_main_menu_keyboard(user_id=user_id),
-                parse_mode="HTML",
-            )
-            await _sun718_notify_admins(
-                message.bot, user_id=user_id, username=username, name=name,
-                title="❌ SUN718: provision_tariff failed",
-                body=f"tariff={tariff} req_id={req_id}",
-            )
-            return
-
-    # 6. Запись активации в payments (для трекинга + revert metadata)
     activated_at = datetime.utcnow()
     revert_at_iso = None
     if schedule_revert:
@@ -1355,32 +1432,47 @@ async def cmd_sun718(message: types.Message):
             "revert_completed": False,
         })
 
-    if SessionLocal:
-        try:
-            async with SessionLocal() as session:
-                usage_record = PaymentModel(
-                    telegram_user_id=user_id,
-                    provider="promo",
-                    external_id=promo_external_id,
-                    amount=0,
-                    currency="RUB",
-                    status="succeeded",
-                    description=f"Promo {promo_code} {days} days",
-                    paid_at=activated_at,
-                    payment_metadata=pay_metadata,
-                )
-                session.add(usage_record)
-                await session.commit()
-        except Exception as e:
-            logger.error(f"{cmd}: запись в payments упала {user_id}: {e}")
+    recorded = await _record_promo_usage(
+        user_id, promo_external_id, f"Promo {promo_code} {days} days", pay_metadata,
+    )
+    if recorded == "used":
+        await message.answer(
+            f"❌ Промокод {cmd} уже был использован вами ранее.\n\n"
+            "Повторная активация невозможна." + footer,
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+            parse_mode="HTML",
+        )
+        return
+    if recorded is None:
+        await message.answer(
+            "❌ Произошла ошибка. Попробуйте позже." + footer,
+            reply_markup=get_main_menu_keyboard(user_id=user_id),
+            parse_mode="HTML",
+        )
+        await _sun718_notify_admins(
+            message.bot, user_id=user_id, username=username, name=name,
+            title="❌ SUN718: не записали активацию в БД",
+            body="Подписка НЕ выдана (без записи промокод стал бы многоразовым).",
+        )
+        return
+
+    # 6. Provisioning; при неудаче откатываем запись
+    if will_provision:
+        success = await provision_tariff(user_id, tariff, req_id=req_id)
+        if not success:
+            logger.error(f"{cmd}: provision_tariff failed for {user_id}")
+            await _delete_promo_usage(promo_external_id)
+            await message.answer(
+                "❌ Не удалось активировать промокод. Попробуйте позже." + footer,
+                reply_markup=get_main_menu_keyboard(user_id=user_id),
+                parse_mode="HTML",
+            )
             await _sun718_notify_admins(
                 message.bot, user_id=user_id, username=username, name=name,
-                title="⚠️ SUN718: не записали активацию в БД",
-                body=(f"Подписка выдана, но Payment не записан в БД.\n"
-                      f"Юзер не учтётся в /referral_stats. Ошибка:\n"
-                      f"<code>{str(e)[:200]}</code>"),
+                title="❌ SUN718: provision_tariff failed",
+                body=f"tariff={tariff} req_id={req_id}",
             )
-            # Не возвращаемся — Pro уже выдан, нужно довести флоу
+            return
 
     try:
         log_payment_event(

@@ -14,7 +14,7 @@ Cohort:
 - LEGACY_PLAN_CODES = ("basic", "premium") — для аналитики/админки.
 - NEW_PLAN_CODES = ("lite", "standard", "pro") — для UI-меню.
 - "trial" — служебный, всегда provisions через standard squad
-  (см. services/remna_service.py TARIFF_TO_DAYS::trial_standard_10d).
+  (см. services/remna_service.py TARIFF_TO_DAYS::trial_standard_5d, 5 дней).
 """
 from datetime import datetime, timezone
 from typing import Optional

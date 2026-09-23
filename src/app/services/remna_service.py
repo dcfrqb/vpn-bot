@@ -65,13 +65,17 @@ TARIFF_TO_PLAN = {
 }
 
 # Тарифы с точным числом дней (не календарные месяцы).
-# trial_10d (legacy) → squad=basic, для legacy-юзеров.
-# trial_standard_10d (new) → squad=standard, для новых юзеров.
+# Триал с 23.09.2026 = 5 дней (было 10): trial_standard_5d (standard) для /trial,
+# trial_5d (basic) для legacy. Старые ключи *_10d оставлены как алиасы на 5 дней,
+# чтобы любой старый вызов не выдал 10 дней.
 # solokhin_15d остается на premium (редкий админский промо).
+TRIAL_DAYS = 5
 TARIFF_TO_DAYS = {
     "solokhin_15d": ("premium", 15),
-    "trial_10d": ("basic", 10),
-    "trial_standard_10d": ("standard", 10),
+    "trial_5d": ("basic", TRIAL_DAYS),
+    "trial_standard_5d": ("standard", TRIAL_DAYS),
+    "trial_10d": ("basic", TRIAL_DAYS),
+    "trial_standard_10d": ("standard", TRIAL_DAYS),
     "sun718_5d": ("pro", 5),
 }
 

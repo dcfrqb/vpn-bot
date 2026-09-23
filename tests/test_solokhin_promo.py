@@ -62,7 +62,7 @@ def test_tariff_trial_10d_exists():
     assert "trial_10d" in TARIFF_TO_DAYS
     plan, days = TARIFF_TO_DAYS["trial_10d"]
     assert plan == "basic"
-    assert days == 10
+    assert days == 5  # триал 5 дней с 23.09.2026 (старый ключ — алиас)
 
 
 def test_old_solokhin_10d_removed():
@@ -81,12 +81,12 @@ def test_tariff_plans_are_distinct():
 
 
 def test_tariff_durations_are_distinct():
-    """solokhin → 15d, trial → 10d."""
+    """solokhin → 15d, trial → 5d (было 10d)."""
     TARIFF_TO_DAYS = _import_tariff_constants()
     _, sol_days = TARIFF_TO_DAYS["solokhin_15d"]
     _, trial_days = TARIFF_TO_DAYS["trial_10d"]
     assert sol_days == 15
-    assert trial_days == 10
+    assert trial_days == 5
     assert sol_days != trial_days
 
 
