@@ -14,7 +14,12 @@
   - из текущих сквадов убираются только MANAGED-сквады других тарифов,
     добавляется сквад оплаченного тарифа, все остальное остается как было;
   - сквад obhod на основном юзере бот не ставит и не трогает (obhod живет на
-    отдельном obhod-юзере, им управляет obhod_service).
+    отдельном obhod-юзере, им управляет obhod_service);
+  - ручные сквады НИКОГДА не снимаются, это явное правило, а не следствие
+    «не входит в каталог»: суффикс -m (m = manual, ручные плательщики:
+    lite-m, standard-m, pro-m, premium-m — решение владельца 23.09.2026),
+    суффикс -friend и arcadia. Оплата, продление, даунгрейд, resync их
+    сохраняют (is_manual_squad_name).
 
 Лимит устройств (hwidDeviceLimit), «никогда не понижать»:
   - текущее значение N > 0  -> max(N, лимит тарифа);
@@ -46,9 +51,27 @@ class RemnaTariffError(Exception):
     """Тариф не применен к юзеру Remnawave (нужен retry / внимание админа)."""
 
 
+# Ручные сквады: бот их не ставит и не снимает (см. docstring модуля).
+MANUAL_SQUAD_SUFFIXES = ("-m", "-friend")
+MANUAL_SQUAD_NAMES = frozenset({"arcadia"})
+
+
+def is_manual_squad_name(name: Optional[str]) -> bool:
+    """Сквад, выданный вручную (ручной плательщик *-m, друг *-friend, arcadia)."""
+    n = (name or "").strip().lower()
+    return n in MANUAL_SQUAD_NAMES or any(n.endswith(suf) for suf in MANUAL_SQUAD_SUFFIXES)
+
+
 def managed_tariff_squad_names() -> Set[str]:
-    """Имена сквадов, которыми управляет бот на основном юзере."""
-    return {meta["squad"] for meta in PLAN_CATALOG.values() if meta.get("squad")}
+    """Имена сквадов, которыми управляет бот на основном юзере.
+
+    Только сквады каталога, и никогда ручные (даже если такой сквад когда-то
+    попадет в каталог по ошибке).
+    """
+    return {
+        meta["squad"] for meta in PLAN_CATALOG.values()
+        if meta.get("squad") and not is_manual_squad_name(meta["squad"])
+    }
 
 
 def extract_squad_uuids(user_raw: Dict[str, Any]) -> List[str]:

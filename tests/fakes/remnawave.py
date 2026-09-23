@@ -17,6 +17,7 @@ DEFAULT_SQUADS = {
     "standard": "sq-standard", "pro": "sq-pro", "obhod": "sq-obhod",
     "pro-friend": "sq-pro-friend", "premium-friend": "sq-premium-friend",
     "arcadia": "sq-arcadia", "us-2": "sq-us-2",
+    "pro-m": "sq-pro-m", "lite-m": "sq-lite-m", "standard-m": "sq-standard-m", "premium-m": "sq-premium-m",
 }
 
 

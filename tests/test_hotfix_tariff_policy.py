@@ -163,3 +163,41 @@ async def test_payment_renewal_path_preserves_manual_squads():
     assert fake.users[2001]["hwidDeviceLimit"] == 5
     assert fake.users[2001]["expireAt"] == "2099-12-31T23:59:59Z" or fake.users[2001]["expireAt"].startswith("2099")
     assert len(fake.patches) == 1
+
+
+# --------------------------------------------------------------------------
+# Решение владельца 23.09.2026: сквады *-m = ручные плательщики, бот их
+# никогда не трогает (как *-friend и arcadia)
+# --------------------------------------------------------------------------
+
+def test_manual_squad_names_are_never_managed():
+    from app.services.remna_tariff import is_manual_squad_name, managed_tariff_squad_names
+
+    for name in ("pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "arcadia"):
+        assert is_manual_squad_name(name), name
+        assert name not in managed_tariff_squad_names()
+    for name in ("pro", "lite", "basic", "standard", "premium"):
+        assert not is_manual_squad_name(name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("plan", ["lite", "pro", "standard"])  # даунгрейд, продление, смена
+async def test_pro_m_is_kept_on_downgrade_and_renewal(plan):
+    fake = FakeRemna()
+    fake.add_user(2003, "tg_test_manual", telegram_id=900000004, squads=["pro-m", "pro"], limit=10)
+    await apply_tariff_to_remna_user(fake, "2003", plan, expire_at="2027-01-01T00:00:00Z",
+                                     enable_if_disabled=True)
+    names = set(fake.squad_names(2003))
+    assert "pro-m" in names
+    assert plan in names
+    assert names - {"pro-m", plan} == set()
+
+
+@pytest.mark.asyncio
+async def test_resync_keeps_manual_m_squad():
+    """Resync (expireAt из valid_until, без выдачи) тоже не снимает -m."""
+    fake = FakeRemna()
+    fake.add_user(2004, "tg_test_manual", telegram_id=900000005, squads=["lite-m"], limit=None)
+    await apply_tariff_to_remna_user(fake, "2004", "lite", expire_at="2027-01-01T00:00:00Z")
+    assert set(fake.squad_names(2004)) == {"lite-m", "lite"}
+    assert fake.users[2004]["hwidDeviceLimit"] is None  # ручная настройка: NULL не трогаем
