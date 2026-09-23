@@ -298,6 +298,14 @@ async def ensure_obhod_for_pro(
             session.add(obhod_sub)
 
         await session.commit()
+
+        try:
+            from app.services.cache import invalidate_site_profile_cache
+
+            await invalidate_site_profile_cache(telegram_user_id)
+        except Exception as _e:
+            logger.debug(f"[{trace_id}] invalidate_site_profile_cache soft-fail: {_e}")
+
         return subscription_url
     except Exception as e:
         logger.error(

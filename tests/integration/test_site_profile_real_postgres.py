@@ -71,8 +71,8 @@ async def test_profile_from_real_rows_hides_raw_data_and_urls():
         text = json.dumps(profile, ensure_ascii=False)
         assert "SECRET" not in text
         assert [a["kind"] for a in profile["accounts"]] == ["main", "obhod"]
-        assert profile["accounts"][0]["remna_uuid"] == main_id
-        assert profile["accounts"][1]["remna_uuid"] == obhod_id
+        assert profile["accounts"][0]["remna_id"] == int(main_id)
+        assert profile["accounts"][1]["remna_id"] == int(obhod_id)
         assert profile["accounts"][1]["package"] == {
             "code": "obhod_500", "until": "2026-10-20T00:00:00Z", "limit_bytes": 536870912000}
         assert [p["kind"] for p in profile["payments"]] == ["subscription", "promo"]

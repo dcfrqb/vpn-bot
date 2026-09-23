@@ -231,7 +231,7 @@ def test_main_only(env):
     assert body["user"] == {"telegram_id": 111, "username": "name", "first_name": "Name",
                             "customer_since": "2025-12-01T10:00:00Z"}
     assert body["accounts"] == [{
-        "kind": "main", "remna_uuid": "101", "plan_code": "standard", "plan_title": "Standard",
+        "kind": "main", "remna_id": 101, "plan_code": "standard", "plan_title": "Standard",
         "legacy": False, "device_limit": 5,
     }]
     assert body["payments"][0]["description"] == "Standard, 1 мес"
@@ -249,7 +249,7 @@ def test_main_from_subscription_row_when_tg_row_has_no_remna_id(env):
         payments=[],
     )
     acc = get_profile(client).json()["accounts"]
-    assert acc == [{"kind": "main", "remna_uuid": "77", "plan_code": "premium",
+    assert acc == [{"kind": "main", "remna_id": 77, "plan_code": "premium",
                     "plan_title": "Премиум тариф", "legacy": True, "device_limit": 15}]
 
 
@@ -272,7 +272,7 @@ def test_main_plus_obhod_with_package(env):
     acc = r.json()["accounts"]
     assert acc[0]["kind"] == "main" and acc[0]["plan_code"] == "pro" and acc[0]["device_limit"] == 10
     assert acc[1] == {
-        "kind": "obhod", "remna_uuid": "202", "plan_code": "pro", "plan_title": "RU-вход",
+        "kind": "obhod", "remna_id": 202, "plan_code": "pro", "plan_title": "RU-вход",
         "legacy": False, "device_limit": 10,
         "package": {"code": "obhod_250", "until": "2026-10-20T00:00:00Z", "limit_bytes": 268435456000},
     }
@@ -290,12 +290,60 @@ def test_obhod_without_package_is_null(env):
     assert acc[1]["kind"] == "obhod" and acc[1]["package"] is None
 
 
+def test_main_legacy_uuid_falls_back_to_panel_lookup(env):
+    """telegram_users.remna_user_id — legacy uuid 2.x-эпохи (не число):
+    считаем связку отсутствующей и ищем юзера в панели по telegramId."""
+    client, state, panel, _ = env
+    state["snap"] = sp.DbSnapshot(
+        user=tg_user(remna_id="8f14e45f-ceea-467e-9a8f-1234567890ab"),
+        subscriptions=[],
+        payments=[],
+    )
+    panel.users = [panel_user(555, 111)]
+    r = get_profile(client)
+    acc = r.json()["accounts"]
+    assert acc == [{"kind": "main", "remna_id": 555, "plan_code": None, "plan_title": None,
+                    "legacy": False, "device_limit": None}]
+    assert panel.requests == [("GET", "/api/users/stream", {"telegramId": "111", "size": "25"})]
+
+
+def test_main_legacy_uuid_in_subscription_row_falls_back_to_panel_lookup(env):
+    """Та же проверка, но значение не число лежит в subscriptions.remna_user_id."""
+    client, state, panel, _ = env
+    state["snap"] = sp.DbSnapshot(
+        user=tg_user(remna_id=None),
+        subscriptions=[sub(1, "main", "premium", "8f14e45f-ceea-467e-9a8f-1234567890ab")],
+        payments=[],
+    )
+    panel.users = [panel_user(555, 111)]
+    acc = get_profile(client).json()["accounts"]
+    assert acc[0]["remna_id"] == 555
+
+
+def test_obhod_legacy_uuid_is_dropped(env):
+    """Obhod-юзер создается без telegramId — искать его в панели нечем,
+    поэтому нечисловое значение просто выбрасывает аккаунт из ответа."""
+    client, state, panel, _ = env
+    state["snap"] = sp.DbSnapshot(
+        user=tg_user(remna_id="101"),
+        subscriptions=[
+            sub(1, "main", "pro", "101"),
+            sub(2, "obhod", "obhod", "8f14e45f-ceea-467e-9a8f-1234567890ab"),
+        ],
+        payments=[],
+    )
+    r = get_profile(client)
+    acc = r.json()["accounts"]
+    assert [a["kind"] for a in acc] == ["main"]
+    assert panel.requests == []
+
+
 def test_plan_from_last_payment_when_no_row(env):
     client, state, *_ = env
     state["snap"] = sp.DbSnapshot(user=tg_user(remna_id="101"), subscriptions=[], payments=[])
     state["last_plan"] = "lite"
     acc = get_profile(client).json()["accounts"]
-    assert acc == [{"kind": "main", "remna_uuid": "101", "plan_code": "lite", "plan_title": "Lite",
+    assert acc == [{"kind": "main", "remna_id": 101, "plan_code": "lite", "plan_title": "Lite",
                     "legacy": False, "device_limit": 2}]
 
 
@@ -305,7 +353,7 @@ def test_trial_without_db_row_found_in_panel(env):
     panel.users = [panel_user(555, 111), panel_user(556, 999)]
     r = get_profile(client)
     acc = r.json()["accounts"]
-    assert acc == [{"kind": "main", "remna_uuid": "555", "plan_code": None, "plan_title": None,
+    assert acc == [{"kind": "main", "remna_id": 555, "plan_code": None, "plan_title": None,
                     "legacy": False, "device_limit": None}]
     assert panel.requests == [("GET", "/api/users/stream", {"telegramId": "111", "size": "25"})]
     # из панели в ответ не попало ничего, кроме id

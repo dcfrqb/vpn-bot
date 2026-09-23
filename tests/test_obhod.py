@@ -184,6 +184,29 @@ async def test_ensure_obhod_creates_user_for_pro():
 
 
 @pytest.mark.asyncio
+async def test_ensure_obhod_drops_site_profile_cache():
+    """Нит из ревью: obhod ensure тоже должен сбрасывать кэш профиля сайта,
+    иначе сайт до 60 с не увидит новый obhod-аккаунт."""
+    from app.services import obhod_service
+
+    tg = TelegramUser(telegram_id=555, username="vasya")
+    session, _ = _fake_session(existing_obhod=None, tg=tg)
+    mock_client = _patch_remna_for_obhod()
+    valid_until = datetime.utcnow() + timedelta(days=30)
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client), \
+         patch("app.services.cache.invalidate_site_profile_cache", AsyncMock()) as inv:
+        await obhod_service.ensure_obhod_for_pro(
+            session=session,
+            telegram_user_id=555,
+            plan_code="pro",
+            valid_until=valid_until,
+        )
+
+    inv.assert_awaited_once_with(555)
+
+
+@pytest.mark.asyncio
 async def test_ensure_obhod_skips_non_pro():
     from app.services import obhod_service
 

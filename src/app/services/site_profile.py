@@ -200,6 +200,18 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def _numeric_id(value: Any) -> Optional[int]:
+    """Числовой id панели (Remnawave 3.x). None для пустых и legacy-uuid значений
+    (2.x-эпоха), чтобы не отдавать их и не падать на int()."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s.isdigit():
+        return None
+    n = int(s)
+    return n if n > 0 else None
+
+
 def _to_rub(value: Any) -> float:
     try:
         return round(float(Decimal(str(value))), 2)
@@ -328,8 +340,8 @@ def build_obhod_package(row: DbSubscription) -> Optional[dict]:
     return {"code": str(code), "until": iso_utc(cfg.get("package_until")), "limit_bytes": limit}
 
 
-async def _lookup_panel_main_id(telegram_id: int) -> tuple[Optional[str], bool]:
-    """(id юзера панели по telegramId, удалось ли спросить панель).
+async def _lookup_panel_main_id(telegram_id: int) -> tuple[Optional[int], bool]:
+    """(numeric id юзера панели по telegramId, удалось ли спросить панель).
 
     Существующий клиент бота, strict=True: «нет юзера» и «панель лежит»
     различаются. Только чтение, ничего не создаем.
@@ -342,7 +354,8 @@ async def _lookup_panel_main_id(telegram_id: int) -> tuple[Optional[str], bool]:
             client.get_user_by_telegram_id(telegram_id, strict=True),
             timeout=PANEL_LOOKUP_TIMEOUT_SEC,
         )
-        return (str(remna_user.uuid) if remna_user and remna_user.uuid else None), True
+        found = _numeric_id(remna_user.uuid) if remna_user else None
+        return found, True
     except Exception as e:
         logger.warning(f"site profile: поиск в панели не удался tg_id={telegram_id}: {type(e).__name__}")
         return None, False
@@ -358,10 +371,12 @@ async def build_accounts(telegram_id: int, snap: DbSnapshot) -> tuple[list[dict]
     complete = True
 
     main_row = _pick_row(snap.subscriptions, "main")
-    main_id = (snap.user.remna_user_id if snap.user else None) or (
+    main_id = _numeric_id(snap.user.remna_user_id if snap.user else None) or _numeric_id(
         main_row.remna_user_id if main_row else None
     )
     if not main_id:
+        # Значение в БД пустое или не числовое (legacy uuid эпохи 2.x) — считаем,
+        # что связки нет, и пробуем найти юзера в панели по telegramId.
         main_id, complete = await _lookup_panel_main_id(telegram_id)
 
     if main_id:
@@ -370,7 +385,7 @@ async def build_accounts(telegram_id: int, snap: DbSnapshot) -> tuple[list[dict]
             plan_code = await get_user_last_plan(telegram_id)
         accounts.append({
             "kind": "main",
-            "remna_uuid": str(main_id),
+            "remna_id": main_id,
             "plan_code": plan_code,
             "plan_title": _plan_title(plan_code),
             "legacy": plan_code in LEGACY_PLAN_CODES,
@@ -378,10 +393,11 @@ async def build_accounts(telegram_id: int, snap: DbSnapshot) -> tuple[list[dict]
         })
 
     obhod_row = _pick_row(snap.subscriptions, "obhod")
-    if obhod_row and obhod_row.remna_user_id:
+    obhod_id = _numeric_id(obhod_row.remna_user_id) if obhod_row else None
+    if obhod_row and obhod_id:
         accounts.append({
             "kind": "obhod",
-            "remna_uuid": str(obhod_row.remna_user_id),
+            "remna_id": obhod_id,
             "plan_code": OBHOD_PLAN_CODE,
             "plan_title": OBHOD_PLAN_TITLE,
             "legacy": False,
