@@ -64,11 +64,36 @@ def get_storage():
         return MemoryStorage()
 
 
-async def setup_dispatcher(bot: Bot) -> Dispatcher:
-    """Настраивает и возвращает диспетчер"""
-    storage = get_storage()
+def build_dispatcher(bot: Bot, storage=None, container=None) -> Dispatcher:
+    """Собирает диспетчер без I/O (тесты зовут напрямую, см. tests/flows).
+
+    3.0: контейнер портов (app.container), внешние middleware DI, техработ и
+    алиасов старых колбэков, порядок роутеров из app.bot.routers.ROUTERS.
+    Поведение 2.1.1 не меняется: новые роутеры пустые, техработы выключены,
+    алиас переписывает колбэк только если его принимает новый роутер.
+    """
+    storage = storage if storage is not None else get_storage()
     dp = Dispatcher(storage=storage)
     logger.info("Диспетчер создан")
+
+    from app.bot.legacy_aliases import LegacyAliasMiddleware
+    from app.bot.middlewares.di import DIMiddleware
+    from app.bot.middlewares.maintenance import MaintenanceMiddleware
+    from app.bot.routers import include_routers, new_routers
+    from app.container import build_container, set_container
+
+    if container is None:
+        container = build_container(bot)
+    set_container(container)
+
+    # 3.0: порты в данные хендлеров (для всех типов апдейтов)
+    dp.update.outer_middleware(DIMiddleware(container))
+    # 3.0: техработы (no-op, пока флаг не включен) — до алиасов и роутинга
+    maintenance_mw = MaintenanceMiddleware(container.maintenance)
+    dp.message.outer_middleware(maintenance_mw)
+    dp.callback_query.outer_middleware(maintenance_mw)
+    # 3.0: старые строки колбэков -> упакованные колбэки (если есть новый хендлер)
+    dp.callback_query.outer_middleware(LegacyAliasMiddleware(new_routers))
 
     from app.middlewares.auth import AuthMiddleware
     from app.middlewares.timing import TimingMiddleware
@@ -87,38 +112,20 @@ async def setup_dispatcher(bot: Bot) -> Dispatcher:
     dp.callback_query.middleware(AuthMiddleware())
     logger.info("Middleware подключены")
 
-    from app.routers.start import router as start_router
-    from app.routers.admin import router as admin_router
-    from app.routers.ui import router as ui_router
-    from app.routers.legacy_callbacks import router as legacy_router
-    from app.routers.site_login import router as site_login_router
-
-    # site_login — перед UI/start и любыми catch-all callback-роутерами:
-    # диплинк /start login_* и callback sitelogin: должны перехватываться
-    # здесь и не доходить до обычного cmd_start (не создавать telegram_users,
-    # не сбрасывать навигатор) и до legacy_callbacks.
-    dp.include_router(site_login_router)
-    # UI router должен быть первым для обработки ui: callbacks
-    dp.include_router(ui_router)
-    dp.include_router(start_router)
-
-    from app.legacy.routers.payments import router as legacy_payments_router
-    from app.routers.admin_broadcast import router as admin_broadcast_router
-    dp.include_router(legacy_payments_router)
-    dp.include_router(admin_broadcast_router)
-    # ВАЖНО: app.routers.payments (payments.py) НЕ регистрируется намеренно —
-    # он содержит дублирующий обработчик pay_yookassa_,
-    # что конфликтует с legacy_payments_router.
+    # Порядок: site_login -> новые роутеры 3.0 -> роутеры 2.x в порядке 2.1.1
+    # (ui, start, legacy payments, admin_broadcast, admin, legacy_callbacks) ->
+    # глобальный errors-handler. site_login первым: диплинк /start login_* и
+    # callback sitelogin: не должны доходить до cmd_start и catch-all роутеров.
+    # app.routers.payments НЕ регистрируется намеренно (дубль pay_yookassa_).
+    include_routers(dp)
     logger.info("Режим legacy: YooKassa + БД")
-
-    dp.include_router(admin_router)
-    dp.include_router(legacy_router)  # В конце для обратной совместимости
-
-    # Глобальный errors-handler (RetryAfter/Forbidden/BadRequest) — включаем последним,
-    # чтобы он ловил ошибки всех роутеров выше.
-    from app.middlewares.tg_errors import router as errors_router
-    dp.include_router(errors_router)
     logger.info("Роутеры подключены")
+    return dp
+
+
+async def setup_dispatcher(bot: Bot) -> Dispatcher:
+    """Настраивает и возвращает диспетчер"""
+    dp = build_dispatcher(bot)
 
     from app.middlewares.blocklist import load_blocklist_from_redis
     await load_blocklist_from_redis()
