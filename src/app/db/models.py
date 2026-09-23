@@ -1,7 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import (
     String, BigInteger, DateTime, Boolean, Numeric, ForeignKey, func, Text, JSON, Integer,
-    UniqueConstraint, Index,
+    UniqueConstraint, Index, text,
 )
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -84,6 +84,21 @@ class TelegramUser(Base):
 class Subscription(Base):
     """Подписки на VPN"""
     __tablename__ = "subscriptions"
+    # Индексы, которые есть в живой БД (созданы миграциями), объявлены здесь,
+    # чтобы alembic autogenerate не предлагал их удалить (хотфикс 2.1, 07 §1.2).
+    # uq_active_subscription_per_user_kind — единственная защита в БД от двух
+    # активных main (или двух obhod) подписок у одного юзера.
+    __table_args__ = (
+        Index(
+            "uq_active_subscription_per_user_kind",
+            "telegram_user_id",
+            "sub_kind",
+            unique=True,
+            postgresql_where=text("active = true"),
+        ),
+        Index("ix_subscriptions_provisioning_state_valid_until", "provisioning_state", "valid_until"),
+        Index("ix_subscriptions_updated_at", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_user_id: Mapped[int] = mapped_column(
@@ -110,7 +125,8 @@ class Subscription(Base):
     )
     active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
-    is_lifetime: Mapped[bool] = mapped_column(Boolean, default=False, index=True, comment="Подписка навсегда (admin grant forever)")
+    # Индекса по is_lifetime в живой БД нет (миграция e5f6a7b8c9d0 его не создает).
+    is_lifetime: Mapped[bool] = mapped_column(Boolean, default=False, comment="Подписка навсегда (admin grant forever)")
     last_expiry_notice_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, comment="Время последнего уведомления об истечении (rate-limit 24h)"
     )
@@ -151,6 +167,13 @@ class Subscription(Base):
 class Payment(Base):
     """Платежи"""
     __tablename__ = "payments"
+    __table_args__ = (
+        # Как в живой БД: уникальность external_id — constraint payments_external_id_key
+        # (initial migration) + отдельный неуникальный ix_payments_external_id.
+        UniqueConstraint("external_id", name="payments_external_id_key"),
+        Index("ix_payments_external_id", "external_id"),
+        Index("ix_payments_updated_at", "updated_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     telegram_user_id: Mapped[int] = mapped_column(
@@ -159,8 +182,9 @@ class Payment(Base):
         nullable=False,
         index=True
     )
-    provider: Mapped[str] = mapped_column(String(32), default="yookassa", index=True, comment="Провайдер платежей")
-    external_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True, comment="ID платежа во внешней системе")
+    # varchar(16) как в живой БД (модель раньше врала String(32), 07 §1.2 D3).
+    provider: Mapped[str] = mapped_column(String(16), default="yookassa", index=True, comment="Провайдер платежей")
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False, comment="ID платежа во внешней системе")
     amount: Mapped[Numeric] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True, comment="pending, succeeded, canceled, failed")
@@ -364,3 +388,27 @@ class BroadcastRecipient(Base):
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     broadcast: Mapped["Broadcast"] = relationship("Broadcast", back_populates="recipients")
+
+
+class BlockedUser(Base):
+    """Стоп-лист пользователей (кому не продаем). См. services/blocklist.py.
+
+    Таблица создана на проде вручную; миграция 7b1c2d3e4f50 создает ее
+    IF NOT EXISTS с той же DDL (на проде no-op).
+    """
+    __tablename__ = "blocked_users"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    blocked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+
+class BlockedCard(Base):
+    """Стоп-лист карт по отпечатку first6-last4-MM/YY. См. services/blocklist.py."""
+    __tablename__ = "blocked_cards"
+
+    fingerprint: Mapped[str] = mapped_column(Text, primary_key=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    blocked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
