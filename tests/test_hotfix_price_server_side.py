@@ -238,3 +238,71 @@ async def test_recovery_skips_payments_on_review():
         result = await recovery.retry_needs_provisioning(bot=AsyncMock())
     handle.assert_not_awaited()
     assert result["processed"] == 0
+
+
+# --------------------------------------------------------------------------
+# Фикс-раунд 1 (F1): правило цены в core/plans + services/checkout,
+# create_payment считает сумму сам
+# --------------------------------------------------------------------------
+
+def test_quote_purchase_is_the_single_rule():
+    from app.core.plans import quote_purchase
+
+    assert quote_purchase("pro", 12) == get_plan_price("pro", 12)
+    assert quote_purchase("basic", 3) == 0
+    assert quote_purchase("basic", 3, last_plan="basic") == 249
+    assert quote_purchase("premium", 1, last_plan="basic") == 0
+    assert quote_purchase("trial", 1) == 0
+    assert quote_purchase("pro", 600) == 0
+    # пакет обхода: кнопкой тарифа не продается, экран пакета — по каталогу
+    assert quote_purchase("obhod_250", 1) == 0
+    assert quote_purchase("obhod_250", 1, allow_obhod_package=True) == get_expected_amount("obhod_250", 1)
+
+
+def test_router_reexports_checkout_resolver():
+    from app.services import checkout
+
+    assert legacy_payments.resolve_purchase_amount is checkout.resolve_purchase_amount
+
+
+@pytest.mark.asyncio
+async def test_create_payment_computes_amount_without_caller_amount():
+    from app.services.payments import yookassa as yk
+
+    created = {}
+
+    class _P:
+        id = "pay-900000001"
+        status = "pending"
+
+        class confirmation:
+            confirmation_url = "https://pay.example/1"
+
+        def dict(self):
+            return {}
+
+    def _create(data, key):
+        created["data"] = data
+        return _P()
+
+    with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
+         patch.object(yk.settings, "YOOKASSA_SHOP_ID", "shop"), \
+         patch.object(yk.settings, "YOOKASSA_API_KEY", "key"), \
+         patch.object(yk.settings, "YOOKASSA_RETURN_URL", "https://example.com/r"), \
+         patch.object(yk.Payment, "create", side_effect=_create), \
+         patch.object(yk, "SessionLocal", None):
+        with pytest.raises(ValueError, match="БД не настроена"):
+            await yk.create_payment(description="x", user_id=900000001, plan_code="standard", period_months=3)
+    assert created["data"]["amount"]["value"] == f"{get_plan_price('standard', 3)}.00"
+
+
+@pytest.mark.asyncio
+async def test_create_payment_refuses_legacy_plan_to_stranger():
+    from app.services.payments import yookassa as yk
+
+    with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
+         patch("app.services.users.get_user_last_plan", AsyncMock(return_value="lite")), \
+         patch.object(yk.Payment, "create") as create:
+        with pytest.raises(ValueError, match="недоступен"):
+            await yk.create_payment(description="x", user_id=900000001, plan_code="basic", period_months=1)
+    create.assert_not_called()

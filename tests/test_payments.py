@@ -126,10 +126,10 @@ async def test_create_payment_success(mock_payment_object):
         
         # Вызываем функцию
         payment_url, external_id = await create_payment(
-            amount_rub=99,
-            description="CRS VPN - Базовый тариф (30 дней)",
+            amount_rub=129,
+            description="CRS VPN - Lite (1 месяц)",
             user_id=123456789,
-            plan_code="basic",
+            plan_code="lite",
             period_months=1,
         )
         
@@ -156,10 +156,10 @@ async def test_create_payment_without_db(mock_payment_object):
         
         with pytest.raises(ValueError, match="БД не настроена"):
             await create_payment(
-                amount_rub=99,
-                description="CRS VPN - Базовый тариф (30 дней)",
+                amount_rub=129,
+                description="CRS VPN - Lite (1 месяц)",
                 user_id=123456789,
-                plan_code="basic",
+                plan_code="lite",
                 period_months=1,
             )
 
@@ -172,7 +172,7 @@ async def test_create_payment_missing_config():
         mock_settings.YOOKASSA_API_KEY = None
         
         with pytest.raises(ValueError, match="YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены"):
-            await create_payment(99, "Test", 123456789, plan_code="basic", period_months=1)
+            await create_payment(129, "Test", 123456789, plan_code="lite", period_months=1)
 
 
 @pytest.mark.asyncio

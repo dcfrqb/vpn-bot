@@ -310,6 +310,37 @@ def get_expected_amount(plan_code: Optional[str], period_months: Optional[int]) 
     return get_plan_price(plan_code, months)
 
 
+def quote_purchase(
+    plan_code: Optional[str],
+    period_months: Optional[int],
+    *,
+    last_plan: Optional[str] = None,
+    allow_obhod_package: bool = False,
+) -> int:
+    """Цена покупки в RUB или 0, если такую покупку продавать нельзя.
+
+    Единственное правило «что можно купить» (ревью A-M1 / F1):
+      - тарифы из меню (MENU_PLAN_CODES) по цене каталога;
+      - legacy-тариф (basic/premium) только его владельцу: last_plan юзера
+        совпадает с plan_code (кнопка «Продлить» ведет туда же);
+      - пакет обхода, если он продается (is_obhod_package_purchasable) и
+        вызывающий явно разрешил пакеты (allow_obhod_package: только экран
+        покупки пакета, который сам проверяет активный Pro; кнопка тарифа
+        pay_yookassa_* пакет не продает);
+      - все остальное (trial, неизвестные коды, непродаваемые периоды) -> 0.
+    Проверка «есть активный Pro» для пакета обхода живет у вызывающего (UI),
+    здесь только цена и каталог.
+    """
+    code = (plan_code or "").lower().strip()
+    if is_obhod_package_code(code):
+        if allow_obhod_package and is_obhod_package_purchasable(code):
+            return get_expected_amount(code, period_months)
+        return 0
+    if code in MENU_PLAN_CODES or (code in LEGACY_PLAN_CODES and last_plan == code):
+        return get_expected_amount(code, period_months)
+    return 0
+
+
 def amounts_match(paid: float, expected: float) -> bool:
     """Сравнение сумм в рублях с допуском на копейки float."""
     try:

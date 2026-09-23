@@ -79,9 +79,9 @@ VALID_STATUS_TRANSITIONS = {
 
 
 async def create_payment(
-    amount_rub: int,
-    description: str,
-    user_id: int,
+    amount_rub: Optional[int] = None,
+    description: str = "CRS VPN",
+    user_id: int = 0,
     plan_code: Optional[str] = None,
     period_months: Optional[int] = None,
     request_id: Optional[int] = None,
@@ -89,8 +89,15 @@ async def create_payment(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Создает платеж в YooKassa и возвращает (payment_url, external_id)"""
+    """Создает платеж в YooKassa и возвращает (payment_url, external_id).
+
+    Сумму считает САМ по services/checkout.resolve_purchase_amount (каталог +
+    право юзера на тариф). amount_rub от вызывающего не нужен; если передан и
+    не совпал с серверной ценой — ValueError, платеж не создается.
+    """
     trace_id = str(uuid.uuid4())
+    if not user_id:
+        raise ValueError("create_payment: user_id обязателен")
     try:
         # Стоп-лист: не продаём тем, кого внесли вручную (см. app/services/blocklist.py)
         from app.services.blocklist import get_user_block_reason, notify_admins
@@ -110,14 +117,20 @@ async def create_payment(
 
         # Хотфикс 2.1: сумма обязана совпадать с прайсом. Любой caller (кнопка
         # тарифа, пакет обхода) не может создать платеж с произвольной суммой.
-        from app.core.plans import amounts_match, get_expected_amount
-        expected_amount = get_expected_amount(plan_code, period_months)
-        if expected_amount <= 0 or not amounts_match(amount_rub, expected_amount):
+        from app.core.plans import amounts_match
+        from app.services.checkout import resolve_purchase_amount
+        expected_amount = await resolve_purchase_amount(
+            plan_code, period_months, user_id, allow_obhod_package=True
+        )
+        if expected_amount <= 0 or (
+            amount_rub is not None and not amounts_match(amount_rub, expected_amount)
+        ):
             logger.warning(
                 f"[{trace_id}] create_payment price mismatch: tg_id={user_id} plan={plan_code} "
                 f"period={period_months} amount={amount_rub} expected={expected_amount}"
             )
             raise ValueError("Тариф недоступен для покупки")
+        amount_rub = int(expected_amount)
 
         if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_API_KEY:
             raise ValueError("YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены")

@@ -51,28 +51,8 @@ def parse_pay_callback(data: str):
     return None
 
 
-async def resolve_purchase_amount(plan_code: str, period_months: int, user_id: int) -> int:
-    """Серверная цена покупки или 0, если такую покупку этому юзеру продавать нельзя.
-
-    Разрешено: тарифы из меню (MENU_PLAN_CODES) и legacy-тариф юзера для продления
-    (кнопка «Продлить» ведет на get_user_last_plan, basic/premium по старой цене).
-    trial и прочие служебные коды не продаются (цены нет).
-    """
-    from app.core.plans import MENU_PLAN_CODES, LEGACY_PLAN_CODES, get_plan_price
-
-    plan_code = (plan_code or "").lower().strip()
-    allowed = plan_code in MENU_PLAN_CODES
-    if not allowed and plan_code in LEGACY_PLAN_CODES:
-        try:
-            from app.services.users import get_user_last_plan
-            last_plan = await get_user_last_plan(int(user_id))
-        except Exception as e:
-            logger.warning(f"resolve_purchase_amount: get_user_last_plan failed user={user_id} err={e}")
-            last_plan = None
-        allowed = last_plan == plan_code
-    if not allowed:
-        return 0
-    return get_plan_price(plan_code, period_months)
+# Правило цены живет в services/checkout (реэкспорт для старых импортов).
+from app.services.checkout import resolve_purchase_amount  # noqa: E402,F401
 
 
 @router.callback_query(F.data.startswith("pay_yookassa_"))
@@ -112,6 +92,8 @@ async def handle_yookassa_payment(callback: types.CallbackQuery):
         
         period_text = f"{period_months} месяц" if period_months == 1 else f"{period_months} месяцев"
         
+        # Сумму create_payment считает сам (тот же resolve_purchase_amount);
+        # amount_rub тут только для показа и как сверка.
         payment_url, external_id = await create_payment(
             amount_rub=amount_rub,
             description=f"CRS VPN - {plan_name} ({period_text})",
