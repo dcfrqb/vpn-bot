@@ -1002,7 +1002,7 @@ class RemnaClient:
                             logger.info(f"Применен SUBSCRIPTION_BASE_URL override для пользователя {user_id}")
                     except Exception as url_err:
                         logger.warning(f"Не удалось применить SUBSCRIPTION_BASE_URL override: {url_err}")
-                logger.info(f"Найден subscriptionUrl для пользователя {user_id}: {subscription_url[:50]}...")
+                logger.info(f"Найден subscriptionUrl для пользователя {user_id}")
                 return subscription_url
 
             # Если нашли только token — формируем URL из SUBSCRIPTION_BASE_URL
@@ -1010,7 +1010,7 @@ class RemnaClient:
                 sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else None
                 if sub_base:
                     subscription_url = f"{sub_base}/{subscription_token}"
-                    logger.info(f"Сформирован subscriptionUrl из token для пользователя {user_id}: {subscription_url[:50]}...")
+                    logger.info(f"Сформирован subscriptionUrl из token для пользователя {user_id}")
                     return subscription_url
                 else:
                     logger.warning(
@@ -1020,7 +1020,7 @@ class RemnaClient:
             
             # Если ничего не нашли, логируем структуру для отладки
             logger.warning(f"Subscription URL не найден для пользователя {user_id}")
-            logger.debug(f"Структура ответа: {user_data}")
+            logger.debug(f"Ключи ответа: {list(user_data.keys()) if isinstance(user_data, dict) else type(user_data)}")
             return None
             
         except Exception as e:

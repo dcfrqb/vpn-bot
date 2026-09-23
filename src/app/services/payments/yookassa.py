@@ -2126,7 +2126,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                     if not subscription.config_data:
                         subscription.config_data = {}
                     subscription.config_data["subscription_url"] = subscription_url.strip()
-                    logger.info(f"✅ Subscription URL сохранен в config_data: {subscription_url[:50]}...")
+                    logger.info("✅ Subscription URL сохранен в config_data")
                 else:
                     logger.warning(f"⚠️ Subscription URL не найден в ответе создания пользователя")
                 
@@ -2142,7 +2142,7 @@ async def get_or_create_remna_user_and_get_subscription_url(
                             subscription.config_data = {}
                         subscription.config_data["subscription_url"] = subscription_url.strip()
                         await session.commit()
-                        logger.info(f"✅ Subscription URL получен и сохранен: {subscription_url[:50]}...")
+                        logger.info("✅ Subscription URL получен и сохранен")
                     else:
                         logger.error(f"❌ Не удалось получить subscription URL для remna_user_id={remna_user_id}")
                 
