@@ -84,6 +84,24 @@ TARIFF_TO_DAYS = {
 }
 
 
+_SAFE_REMNA_RAW_FIELDS = ("id", "uuid", "username", "telegramId", "status", "expireAt", "createdAt")
+
+
+def safe_remna_raw(data) -> Optional[dict]:
+    """Урезать ответ панели до безопасных полей перед записью в remna_users.raw_data.
+
+    В полном ответе есть vlessUuid, trojanPassword, ssPassword, shortUuid и
+    subscriptionUrl: это ключи доступа к VPN, в базе бота им не место.
+    Ответ может быть обернут в {"response": {...}}.
+    """
+    if not isinstance(data, dict):
+        return None
+    inner = data.get("response", data)
+    if not isinstance(inner, dict):
+        return None
+    return {k: inner[k] for k in _SAFE_REMNA_RAW_FIELDS if k in inner}
+
+
 async def persist_remna_link(
     telegram_id: int,
     remna_user_id,
@@ -113,8 +131,9 @@ async def persist_remna_link(
             return False
         rid = str(remna_user_id)
         values = {"remna_id": rid, "username": username}
-        if isinstance(raw_data, dict):
-            values["raw_data"] = raw_data
+        safe_raw = safe_remna_raw(raw_data)
+        if safe_raw:
+            values["raw_data"] = safe_raw
         async with session_factory() as session:
             await session.execute(
                 pg_insert(RemnaUserRow).values(**values).on_conflict_do_nothing(index_elements=["remna_id"])
