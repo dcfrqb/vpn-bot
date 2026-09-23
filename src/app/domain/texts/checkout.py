@@ -74,6 +74,22 @@ def periods_screen(name: str, features: Iterable[str], *, gift: bool = False) ->
     return body + "\n\nВыбери срок:"
 
 
+def obhod_packages_screen(base_gb: int, packages: Sequence[tuple[str, Money]]) -> str:
+    """packages: [(display, price)] on sale."""
+    head = ("<b>Обход блокировок: больше трафика</b>\n\n"
+            f"В тарифе Pro обход включен с лимитом {int(base_gb)} ГБ в месяц. Если нужно больше, "
+            "возьми пакет: месячный лимит обхода поднимется на твоей ссылке обхода.")
+    if not packages:
+        return head + "\n\nПакеты скоро появятся. Базового лимита обычно хватает для заблокированных сайтов."
+    return head + "\n\n" + "\n".join(f"· <b>{h(name)}</b>: {fmt_rub(price)}" for name, price in packages)
+
+
+def btn_obhod_package(name: str, price: Money) -> str:
+    return f"{name}: {fmt_rub(price)}"
+
+
+OBHOD_NEEDS_PRO = ("Пакеты обхода доступны только при активном тарифе Pro. Оформи или продли Pro, "
+                   "потом возьми пакет.")
 PLAN_UNAVAILABLE = "Этот тариф сейчас недоступен для покупки. Выбери тариф из списка."
 PAYMENT_BLOCKED = "Оплата для этого аккаунта недоступна. Если это ошибка, напиши в поддержку."
 PAYMENT_CREATE_FAILED = "Не получилось создать платеж. Попробуй еще раз через минуту."

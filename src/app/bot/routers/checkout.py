@@ -22,11 +22,12 @@ from app.bot.views.money import (
     PlanOption,
     checkout_view,
     message_view,
+    obhod_packages_view,
     periods_view,
     plans_view,
     support_url,
 )
-from app.domain.plans import get_plan_features, get_plan_name
+from app.domain.plans import OBHOD_BASE_LIMIT_GB, get_plan_features, get_plan_name, is_obhod_package_code
 from app.domain.texts import checkout as T
 from app.logger import logger
 from app.services.money import money
@@ -81,9 +82,42 @@ async def _show_periods(cb: CallbackQuery, container: Any, plan: str, *, gift: b
     await render(cb, text, markup)
 
 
+async def _show_obhod_packages(cb: CallbackQuery, container: Any) -> None:
+    packages = await money(container).checkout.obhod_package_options(cb.from_user.id)
+    text, markup = obhod_packages_view(OBHOD_BASE_LIMIT_GB, packages)
+    await render(cb, text, markup)
+
+
+@router.callback_query(Nav.filter((F.s == "plans") & (F.p == "obhod")))
+async def on_obhod_packages(cb: CallbackQuery, container: Any) -> None:
+    await _show_obhod_packages(cb, container)
+
+
 @router.callback_query(Nav.filter(F.s == "plans"))
 async def on_plans(cb: CallbackQuery, container: Any) -> None:
     await _show_plans(cb, container, gift=False)
+
+
+# 2.x screen-manager buttons (ui:subscription_plans:<action>:<payload> and its
+# neighbours) arrive through the alias layer as Nav(s=<2.x screen>, p=<action>[.<payload>]).
+LEGACY_PLAN_SCREENS = ("subscription_plans", "subscription_plan_detail", "subscription", "subscription_payment")
+
+
+@router.callback_query(Nav.filter(F.s.in_(LEGACY_PLAN_SCREENS)))
+async def on_legacy_plans_screen(cb: CallbackQuery, callback_data: Nav, container: Any) -> None:
+    action, _, payload = (callback_data.p or "").partition(".")
+    if callback_data.s == "subscription_plans" and action == "obhod":
+        await _show_obhod_packages(cb, container)
+    elif callback_data.s == "subscription_plans" and action == "buy_obhod" and payload:
+        await _checkout(cb, container, payload, 1, kind="obhod_package")
+    elif callback_data.s == "subscription_plans" and action == "select" and payload:
+        plan, _, months = payload.partition("&")
+        if months.isdigit():
+            await _checkout(cb, container, plan, int(months), kind="subscription")
+        else:
+            await _show_periods(cb, container, plan, gift=False)
+    else:  # open, back, extend and the other 2.x screens: the plans list
+        await _show_plans(cb, container, gift=False)
 
 
 @router.callback_query(Plan.filter())
@@ -99,6 +133,7 @@ _START_ERRORS = {
     "busy": T.PAYMENT_BUSY,
     "create_failed": T.PAYMENT_CREATE_FAILED,
     "stars_disabled": T.STARS_UNAVAILABLE,
+    "obhod_inactive": T.OBHOD_NEEDS_PRO,
 }
 
 
@@ -107,7 +142,11 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
     m = money(container)
     tg = cb.from_user.id
     gift = kind == "gift"
-    quote = await m.checkout.quote(tg, plan, months, gift=gift)
+    package = kind == "obhod_package"
+    if package:
+        quote = await m.checkout.quote_obhod_package(tg, plan)
+    else:
+        quote = await m.checkout.quote(tg, plan, months, gift=gift)
     if quote is None:
         text, markup = message_view(T.PLAN_UNAVAILABLE)
         await render(cb, text, markup)
@@ -122,18 +161,20 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         await render(cb, text, markup)
         return
     await _save_ctx(tg, quote.plan_code, quote.months, kind)
-    autopay_line = None if gift or not _flag(container, "AUTOPAY_ENABLED") else bool(res.intent.autorenew)
+    autopay_line = None if gift or package or not _flag(container, "AUTOPAY_ENABLED") else bool(res.intent.autorenew)
     text, markup = checkout_view(
         plan_code=quote.plan_code, name=quote.title, months=quote.months, amount_rub=quote.amount_rub,
         payment_id=res.intent.payment_id, url=res.intent.confirmation_url, autorenew=autopay_line,
-        stars=quote.stars, gift=gift,
+        stars=None if package else quote.stars, gift=gift,
+        back=Nav(s="plans", p="obhod") if package else None,
     )
     await render(cb, text, markup)
 
 
 @router.callback_query(Period.filter())
 async def on_period(cb: CallbackQuery, callback_data: Period, container: Any) -> None:
-    await _checkout(cb, container, callback_data.c, callback_data.m, kind="subscription")
+    kind = "obhod_package" if is_obhod_package_code(callback_data.c) else "subscription"
+    await _checkout(cb, container, callback_data.c, callback_data.m, kind=kind)
 
 
 @router.callback_query(AutoPay.filter(F.a.in_({"on", "off"})))

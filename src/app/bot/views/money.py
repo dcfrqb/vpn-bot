@@ -62,8 +62,17 @@ def periods_view(plan_code: str, name: str, features: Sequence[str], options: Se
     return T.periods_screen(name, features, gift=gift), kb(rows)
 
 
+def obhod_packages_view(base_gb: int, packages: Sequence[tuple[str, str, int]]) -> tuple[str, InlineKeyboardMarkup]:
+    """packages: [(code, display, price)]; a package is bought as Period(c=<code>, m=1)."""
+    rows: list[list[Any]] = [[(T.btn_obhod_package(name, price), Period(c=code, m=1))]
+                             for code, name, price in packages]
+    rows.append([(T.BTN_BACK, Nav(s="plans"))])
+    return T.obhod_packages_screen(base_gb, [(name, price) for _c, name, price in packages]), kb(rows)
+
+
 def checkout_view(*, plan_code: str, name: str, months: int, amount_rub: int, payment_id: int, url: str,
-                  autorenew: Optional[bool], stars: Optional[int], gift: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+                  autorenew: Optional[bool], stars: Optional[int], gift: bool = False,
+                  back: Any = None) -> tuple[str, InlineKeyboardMarkup]:
     """autorenew None = no autorenew line and no toggle (AUTOPAY_ENABLED off / gift)."""
     rows: list[list[Any]] = [[url_btn(T.btn_pay(amount_rub), url)]]
     if stars and not gift:
@@ -71,7 +80,7 @@ def checkout_view(*, plan_code: str, name: str, months: int, amount_rub: int, pa
     if autorenew is not None:
         rows.append([(T.BTN_AUTOPAY_OFF if autorenew else T.BTN_AUTOPAY_ON, AutoPay(a="off" if autorenew else "on"))])
     rows.append([(T.BTN_CHECK, PayCheck(pid=payment_id))])
-    rows.append([(T.BTN_BACK, Gift(a="plan", id=plan_code) if gift else Plan(c=plan_code))])
+    rows.append([(T.BTN_BACK, back or (Gift(a="plan", id=plan_code) if gift else Plan(c=plan_code)))])
     text = T.checkout_screen(name, months, amount_rub, autorenew=autorenew, gift=gift,
                              stars=stars if not gift else None)
     return text, kb(rows)

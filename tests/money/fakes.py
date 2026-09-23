@@ -319,6 +319,11 @@ class FakeHooks:
         self.blocked_cards: dict[str, str] = {}
         self.last_plans: dict[int, str] = {}
 
+    obhod_live = True
+
+    async def has_active_obhod(self, telegram_id) -> bool:
+        return self.obhod_live
+
     async def apply_obhod_package(self, telegram_id, package_code, payment_id, trace_id) -> bool:
         self.obhod_calls.append((telegram_id, package_code, payment_id))
         return self.obhod_ok

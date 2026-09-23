@@ -105,6 +105,30 @@ class CheckoutServiceImpl:
             stars=self._stars_price(int(amount)), is_legacy=code in LEGACY_PLAN_CODES,
         )
 
+    async def quote_obhod_package(self, telegram_id: int, package_code: str):
+        """Quote for an obhod traffic package (Pro users; the live gate is in start_checkout)."""
+        from app.domain.models import Quote
+        from app.domain.plans import get_obhod_package
+
+        code = (package_code or "").lower().strip()
+        meta = get_obhod_package(code)
+        amount = quote_purchase(code, None, allow_obhod_package=True)
+        if not meta or amount <= 0:
+            return None
+        return Quote(plan_code=code, months=int(meta.get("period_months") or 1), amount_rub=int(amount),
+                     title=str(meta.get("display") or code))
+
+    async def obhod_package_options(self, telegram_id: int) -> list[tuple[str, str, int]]:
+        """[(code, display, price)] of the obhod packages on sale."""
+        from app.domain.plans import OBHOD_PACKAGE_CODES
+
+        out = []
+        for code in OBHOD_PACKAGE_CODES:
+            q = await self.quote_obhod_package(telegram_id, code)
+            if q is not None:
+                out.append((code, q.title, q.amount_rub))
+        return out
+
     async def plan_options(self, telegram_id: int, *, gift: bool = False) -> list[tuple[str, str, tuple, int]]:
         """[(code, name, features, 1-month price)] the user may buy: menu plans, plus
         their own legacy plan for a renewal (not for gifts)."""
@@ -164,9 +188,23 @@ class CheckoutServiceImpl:
 
         tg = int(telegram_id)
         gift = kind == "gift"
-        fresh = await self.quote(tg, quote.plan_code, quote.months, gift=gift)
+        package = kind == "obhod_package"
+        if package:
+            fresh = await self.quote_obhod_package(tg, quote.plan_code)
+        else:
+            fresh = await self.quote(tg, quote.plan_code, quote.months, gift=gift)
         if fresh is None or fresh.amount_rub != quote.amount_rub:
             return StartResult(error="unavailable")
+        if package:
+            # 2.x H1: a package needs a live obhod account (active Pro); checked
+            # before the payment exists, so the money never goes nowhere.
+            try:
+                live = await self.d.hooks.has_active_obhod(tg)
+            except Exception:  # noqa: BLE001 - fail closed
+                live = False
+            if not live:
+                return StartResult(error="obhod_inactive")
+            method, autorenew = "yookassa", False
         if method == "stars" and not fresh.stars:
             return StartResult(error="stars_disabled")
         autorenew = bool(autorenew) and not gift and method == "yookassa" and bool(

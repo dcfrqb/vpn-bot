@@ -40,6 +40,12 @@ class LegacyHooks:
                 trace_id=trace_id, payment_id=int(payment_id),
             ))
 
+    async def has_active_obhod(self, telegram_id: int) -> bool:
+        """Obhod package gate: live obhod account on the panel (stream B)."""
+        from app.services.obhod_service import has_active_obhod
+
+        return await has_active_obhod(int(telegram_id))
+
     async def after_paid(self, payment_id: int, bot: Any) -> None:
         """Referral tracker (/sun718 alerts), soft-fail."""
         try:

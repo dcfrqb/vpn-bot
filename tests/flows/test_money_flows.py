@@ -245,3 +245,52 @@ async def test_gift_purchase_flow_when_flag_on(money_flow, monkeypatch):
     rec = next(iter(f.store.payments.values()))
     assert rec.kind == "gift" and rec.amount == get_plan_price("standard", 3)
     assert "Подарок" in _last_screen(f).text
+
+
+# --- obhod traffic packages (3.0 screen replacing the 2.x ScreenManager one) ----------------------
+
+async def test_obhod_packages_screen_and_checkout(money_flow):
+    from app.domain.plans import get_obhod_package
+
+    f = money_flow
+    await f.press(Nav(s="plans", p="obhod").pack())
+    screen = _last_screen(f)
+    datas = [b["data"] for b in _buttons(screen)]
+    assert "pe:obhod_250:1" in datas and "pe:obhod_500:1" in datas and "n:plans:" in datas
+    await f.press("pe:obhod_250:1")
+    rec = next(iter(f.store.payments.values()))
+    assert rec.kind == "obhod_package" and rec.plan_code == "obhod_250"
+    assert rec.amount == get_obhod_package("obhod_250")["price"]
+    screen = _last_screen(f)
+    assert [b for b in _buttons(screen) if b["url"]]
+    assert not [b for b in _buttons(screen) if (b["data"] or "").startswith(("ps:", "ap:"))]
+
+
+async def test_obhod_package_refused_without_live_obhod(money_flow):
+    f = money_flow
+    f.money.deps.hooks.obhod_live = False
+    await f.press("pe:obhod_500:1")
+    assert not f.store.payments
+    assert "только при активном тарифе Pro" in _last_screen(f).text
+
+
+@pytest.mark.parametrize("legacy,kind", [
+    ("ui:subscription_plans:obhod:-", "packages"),
+    ("ui:subscription_plans:buy_obhod:obhod_250", "package_payment"),
+    ("ui:subscription_plans:open:-", "plans"),
+    ("ui:subscription_plans:extend:-", "plans"),
+    ("ui:subscription_plan_detail:back:-", "plans"),
+    ("ui:subscription_plans:select:pro", "periods"),
+])
+async def test_2x_plan_screen_buttons_land_on_3_0_screens(money_flow, legacy, kind):
+    f = money_flow
+    await f.press(legacy)
+    datas = [b["data"] for b in _buttons(_last_screen(f))]
+    if kind == "packages":
+        assert "pe:obhod_250:1" in datas
+    elif kind == "package_payment":
+        assert next(iter(f.store.payments.values())).kind == "obhod_package"
+    elif kind == "plans":
+        assert "pl:pro" in datas
+    else:
+        assert "pe:pro:12" in datas
