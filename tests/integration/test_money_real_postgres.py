@@ -198,3 +198,76 @@ async def test_refunded_status_can_be_recorded():
     finally:
         await _cleanup(Session, tg)
         await engine.dispose()
+
+
+@pytest.mark.skipif(not PG_URL, reason="HOTFIX_PG_URL is not set")
+async def test_recovery_window_skips_delivered_gifts_and_packages_and_refunds():
+    """Review money m-4 / M-2 on real Postgres: the JSON filters of
+    recovery_candidates keep delivered gifts/packages and 24h-refunded rows out."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.services.payments.sql_store import SqlPaymentStore
+
+    engine = create_async_engine(PG_URL)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    tg = 760000000 + (uuid.uuid4().int % 1000000)
+    store = SqlPaymentStore(Session)
+    now = datetime.now(timezone.utc)
+    ids = {}
+    try:
+        for name, meta in (("gift", {"fulfilled_at": now.isoformat(), "gift_code": "g_x"}),
+                           ("package", {"obhod_package_applied": True}),
+                           ("refunded", {"needs_provisioning": True, "refund_24h": {"rid": 1}}),
+                           ("stuck", {"needs_provisioning": True})):
+            rec = await store.create(tg, provider="yookassa", external_id=f"it-{name}-{tg}", amount=Decimal(129),
+                                     currency="RUB", status="pending", plan_code="lite", months=1,
+                                     kind="subscription", method="yookassa", description="d", meta=meta)
+            await store.mark_paid(rec.id, amount=Decimal(129))
+            ids[name] = rec.id
+        _, stuck = await store.recovery_candidates(now + timedelta(hours=1), pending_age=timedelta(minutes=15),
+                                                   stuck_age=timedelta(minutes=5), horizon=timedelta(days=30),
+                                                   limit=100)
+        got = {r.id for r in stuck} & set(ids.values())
+        assert got == {ids["stuck"]}
+    finally:
+        await _cleanup(Session, tg)
+        await engine.dispose()
+
+
+@pytest.mark.skipif(not PG_URL, reason="HOTFIX_PG_URL is not set")
+async def test_r30_03_kind_backfill_labels_2x_obhod_packages():
+    """Review money m-2: the r30_03 kind backfill, run on real rows."""
+    import re
+    from pathlib import Path
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    src = Path(__file__).resolve().parents[2] / "src/app/db/migrations/versions/r30_03_data.py"
+    body = src.read_text()
+    m = re.search(r'"""\s*(UPDATE payments\s+SET kind = CASE.*?WHERE kind IS NULL)\s*"""', body, re.S)
+    sql = m.group(1).encode().decode("unicode_escape")  # the file's "\\_" is "\_" at runtime
+    engine = create_async_engine(PG_URL)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    tg = 770000000 + (uuid.uuid4().int % 1000000)
+    try:
+        async with Session() as s:
+            await s.execute(text("INSERT INTO telegram_users (telegram_id) VALUES (:t) ON CONFLICT DO NOTHING"),
+                            {"t": tg})
+            for ext, provider, plan in ((f"a{tg}", "yookassa", "obhod_250"), (f"b{tg}", "yookassa", "pro"),
+                                        (f"c{tg}", "promo", "trial"), (f"d{tg}", "yookassa", "obhodx")):
+                await s.execute(text(
+                    "INSERT INTO payments (telegram_user_id, provider, external_id, amount, currency, status, "
+                    "payment_metadata, created_at, updated_at, paid_at) VALUES (:t, :p, :e, 1, 'RUB', 'succeeded', "
+                    "CAST(:m AS json), now(), now(), now())"),
+                    {"t": tg, "p": provider, "e": ext, "m": '{"plan_code": "%s"}' % plan})
+            await s.execute(text(sql.replace("WHERE kind IS NULL", "WHERE kind IS NULL AND telegram_user_id = :t")),
+                            {"t": tg})
+            rows = dict((await s.execute(text(
+                "SELECT external_id, kind FROM payments WHERE telegram_user_id = :t"), {"t": tg})).all())
+            await s.rollback()
+        assert rows == {f"a{tg}": "obhod_package", f"b{tg}": "subscription", f"c{tg}": "promo",
+                        f"d{tg}": "subscription"}
+    finally:
+        await _cleanup(Session, tg)
+        await engine.dispose()
