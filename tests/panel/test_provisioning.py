@@ -600,7 +600,7 @@ async def test_broadcast_credit_reaches_the_real_provisioning_service(svc, fake)
 
     fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
     new = await add_days(svc, None, 7, 3, trace_id="bc:1:7")
-    assert new == NOW + timedelta(days=4)
+    assert new.expires_at == NOW + timedelta(days=4)  # a SubscriptionState (review round 2, N-2)
 
     fake.add_user(502, "v", telegram_id=8, squads=["pro"], limit=10, expire=iso(NOW + timedelta(days=2)))
     fake.add_user(503, "w", telegram_id=9, squads=["pro"], limit=10, expire="2099-12-31T23:59:59Z")
@@ -621,6 +621,77 @@ async def test_failed_credit_patch_can_be_retried(svc, fake):
     with pytest.raises(httpx.ReadTimeout):
         await svc.add_days(7, 3, trace_id="bc:2:7")
     assert await svc.add_days(7, 3, trace_id="bc:2:7") == NOW + timedelta(days=4)
+
+
+# ------------------------------------------------------------------ review round 2, N-2: /grant <id> <days>
+
+def _grants_service(svc, notifier, status=None):
+    from app.services.grants import GrantsService
+    from tests.growth.fakes import FakeStatus, MemoryLedger
+
+    async def no_ensure(tg):
+        return None
+
+    return GrantsService(provisioning=svc, status=status or FakeStatus(), notifier=notifier,
+                         ledger=MemoryLedger(), ensure_user=no_ensure)
+
+
+async def test_admin_grant_days_over_the_real_service(svc, fake, notifier):
+    """/grant 7 3: the days land, the result carries a state with the new date,
+    the admin audit card is sent, and the same command again credits nothing."""
+    from app.domain.models import SubscriptionState
+    from tests.growth.fakes import FakeStatus
+
+    status = FakeStatus()
+    status.set(7, active=True, plan_code="lite", expires_at=NOW + timedelta(days=1))  # stale cache
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    grants = _grants_service(svc, notifier, status)
+    res = await grants.grant_days(1, 7, 3, request_key="cmd:1:100")
+    assert res.status == "ok"
+    assert isinstance(res.state, SubscriptionState)
+    assert res.state.expires_at == NOW + timedelta(days=4)
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
+    cards = [m for m in notifier.to_admins() if "Выдача администратором" in m.text]
+    assert len(cards) == 1 and "27.09.2026" in cards[0].text
+    assert grants.ledger.rows[("adm:cmd:1:100", 7)]["status"] == "applied"
+
+    assert (await grants.grant_days(1, 7, 3, request_key="cmd:1:100")).status == "dup"
+    await grants.release_request("cmd:1:100")  # even without the request marker
+    assert (await grants.grant_days(1, 7, 3, request_key="cmd:1:100")).status == "dup"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
+
+
+async def test_admin_grant_days_error_after_patch_is_not_a_failure(svc, fake, repo, notifier):
+    """The PATCH landed, then the DB save raised: the grant is reported as done
+    and closed applied, so a retry of the same command can not credit twice."""
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    repo.add_row(7, plan="lite", until=NOW + timedelta(days=1), panel_id=501)
+    real_save = repo.save_subscription
+
+    async def save_fails(row):
+        raise RuntimeError("db down after the PATCH")
+
+    repo.save_subscription = save_fails
+    grants = _grants_service(svc, notifier)
+    res = await grants.grant_days(1, 7, 3, request_key="cmd:1:200")
+    assert res.status == "ok"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
+    assert grants.ledger.rows[("adm:cmd:1:200", 7)]["status"] == "applied"
+    repo.save_subscription = real_save
+    await grants.release_request("cmd:1:200")
+    assert (await grants.grant_days(1, 7, 3, request_key="cmd:1:200")).status == "dup"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
+
+
+async def test_admin_grant_days_failed_patch_is_retryable(svc, fake, notifier):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _fail_next_patch(fake)
+    grants = _grants_service(svc, notifier)
+    assert (await grants.grant_days(1, 7, 3, request_key="cmd:1:300")).status == "error"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=1))
+    res = await grants.grant_days(1, 7, 3, request_key="cmd:1:300")  # the request was released
+    assert res.status == "ok" and res.state.expires_at == NOW + timedelta(days=4)
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
 
 
 async def test_credit_sweep_alerts_admins_on_failures(monkeypatch):

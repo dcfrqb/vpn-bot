@@ -86,10 +86,15 @@ async def test_add_days_uses_native_provisioning_add_days_when_present():
     class P:
         async def add_days(self, tg, days, *, trace_id, reason=""):  # the real signature
             calls.append((tg, days, trace_id))
-            return "state"
+            return None if tg == 6 else until  # the real return type: the new expiry
 
-    assert await add_days(P(), FakeStatus(), 5, 3, trace_id="t") == "state"
-    assert calls == [(5, 3, "t")]
+    from datetime import datetime, timezone
+
+    until = datetime(2026, 10, 4, tzinfo=timezone.utc)
+    state = await add_days(P(), FakeStatus(), 5, 3, trace_id="t")
+    assert state.telegram_id == 5 and state.expires_at == until  # a state, not a datetime (round 2, N-2)
+    assert await add_days(P(), FakeStatus(), 6, 3, trace_id="t6") is None
+    assert calls == [(5, 3, "t"), (6, 3, "t6")]
 
 
 # ----------------------------------------------------------------- segments

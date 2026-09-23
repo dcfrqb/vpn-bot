@@ -107,10 +107,13 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
     if res.status == "ok":
         from app.domain.texts import fmt_date_msk
 
-        await render(message, f"✅ <code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(res.state.expires_at)}")
+        # The days are credited: the user notice goes first, so a failed admin
+        # reply can not hide it (review round 2, N-2).
         await container.notifier.notify_user(
             tg, TP.ACCESS_GRANTED.format(what=f"Подписка продлена на {days_ru(int(days))}"), html=True,
             reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
+        until = getattr(res.state, "expires_at", None)
+        await render(message, f"✅ <code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(until)}")
     elif res.status == "skipped":
         await render(message, T.NOTHING_TO_EXTEND)
     elif res.status == "busy":

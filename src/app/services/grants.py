@@ -17,7 +17,7 @@ No aiogram here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Optional, Protocol
 
@@ -48,8 +48,8 @@ async def add_days(
 ) -> Any:
     """+``days`` to the main subscription. None when there is nothing to
     extend (no subscription and no ``plan_code``, or a lifetime one).
-    Returns the new expiry (native ProvisioningService.add_days) or the new
-    SubscriptionState (``plan_code`` given: a grant on that plan).
+    Otherwise the new SubscriptionState, on both paths (native
+    ProvisioningService.add_days, or a grant on ``plan_code``).
 
     Idempotent per ``trace_id`` (ProvisioningService contract)."""
     tg = int(telegram_id)
@@ -58,7 +58,12 @@ async def add_days(
         # ProvisioningService.add_days(tg, days, *, trace_id, reason) returns the
         # new expiry or None. It has no ``source`` argument: passing one raised
         # TypeError on every broadcast credit (review money M-3).
-        return await native(tg, int(days), trace_id=trace_id, reason=f"{source.value}:{trace_id}")
+        new_expiry = await native(tg, int(days), trace_id=trace_id, reason=f"{source.value}:{trace_id}")
+        if new_expiry is None:
+            return None
+        # Callers read ``.expires_at``: a bare datetime crashed /grant after the
+        # days were credited (review round 2, N-2).
+        return await state_after_credit(status, tg, new_expiry)
     state = await status.get_state(tg, force=True)
     if state.is_lifetime:
         return None
@@ -72,6 +77,36 @@ async def add_days(
     except Exception:  # noqa: BLE001
         pass
     return new_state
+
+
+async def state_after_credit(status: Any, telegram_id: int, new_expiry: Optional[datetime]) -> SubscriptionState:
+    """The state after a credit that already landed. Never raises: the days
+    are on the panel, so a failed re-read must not turn into an error (the
+    caller would report a failure and an admin retry would credit again)."""
+    tg = int(telegram_id)
+    fallback = SubscriptionState(telegram_id=tg, has_panel_user=True, active=True, expires_at=new_expiry,
+                                 stale=True)
+    if status is None:
+        return fallback
+    try:
+        state = await status.get_state(tg, force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"grants: state re-read after credit failed tg={tg} ({type(e).__name__})")
+        return fallback
+    if not isinstance(state, SubscriptionState):
+        return fallback
+    if new_expiry is not None and (state.expires_at is None or state.expires_at < new_expiry):
+        state = replace(state, expires_at=new_expiry)  # a stale cache must not show the old date
+    return state
+
+
+async def credit_landed(trace_id: str) -> bool:
+    """True when ProvisioningService.add_days kept its ``credit:<trace_id>``
+    marker, i.e. the PATCH went through (a failed PATCH deletes it). Redis
+    down -> False."""
+    from app.infra.redis.flags import get_value
+
+    return await get_value(f"credit:{trace_id}") is not None
 
 
 # --------------------------------------------------------------------------- ledger
@@ -242,8 +277,17 @@ class GrantsService:
                 return GrantResult("error", label)
             try:
                 if extend:
-                    state = await add_days(self.provisioning, self.status, tg, int(days or 0),
-                                           trace_id=trace_id, plan_code=plan)
+                    try:
+                        state = await add_days(self.provisioning, self.status, tg, int(days or 0),
+                                               trace_id=trace_id, plan_code=plan)
+                    except Exception as e:
+                        # Review round 2, N-2: an error after the PATCH (DB save,
+                        # cache) must not read as "not granted": the request would
+                        # be released and a retry would credit a second time.
+                        if plan is not None or not await credit_landed(trace_id):
+                            raise
+                        logger.warning(f"grants: +{days}d tg={tg} landed despite {type(e).__name__}")
+                        state = await state_after_credit(self.status, tg, None)
                     if state is None:
                         await self.ledger.close(code, tg, "skipped")
                         return GrantResult("skipped", label)
@@ -259,7 +303,10 @@ class GrantsService:
                 logger.error(f"grants: grant failed tg={tg} ({type(e).__name__})")
                 await self.ledger.close(code, tg, "failed")
                 return GrantResult("error", label)
-            await self.ledger.close(code, tg, "applied")
+            try:
+                await self.ledger.close(code, tg, "applied")
+            except Exception as e:  # noqa: BLE001 - granted; the request marker still blocks a repeat
+                logger.error(f"grants: ledger close failed after grant tg={tg} ({type(e).__name__})")
         try:
             await self.notifier.notify_admins(
                 AdminTopic.PROMO,
@@ -375,5 +422,5 @@ class ObhodAdmin:
         return {"active": int(active or 0), "total": int(total or 0)}
 
 
-__all__ = ["GRANT_KEYS", "add_days", "RedemptionLedger", "SqlRedemptionLedger", "GrantResult",
+__all__ = ["GRANT_KEYS", "add_days", "state_after_credit", "credit_landed", "RedemptionLedger", "SqlRedemptionLedger", "GrantResult",
            "GrantsService", "ObhodInfo", "ObhodAdmin"]
