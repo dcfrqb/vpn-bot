@@ -228,6 +228,7 @@ class SqlPaymentStore(SqlRefundsAutorenewMixin):
                     Payment.telegram_user_id == int(telegram_id),
                     Payment.status == "succeeded",
                     func.upper(Payment.currency) == "RUB",
+                    Payment.provider.notin_(("test", "promo")),  # r30_03 relabels e2e junk as 'test' (F -> E)
                 )
             )).one()
         return int(count or 0), Decimal(str(total or 0))
