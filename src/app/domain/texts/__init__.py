@@ -5,7 +5,7 @@ streams (``common``, ``menu``, ``checkout``, ``connect``, ``devices``,
 ``promo``, ``admin``, ``notify``).
 
 Rules for every text module:
-- Russian prose without the letter «ё» (a test enforces it).
+- Russian prose without the letter U+0451 (yo); a test enforces it.
 - Values interpolated into HTML go through ``h()``.
 - Numbers with units go through ``plural_ru``/``n_plural``; money through
   ``fmt_rub``; dates through ``fmt_date_msk``.

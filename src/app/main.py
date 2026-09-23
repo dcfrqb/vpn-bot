@@ -64,68 +64,11 @@ def get_storage():
         return MemoryStorage()
 
 
-def build_dispatcher(bot: Bot, storage=None, container=None) -> Dispatcher:
-    """Собирает диспетчер без I/O (тесты зовут напрямую, см. tests/flows).
-
-    3.0: контейнер портов (app.container), внешние middleware DI, техработ и
-    алиасов старых колбэков, порядок роутеров из app.bot.routers.ROUTERS.
-    Поведение 2.1.1 не меняется: новые роутеры пустые, техработы выключены,
-    алиас переписывает колбэк только если его принимает новый роутер.
-    """
-    storage = storage if storage is not None else get_storage()
-    dp = Dispatcher(storage=storage)
-    logger.info("Диспетчер создан")
-
-    from app.bot.legacy_aliases import LegacyAliasMiddleware
-    from app.bot.middlewares.di import DIMiddleware
-    from app.bot.middlewares.maintenance import MaintenanceMiddleware
-    from app.bot.routers import include_routers, new_routers
-    from app.container import build_container, set_container
-
-    if container is None:
-        container = build_container(bot)
-    set_container(container)
-
-    # 3.0: порты в данные хендлеров (для всех типов апдейтов)
-    dp.update.outer_middleware(DIMiddleware(container))
-    # 3.0: техработы (no-op, пока флаг не включен) — до алиасов и роутинга
-    maintenance_mw = MaintenanceMiddleware(container.maintenance)
-    dp.message.outer_middleware(maintenance_mw)
-    dp.callback_query.outer_middleware(maintenance_mw)
-    # 3.0: старые строки колбэков -> упакованные колбэки (если есть новый хендлер)
-    dp.callback_query.outer_middleware(LegacyAliasMiddleware(new_routers))
-
-    from app.middlewares.auth import AuthMiddleware
-    from app.middlewares.timing import TimingMiddleware
-    from app.middlewares.blocklist import BlocklistMiddleware
-
-    # Timing middleware должен быть первым для измерения всего времени выполнения
-    dp.message.middleware(TimingMiddleware())
-    dp.callback_query.middleware(TimingMiddleware())
-
-    # Blocklist middleware — до Auth, чтобы заблокированные не проходили дальше
-    dp.message.middleware(BlocklistMiddleware())
-    dp.callback_query.middleware(BlocklistMiddleware())
-
-    # Auth middleware
-    dp.message.middleware(AuthMiddleware())
-    dp.callback_query.middleware(AuthMiddleware())
-    logger.info("Middleware подключены")
-
-    # Порядок: site_login -> новые роутеры 3.0 -> роутеры 2.x в порядке 2.1.1
-    # (ui, start, legacy payments, admin_broadcast, admin, legacy_callbacks) ->
-    # глобальный errors-handler. site_login первым: диплинк /start login_* и
-    # callback sitelogin: не должны доходить до cmd_start и catch-all роутеров.
-    # app.routers.payments НЕ регистрируется намеренно (дубль pay_yookassa_).
-    include_routers(dp)
-    logger.info("Режим legacy: YooKassa + БД")
-    logger.info("Роутеры подключены")
-    return dp
-
-
 async def setup_dispatcher(bot: Bot) -> Dispatcher:
     """Настраивает и возвращает диспетчер"""
-    dp = build_dispatcher(bot)
+    from app.bot.dispatcher import build_dispatcher
+
+    dp = build_dispatcher(bot, storage=get_storage())
 
     from app.middlewares.blocklist import load_blocklist_from_redis
     await load_blocklist_from_redis()

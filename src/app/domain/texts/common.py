@@ -3,7 +3,7 @@
 Owner stream: D (User UI). Created empty by Foundation.
 Plain module-level constants or small pure functions returning str.
 Use helpers from app.domain.texts (h, plural_ru, fmt_date_msk, fmt_rub).
-No «ё» in prose.
+No letter U+0451 (yo) in prose.
 """
 
 # Used by app.bot.middlewares.errors: never show exception text to users.
