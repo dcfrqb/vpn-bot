@@ -89,10 +89,19 @@ class _GiftUnavailable(Exception):
     pass
 
 
-def _is_user_disabled(exc: BaseException) -> bool:
+def _refusal(exc: BaseException) -> Optional[str]:
+    """A grant refusal that needs an admin (nothing was written), or None.
+
+    Stream B raises GrantRefused("disabled" | "bad_plan" | ...); the 2.x core
+    raised RemnaUserDisabledError."""
+    from app.services.provisioning_rules import GrantRefused
     from app.services.remna_tariff import RemnaUserDisabledError
 
-    return isinstance(exc, RemnaUserDisabledError) or type(exc).__name__ == "UserDisabledError"
+    if isinstance(exc, RemnaUserDisabledError):
+        return "disabled"
+    if isinstance(exc, GrantRefused):
+        return exc.reason or "refused"
+    return None
 
 
 def plan_label(plan_code: Optional[str], months: Optional[int]) -> str:
@@ -236,8 +245,12 @@ class Fulfillment:
             try:
                 state, patch = await self._deliver(rec, approved=approved, trace=trace)
             except Exception as e:  # noqa: BLE001 - classified below, never shown to users
-                if _is_user_disabled(e):
+                refusal = _refusal(e)
+                if refusal == "disabled" and not approved:
                     await self._hold(rec, DISABLED_REVIEW_REASON, trace)
+                    return FulfilResult(Outcome.HELD, rec)
+                if refusal is not None and refusal != "disabled":
+                    await self._hold(rec, f"выдача отклонена ({refusal}): {str(e)[:200]}", trace)
                     return FulfilResult(Outcome.HELD, rec)
                 return await self._grant_failed(rec, e, trace)
             await store.mark_fulfilled(rec.id, meta_patch=patch)
@@ -281,7 +294,13 @@ class Fulfillment:
             plan_code=plan, source=source, days=months_to_days(int(months), self.d.clock()),
             payment_id=rec.id, note=f"months={int(months)}",
         )
-        state = await self.d.provisioning.grant(rec.telegram_id, ent, trace_id=f"pay:{rec.id}")
+        # Stream B extension: calendar months from max(now, current expiry) (days
+        # stay as a fallback for a provider without it); an admin-approved payment
+        # may enable a user an admin disabled. Idempotent per payment id (pay:<id>).
+        kwargs: dict[str, Any] = {"months": int(months)}
+        if approved:
+            kwargs["enable_if_disabled"] = True
+        state = await self.d.provisioning.grant(rec.telegram_id, ent, trace_id=f"pay:{rec.id}", **kwargs)
         return state, {}
 
     async def _grant_failed(self, rec: PaymentRecord, exc: BaseException, trace: str) -> FulfilResult:

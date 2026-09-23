@@ -32,13 +32,33 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
-          pytest tests/ -m "not integration" -v
+          pytest tests/ -m "not integration" -v \
+            --cov=app --cov-report=term-missing --cov-report=xml --cov-config=.coveragerc
 
       - name: 3.0 seams (explicit, fail fast on a broken seam)
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           pytest -q tests/flows tests/invariants tests/contracts tests/test_r3_callbacks.py
+
+      - name: Golden texts (site API contracts; UPDATE_GOLDEN must stay unset in CI)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          test -z "${UPDATE_GOLDEN:-}" || (echo "UPDATE_GOLDEN must not be set in CI" && exit 1)
+          pytest -q tests/contracts tests/flows/test_site_login_contract.py
+
+      - name: Callback matrix (every packed sample and legacy string resolves once)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          pytest -q tests/flows/test_callback_matrix.py
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
 
   lint:
     runs-on: ubuntu-latest
@@ -64,7 +84,7 @@ jobs:
           src/app/bot src/app/domain src/app/infra src/app/worker src/app/api/routes src/app/api/app.py
           src/app/container.py src/app/services/ports.py src/app/services/shims.py
           src/app/services/notifications.py
-          tests/flows tests/invariants tests/contracts tests/fakes
+          tests/flows tests/invariants tests/contracts tests/fakes tests/data
 
   alembic:
     runs-on: ubuntu-latest
@@ -122,11 +142,16 @@ jobs:
         run: |
           alembic check
 
-      - name: Downgrade/upgrade the 3.0 revision (idempotent, additive)
+      - name: Downgrade/upgrade the 3.0 revisions (idempotent, additive)
         env:
           DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
         run: |
           alembic downgrade 7b1c2d3e4f50
+          alembic upgrade head
+          alembic check
+          # r30_02/r30_03 round-trip on top of an already-additive DB: constraints
+          # and data backfills must be idempotent (safe to run twice on prod).
+          alembic downgrade r30_01_additive
           alembic upgrade head
           alembic check
 

@@ -261,8 +261,12 @@ class FakeProvisioning:
         self.fail_times = 0
         self.fail_with: Exception = RuntimeError("panel down")
         self.revoke_result = True
+        self.calls: list[dict] = []
 
-    async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str) -> SubscriptionState:
+    async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str,
+                    months: Optional[int] = None, enable_if_disabled: bool = False,
+                    clear_grace: Optional[bool] = None) -> SubscriptionState:
+        self.calls.append({"tg": telegram_id, "months": months, "enable_if_disabled": enable_if_disabled})
         if self.fail_times > 0:
             self.fail_times -= 1
             raise self.fail_with

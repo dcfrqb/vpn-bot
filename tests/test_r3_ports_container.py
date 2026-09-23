@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.container import Container, build_container, get_container, set_container
-from app.domain.models import SubscriptionState
 from app.services import ports, shims
 from tests.fakes.bot import make_bot
 from tests.fakes.notifier import RecordingNotifier
@@ -60,13 +59,23 @@ def test_get_container_requires_startup():
 
 
 async def test_placeholders_fail_loudly():
-    with pytest.raises(NotImplementedError, match="stream B"):
-        await shims.LegacyProvisioningService().grant(1, None, trace_id="t")
     with pytest.raises(NotImplementedError, match="stream E"):
         await shims.LegacyPromoService().start_trial(1)
     with pytest.raises(NotImplementedError, match="stream A"):
         await shims.DisabledStarsGateway().refund(1, "x")
-    assert await shims.UnavailableDevicesService().list_devices(1) == []
+
+
+def test_stream_b_shims_are_the_real_services():
+    """Stream B: the shim names wired by the frozen container are the real services."""
+    from app.infra.remnawave.gateway import HttpRemnaGateway
+    from app.services.devices import PanelDevicesService
+    from app.services.provisioning import PanelProvisioningService
+    from app.services.status import PanelStatusService
+
+    assert shims.LegacyRemnaGateway is HttpRemnaGateway
+    assert shims.LegacyProvisioningService is PanelProvisioningService
+    assert shims.LegacyStatusService is PanelStatusService
+    assert shims.UnavailableDevicesService is PanelDevicesService
 
 
 # --- LegacyRemnaGateway over the in-memory panel -------------------------------------------------
@@ -115,22 +124,6 @@ async def test_create_iter_ping(gw):
 
 
 # --- Status / checkout / maintenance shims ---------------------------------------------------------
-
-async def test_status_shim_maps_2x_subscription_info():
-    from app.services.users import SubscriptionInfo
-
-    until = datetime(2026, 10, 1)
-    info = SubscriptionInfo(active=True, valid_until=until, plan_code="pro", plan_name="Pro",
-                            remna_user_id="501", config_data={})
-    with patch("app.services.users.get_user_active_subscription", AsyncMock(return_value=info)) as m:
-        st = await shims.LegacyStatusService().get_state(1, force=True)
-    m.assert_awaited_once_with(1, use_cache=False)
-    assert isinstance(st, SubscriptionState) and st.active and st.plan_code == "pro"
-    assert st.expires_at == until.replace(tzinfo=timezone.utc)
-    with patch("app.services.users.get_user_active_subscription", AsyncMock(return_value=None)):
-        st = await shims.LegacyStatusService().get_state(1)
-    assert not st.active and not st.has_panel_user
-
 
 async def test_checkout_quote_uses_catalog_prices_only():
     from app.domain.plans import get_plan_price

@@ -1,0 +1,54 @@
+"""Release 3.0.1: drops (NOT applied in 3.0; owner review required first)
+
+Revision ID: r30_04_drops
+Revises: r30_03_data
+Create Date: 2026-09-23 (drafted, not wired into the alembic chain)
+
+This file is intentionally suffixed .py.draft, not .py, so alembic does not
+discover it and it does NOT create a second head. Rename to r30_04_drops.py
+only after the owner has confirmed each item below (07_database.md
+recommendation 10) and stream F re-verifies violator counts on prod
+read-only right before applying, the same way r30_02/r30_03 were verified
+2026-09-23.
+
+Planned for 3.0.1, once the streams that touch these areas have landed and
+had a full release cycle to prove nothing needs them:
+
+1. Drop dead tables (0 rows, no code outside `legacy/` per 07 §1.1/§2.1):
+   access_requests, squads, nodes.
+2. Drop dead columns (all-NULL/constant on every prod row, 07 §1.2 D-notes):
+   subscriptions.remna_subscription_id, subscriptions.last_expiry_notice_at
+   (unless stream C implements the expiry-notice rate limit it was meant
+   for -- check before dropping), telegram_users.last_activity_at (unless
+   stream D's auth middleware starts writing it), telegram_users.is_admin,
+   remna_users.email, remna_users.last_synced_at.
+3. Drop ~20 unused/low-cardinality indexes (07 §3), including the duplicate
+   ix_payments_external_id (payments_external_id_key already covers it).
+4. NOT included here (data risk, owner sign-off needed separately, not a
+   schema drop): NULLing remna_users.raw_data for the 5 rows holding live
+   VPN credentials (07 §2.5), and resolving subscriptions 22/87 (active but
+   valid_until in the past, 07 Q1) -- that one needs a real read from
+   Remnawave, not a blind SQL UPDATE, so it belongs with stream B/C's
+   reconciler fix (07 recommendation 6), not a stream F migration.
+
+Example upgrade() body (untested against prod, write NOT VALID/VALIDATE-free
+since DROP does not need it -- but drop each object one statement at a time,
+recheck idempotency with IF EXISTS, and run scripts/prod_db_dump_and_restore_test.sh
+against a fresh dump before touching prod):
+
+    op.execute("DROP TABLE IF EXISTS access_requests")
+    op.execute("DROP TABLE IF EXISTS squads")
+    op.execute("DROP TABLE IF EXISTS nodes")
+    op.execute("ALTER TABLE subscriptions DROP COLUMN IF EXISTS remna_subscription_id")
+    op.execute("ALTER TABLE subscriptions DROP COLUMN IF EXISTS last_expiry_notice_at")
+    op.execute("ALTER TABLE telegram_users DROP COLUMN IF EXISTS last_activity_at")
+    op.execute("ALTER TABLE telegram_users DROP COLUMN IF EXISTS is_admin")
+    op.execute("ALTER TABLE remna_users DROP COLUMN IF EXISTS email")
+    op.execute("ALTER TABLE remna_users DROP COLUMN IF EXISTS last_synced_at")
+    op.execute("DROP INDEX IF EXISTS ix_payments_external_id")
+    # ... plus the rest of the ~20 unused indexes listed in 07_database.md §3
+
+Matching model.py edits (drop the columns/relationships/indexes) must land
+in the SAME commit as the real migration, per ARCHITECTURE_3.0.md's rule
+"every migration: model updated in the same commit".
+"""

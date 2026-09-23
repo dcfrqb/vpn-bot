@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from app.core.plans import (
     OBHOD_SQUAD_NAME,
+    get_plan_device_limit,
     OBHOD_TRAFFIC_LIMIT_STRATEGY,
     get_obhod_package_limit_bytes,
     is_obhod_eligible_plan,
@@ -226,6 +227,8 @@ async def ensure_obhod_for_pro(
                         traffic_limit_bytes=base_limit,
                         traffic_limit_strategy=OBHOD_TRAFFIC_LIMIT_STRATEGY,
                         display_name=f"obhod {telegram_user_id}",
+                        # 06 H4e: без лимита панель дает fallback 40 устройств
+                        hwid_device_limit=get_plan_device_limit("pro"),
                     )
                     logger.info(
                         f"[{trace_id}] obhod created: tg_id={telegram_user_id} uuid={obhod_uuid} "
@@ -492,24 +495,24 @@ async def apply_obhod_package(
 
 
 async def has_active_obhod(telegram_user_id: int) -> bool:
-    """True, если у юзера есть АКТИВНАЯ obhod-подписка (значит активный Pro).
+    """True, если пакет обхода можно покупать прямо сейчас (гейт на покупку).
 
-    H1: гейт на покупку пакета обхода. Пакет поднимает кап на существующем
-    obhod-юзере и применим только при активном обходе; без него apply_obhod_package
-    вернет False, а платеж уже succeeded — деньги «в никуда». Проверяем ДО создания
-    платежа.
-
-    Открывает свою сессию (вызывается из UI-хендлера, где сессии нет). При
-    недоступной БД (SessionLocal is None) возвращает False — безопасный отказ.
+    3.0 (поток B, 06 H4b): мало активной строки в БД, obhod-юзер в панели
+    должен быть живым (ACTIVE или LIMITED, срок в будущем). Иначе можно было
+    заплатить за пакет на истекший обход. Панель недоступна или БД не
+    настроена -> False (безопасный отказ, платеж не создается).
     """
     from app.db.session import SessionLocal
 
     if SessionLocal is None:
         return False
+    from app.services.obhod import ObhodLifecycle
 
-    async with SessionLocal() as session:
-        obhod_sub = await get_obhod_subscription(session, telegram_user_id)
-        return bool(obhod_sub and obhod_sub.active)
+    try:
+        return await ObhodLifecycle().package_gate(int(telegram_user_id))
+    except Exception as e:
+        logger.warning(f"has_active_obhod: check failed tg_id={telegram_user_id} ({type(e).__name__})")
+        return False
 
 
 async def get_obhod_link_info(telegram_user_id: int) -> Optional[dict]:

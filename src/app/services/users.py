@@ -289,7 +289,9 @@ async def get_or_create_telegram_user(
     language_code: Optional[str] = None,
 ):
     """
-    Гарантирует наличие юзера в Remnawave И в локальной таблице `telegram_users`.
+    Гарантирует строку в локальной таблице `telegram_users` и ищет (НЕ создает,
+    с 3.0) юзера в Remnawave: аккаунт в панели появляется только при выдаче
+    доступа (оплата, триал, промо, админ-грант).
 
     Локальная строка нужна потому, что FK-зависимые таблицы (`payments`,
     `subscriptions`, `access_requests`, `broadcast_recipients`) ссылаются на
@@ -303,7 +305,8 @@ async def get_or_create_telegram_user(
     у существующей строки имя сохраняется).
     """
     name = first_name or username or f"User_{telegram_id}"
-    remna_user_id = await ensure_user_in_remnawave(telegram_id, username=username, name=name)
+    # 3.0 (поток B): только поиск, аккаунт в панели создает выдача доступа.
+    remna_user_id = await ensure_user_in_remnawave(telegram_id, username=username, name=name, create=False)
 
     try:
         from sqlalchemy.dialects.postgresql import insert as pg_insert

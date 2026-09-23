@@ -32,15 +32,35 @@ class LegacyHooks:
     """2.x side effects the new flow still needs. One place, replaced in tests."""
 
     async def apply_obhod_package(self, telegram_id: int, package_code: str, payment_id: int, trace_id: str) -> bool:
-        from app.services.payments.legacy_provisioning import apply_obhod_package_for_payment
+        """2.x obhod package (stream B owns obhod; this only adapts the call).
+        apply_obhod_package refuses without a live obhod account."""
+        from app.db import session as db_session
+        from app.services.obhod_service import apply_obhod_package
 
-        return await apply_obhod_package_for_payment(telegram_id, package_code, payment_id, trace_id)
+        async with db_session.SessionLocal() as session:
+            return bool(await apply_obhod_package(
+                session=session, telegram_user_id=int(telegram_id), package_code=package_code,
+                trace_id=trace_id, payment_id=int(payment_id),
+            ))
 
     async def after_paid(self, payment_id: int, bot: Any) -> None:
         """Referral tracker (/sun718 alerts), soft-fail."""
-        from app.services.payments.legacy_provisioning import referral_after_paid
+        try:
+            from sqlalchemy import select
 
-        await referral_after_paid(payment_id, bot)
+            from app.db import session as db_session
+            from app.db.models import Payment as PaymentModel
+            from app.services.referral_tracker import notify_referral_payment_if_applicable
+
+            async with db_session.SessionLocal() as session:
+                payment = (await session.execute(
+                    select(PaymentModel).where(PaymentModel.id == int(payment_id)))).scalar_one_or_none()
+                if payment is not None and bot is not None:
+                    await notify_referral_payment_if_applicable(bot, session, payment)
+        except Exception as e:  # noqa: BLE001
+            from app.logger import logger
+
+            logger.warning(f"referral hook soft-fail for payment {payment_id}: {type(e).__name__}")
 
     async def invalidate_caches(self, telegram_id: int) -> None:
         try:

@@ -38,7 +38,11 @@ NEW_LAYER = [
     SRC / "services" / "money.py", SRC / "services" / "payments" / "store.py",
     SRC / "services" / "payments" / "pricing.py", SRC / "services" / "payments" / "webhook.py",
     SRC / "services" / "payments" / "refund_requests.py", SRC / "services" / "payments" / "ui.py",
-    SRC / "services" / "payments" / "legacy_provisioning.py", SRC / "services" / "payments" / "yookassa.py",
+    SRC / "services" / "payments" / "yookassa.py",
+    # stream B
+    *(SRC / "services" / f"{m}.py" for m in ("accounts", "provisioning", "provisioning_rules", "credits", "status",
+                                                    "devices", "obhod", "panel_sync")),
+    ROOT / "tests" / "panel",
 ]
 MANUAL = ["pro-m", "lite-m", "standard-m", "premium-m", "pro-friend", "premium-friend", "arcadia"]
 
@@ -229,3 +233,34 @@ def test_no_yo_letter_in_new_layer_and_docs():
         if f.exists() and ("ё" in f.read_text() or "Ё" in f.read_text()):
             offenders.append(str(f.relative_to(ROOT)))
     assert not offenders, offenders
+
+
+# ---------------------------------------------------------------- stream B: the same rules through provisioning
+
+@pytest.mark.parametrize("plan", ["lite", "standard", "pro", "basic", "premium"])
+async def test_provisioning_keeps_manual_squads_and_limit(plan, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.domain.models import Entitlement, EntitlementSource
+    from app.services.provisioning import PanelProvisioningService
+    from tests.fakes.redis import FakeRedis
+    from tests.panel.conftest import InMemoryAccountsRepo
+
+    monkeypatch.setattr("app.services.cache.get_redis_client", lambda: FakeRedis())
+    gw = FakeRemnaGateway()
+    gw.fake.add_user(1, "u", telegram_id=7, squads=["premium", *MANUAL[:3]], limit=15)
+
+    class NoObhod:
+        async def on_main_granted(self, *a):
+            pass
+
+        async def on_main_revoked(self, *a):
+            pass
+
+    svc = PanelProvisioningService(gw, InMemoryAccountsRepo(), obhod=NoObhod(), settings=SimpleNamespace(),
+                                   late_patch_delay_s=0)
+    await svc.grant(7, Entitlement(plan_code=plan, source=EntitlementSource.PAYMENT, payment_id=1),
+                    trace_id="inv", months=1)
+    names = set(gw.fake.squad_names(1))
+    assert set(MANUAL[:3]) <= names
+    assert gw.fake.users[1]["hwidDeviceLimit"] >= 15

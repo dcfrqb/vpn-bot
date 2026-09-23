@@ -18,7 +18,8 @@ app/
   infra/         adapters to the outside world
     redis/       flags (set_once, counters, once-markers), locks (user lock,
                  LeaderLock), cache (JSON)
-    remnawave/   stream B moves the panel client here
+    remnawave/   client.py (own httpx, 3.4.3), dto.py, gateway.py (stream B);
+                 app/remnawave/client.py is an alias of client.py
     yookassa/    stream A adds the async client here
     telegram_stars.py
   services/
@@ -51,12 +52,12 @@ Nothing in `domain` or `services` imports aiogram or FastAPI.
 
 | Port | Owner | Foundation implementation |
 |---|---|---|
-| RemnaGateway | B | `shims.LegacyRemnaGateway` over RemnaClient (devices raise) |
+| RemnaGateway | B | `infra.remnawave.gateway.HttpRemnaGateway` (shim name `LegacyRemnaGateway` is an alias) |
 | PaymentGateway | A | `shims.LegacyPaymentGateway` (create/get real) |
 | StarsGateway | A | `shims.DisabledStarsGateway` (raises) |
-| ProvisioningService | B | placeholder (raises) |
-| StatusService | B | `shims.LegacyStatusService` over services.users |
-| DevicesService | B | `shims.UnavailableDevicesService` (empty) |
+| ProvisioningService | B | `services.provisioning.PanelProvisioningService` (alias `LegacyProvisioningService`) |
+| StatusService | B | `services.status.PanelStatusService` (alias `LegacyStatusService`) |
+| DevicesService | B | `services.devices.PanelDevicesService` (alias `UnavailableDevicesService`) |
 | CheckoutService | A | `shims.LegacyCheckoutService` (quote/start real) |
 | PromoService | E | placeholder (raises) |
 | Notifier | Foundation | `notifications.TelegramNotifier` |
@@ -69,6 +70,26 @@ Jobs get `ctx.container`; API routes call `app.container.get_container()`.
 To ship a real implementation: add the class in your area, change ONE line in
 `container.build_container`, keep the signature. Tests build containers with
 fakes: `build_container(bot, remna=FakeRemnaGateway(), notifier=RecordingNotifier())`.
+
+## Panel (stream B)
+
+- Panel accounts are created ONLY by `ProvisioningService.grant` (alias
+  `provision`). `/start`, status, devices and the site only look up
+  (`services.accounts.PanelAccounts.find_main`).
+- Payments: `grant(tg, Entitlement(plan_code, source=PAYMENT, payment_id=...),
+  trace_id=..., months=N)` (calendar months from max(now, current expiry)).
+  Promo/trial/admin: `Entitlement(days=N)` or `until=` or `is_lifetime=True`.
+  Optional kwargs: `enable_if_disabled` (admin approved a payment of a
+  DISABLED user), `clear_grace` (default True). Idempotent per `payment_id`,
+  else per `trace_id`. `GrantRefused` (reason `disabled`, `bad_plan`,
+  `bad_entitlement`) = nothing written; `ProvisioningError` = retry.
+- Credits for existing accounts: `add_days`, `add_traffic`, `add_devices`
+  (never lowering, idempotent per trace_id). Refund: `revoke`.
+- Squads: only the bot's tariff squads (and the grace squad) are swapped;
+  manual squads (`*-m`, `*-friend`, `arcadia`) are never written; the HWID
+  limit is never lowered. Squad names are cached 10 min in the gateway.
+- Jobs (default off): `panel_sync` (DB <- panel, never writes the panel),
+  `device_cleanup` (dry run by default), `obhod_lifecycle`.
 
 ## Frozen files
 

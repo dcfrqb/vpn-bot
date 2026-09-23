@@ -113,7 +113,7 @@ async def suppress_expiry_notices(telegram_id: int, expire_at: datetime) -> None
 async def _fetch_all_remna_users(client) -> list:
     """Paginate through Remnawave get_users() and return all user dicts."""
     all_users = []
-    start = 1
+    start = 0  # offset from 0 (06 L2: start=1 skipped the newest user)
     total = None  # filled from first page
     while True:
         try:

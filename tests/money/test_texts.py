@@ -21,7 +21,7 @@ def test_no_em_dash_or_yo_in_string_constants():
 
 
 def test_months_are_pluralized():
-    assert "1 месяц," in T.paid_user("Lite", 1, None)
+    assert "Lite, 1\u00a0месяц\n" in T.paid_user("Lite", 1, None)
     assert "3 месяца" in T.btn_period(3, 329)
     assert "12 месяцев" in T.checkout_screen("Pro", 12, 3999, autorenew=None)
 

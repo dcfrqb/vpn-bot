@@ -267,3 +267,27 @@ async def test_amount_is_recorded_from_provider():
     rec = await _paid_payment(m, deps, plan="lite", months=1)
     await m.fulfillment.process(rec.id, source="webhook")
     assert (await deps.store.get(rec.id)).amount == Decimal(get_plan_price("lite", 1))
+
+
+async def test_grant_gets_calendar_months_and_approval_enables_disabled_user():
+    from app.services.provisioning_rules import GrantRefused
+
+    m, deps = make_money()
+    deps.provisioning.fail_times = 1
+    deps.provisioning.fail_with = GrantRefused("disabled", "panel user is DISABLED")
+    rec = await _paid_payment(m, deps, plan="standard", months=6)
+    assert (await m.fulfillment.process(rec.id, source="webhook")).outcome is Outcome.HELD
+    assert deps.provisioning.calls[-1] == {"tg": TG, "months": 6, "enable_if_disabled": False}
+    assert await m.fulfillment.decide_review(rec.id, 111, approve=True) == "approved"
+    assert deps.provisioning.calls[-1] == {"tg": TG, "months": 6, "enable_if_disabled": True}
+
+
+async def test_bad_plan_refusal_is_held_not_retried():
+    from app.services.provisioning_rules import GrantRefused
+
+    m, deps = make_money()
+    deps.provisioning.fail_times = 5
+    deps.provisioning.fail_with = GrantRefused("bad_plan", "unknown plan")
+    rec = await _paid_payment(m, deps)
+    assert (await m.fulfillment.process(rec.id, source="webhook")).outcome is Outcome.HELD
+    assert "bad_plan" in (await deps.store.get(rec.id)).meta["review_reason"]
