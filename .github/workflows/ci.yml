@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest-cov
+          # greenlet: required at runtime by SQLAlchemy's async engine (used by
+          # alembic env.py and the app's async DB session), but not pinned in
+          # requirements.txt. Installed explicitly here rather than editing
+          # requirements.txt, which src/ owners should do themselves.
+          pip install greenlet
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          pytest tests/ -m "not integration" -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check (undefined names, unused imports, redefinitions)
+        run: ruff check --select F821,F401,F811 src
+
+  alembic:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: crs_user_test
+          POSTGRES_PASSWORD: crs_pass_test
+          POSTGRES_DB: crs_vpn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crs_user_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # see note in the "test" job: greenlet is a runtime dependency of
+          # the async engine alembic/env.py uses, missing from requirements.txt
+          pip install greenlet
+
+      - name: Run migrations against an empty database
+        env:
+          # app/db/migrations/env.py reads settings.DATABASE_URL (app.config.Settings,
+          # itself a plain os.environ / .env read via pydantic-settings) and
+          # rewrites postgresql:// to postgresql+asyncpg:// itself.
+          DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
+        run: |
+          alembic upgrade head
+
+      - name: Check for model/migration drift
+        env:
+          DATABASE_URL: postgresql://crs_user_test:crs_pass_test@localhost:5432/crs_vpn_test
+        run: |
+          alembic check
