@@ -6,10 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.users import (
     get_or_create_telegram_user,
-    update_user_activity,
     get_user_active_subscription
 )
-from app.db.models import TelegramUser, Subscription
 
 
 @pytest.fixture(autouse=True)
@@ -319,7 +317,7 @@ class TestInvalidateLastPlanCache:
 class TestLegacyCutoffConstant:
     def test_cutoff_is_aware_datetime(self):
         from app.core.plans import LEGACY_CUTOFF
-        from datetime import timezone, timedelta as _td
+        from datetime import timedelta as _td
         assert LEGACY_CUTOFF.tzinfo is not None
         assert LEGACY_CUTOFF.tzinfo.utcoffset(LEGACY_CUTOFF) == _td(0)
 

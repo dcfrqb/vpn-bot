@@ -9,17 +9,13 @@ B2: оплаченный срок начинался с now, а не с max(now,
 
 Реальный Postgres: tests/integration/test_b1_b2_real_postgres.py.
 """
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dateutil.relativedelta import relativedelta
 
-from app.db.models import Payment as PaymentModel, Subscription, TelegramUser
+from app.db.models import Subscription, TelegramUser
 from app.services.payments import yookassa as yk
-from app.services.payments.errors import ProvisioningPendingError
-from tests.fakes.remnawave import FakeRemna
 
 
 class _Res:

@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiogram import types
 from fastapi.testclient import TestClient
 
 from app.api import main as api_main
@@ -108,34 +107,5 @@ def test_webhook_rejects_spoofed_cf_header():
     assert r.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_friend_request_escapes_html_in_admin_message():
-    from app.routers import start as start_router
-    from app.services.sync_service import SyncResult
-
-    msg = MagicMock(spec=types.Message)
-    msg.from_user = types.User(id=5, is_bot=False, first_name='<a href="https://evil">Открыть панель</a>',
-                               username="x")
-    msg.answer = AsyncMock()
-    msg.bot = AsyncMock()
-    sync = MagicMock()
-    sync.sync_user_and_subscription = AsyncMock(return_value=SyncResult(False, None, "none", None, "remna"))
-    with patch.object(start_router, "SyncService", return_value=sync), \
-         patch.object(start_router.settings, "ADMINS", [900]):
-        await start_router.cmd_friend(msg)
-    text = msg.bot.send_message.await_args.kwargs["text"]
-    assert "<a href" not in text
-    assert "&lt;a href" in text
 
 
-@pytest.mark.asyncio
-async def test_sun718_admin_notify_escapes():
-    from app.routers import start as start_router
-
-    bot = AsyncMock()
-    with patch.object(start_router.settings, "ADMINS", [900]):
-        await start_router._sun718_notify_admins(
-            bot, user_id=1, username="@u", name="<b>x</b><script>", title="t", body="b",
-        )
-    text = bot.send_message.await_args.kwargs["text"]
-    assert "<script>" not in text and "&lt;script&gt;" in text

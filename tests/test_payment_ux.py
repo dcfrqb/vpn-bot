@@ -1,9 +1,8 @@
 """Тесты Payment UX: rate limit, check_payment external_id, webhook secret, autorecheck guard, NOT_FOUND"""
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from app.services.cache import check_payment_rate_limit, try_schedule_autorecheck
-from app.keyboards import get_payment_keyboard, get_new_payment_keyboard
 
 
 class TestCheckPaymentRateLimit:
@@ -43,20 +42,6 @@ class TestCheckPaymentRateLimit:
             mock_redis.setex.assert_not_called()
 
 
-class TestGetPaymentKeyboard:
-    """Тесты клавиатуры оплаты с external_id"""
-
-    def test_keyboard_includes_external_id_in_check_button(self):
-        """Кнопка «Проверить оплату» содержит external_id в callback_data"""
-        kb = get_payment_keyboard("https://pay.example.com/xxx", "ext-payment-123")
-        check_btn = None
-        for row in kb.inline_keyboard:
-            for btn in row:
-                if hasattr(btn, "callback_data") and btn.callback_data and "check_payment" in btn.callback_data:
-                    check_btn = btn
-                    break
-        assert check_btn is not None
-        assert check_btn.callback_data == "check_payment:ext-payment-123"
 
 
 class TestWebhookSecret:
@@ -112,20 +97,6 @@ class TestAutorecheckSchedulingGuard:
             assert ok is True
 
 
-class TestNotNotFoundKeyboard:
-    """Тесты клавиатуры NOT_FOUND"""
-
-    def test_get_new_payment_keyboard_has_create_button(self):
-        """get_new_payment_keyboard содержит кнопку «Создать новый платёж»"""
-        kb = get_new_payment_keyboard()
-        create_btn = None
-        for row in kb.inline_keyboard:
-            for btn in row:
-                if hasattr(btn, "text") and "Создать" in btn.text:
-                    create_btn = btn
-                    break
-        assert create_btn is not None
-        assert create_btn.callback_data == "buy_subscription"
 
 
 class TestRateLimitFallback:

@@ -11,7 +11,7 @@ import pytest
 
 from app.services.payments import refunds as rf
 from tests.fakes.remnawave import FakeRemna
-from tests.test_hotfix_refunds import _call, _iso, _setup
+from tests.test_hotfix_refunds import _call, _setup
 
 TG_ID = 555  # из _setup в test_hotfix_refunds
 

@@ -6,14 +6,9 @@
 """
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
-import pytest
 
-from app.db.models import Payment as PaymentModel, Subscription, TelegramUser
-from app.services.payments import yookassa as yk
-from app.services.payments.errors import ProvisioningPendingError
-from tests.fakes.remnawave import FakeRemna
 
 
 class _Res:

@@ -10,8 +10,8 @@
 - Webhook → 503 при ProvisioningPendingError
 """
 import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, Mock
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.payments.errors import ProvisioningPendingError
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser

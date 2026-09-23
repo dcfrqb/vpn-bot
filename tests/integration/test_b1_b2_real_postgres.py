@@ -10,11 +10,9 @@ B2: оплаченный срок добавляется к текущему exp
 """
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
-from dateutil.relativedelta import relativedelta
 
 pytestmark = [pytest.mark.integration]
 

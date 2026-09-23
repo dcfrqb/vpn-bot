@@ -76,7 +76,7 @@ async def test_payment_and_refund_modules_share_public_dedup():
 
 @pytest.mark.asyncio
 async def test_user_lock_uses_shared_primitive():
-    from app.services.user_lock import user_action_lock
+    from app.infra.redis.locks import user_action_lock
 
     redis = FakeRedis()
     with patch("app.services.cache.get_redis_client", return_value=redis):

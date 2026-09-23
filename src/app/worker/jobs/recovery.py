@@ -4,9 +4,9 @@
 15 minutes are re-checked with YooKassa, paid-but-not-granted ones are
 granted again (idempotent), held payments are left to admins.
 
-Until the orchestrator registers ``Job("payment_recovery", recovery.run, 300,
-flag="RECOVERY")`` (requests/A.md), the same sweep runs inside the 2.x
-SubscriptionChecker through services.payments.recovery.retry_needs_provisioning.
+Registered as ``payment_recovery`` (every 300 s, TASK_RECOVERY_ENABLED, the
+2.x flag, default on). 2.x rows are retried only when 2.x flagged them
+(needs_provisioning), see payments.store.stuck_is_recoverable.
 """
 from __future__ import annotations
 

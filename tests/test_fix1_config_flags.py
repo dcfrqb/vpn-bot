@@ -1,6 +1,6 @@
 """Фикс-раунд 1: терпимый разбор PROMO_*/TASK_* флагов (старт не падает на
 странном значении) и выключатели фоновых задач для отладочного бота."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

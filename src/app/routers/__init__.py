@@ -1,1 +1,2 @@
-from . import start  # noqa: F401 (импорт ради регистрации хендлеров)
+"""2.x routers package: only site_login is left after the 3.0 cutover
+(3.0 routers live in app.bot.routers)."""

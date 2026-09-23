@@ -4,9 +4,7 @@
 @ника (tg_Ivan). Раньше бот находил существующего юзера по username, переписывал
 ему telegramId и отдавал чужую подписку/ссылку. Теперь чужого не трогаем.
 """
-from datetime import datetime
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 

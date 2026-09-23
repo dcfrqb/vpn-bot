@@ -9,7 +9,6 @@
 """
 import pytest
 import sys
-import importlib
 from pathlib import Path
 
 
@@ -47,17 +46,6 @@ def test_import_bot_modules():
     )
 
 
-def test_import_sync_service():
-    """Тест: импорт SyncService"""
-    try:
-        from app.services.sync_service import SyncService, SyncResult, RemnaUnavailableError
-        assert SyncService is not None
-        assert SyncResult is not None
-        assert RemnaUnavailableError is not None
-    except ImportError as e:
-        pytest.fail(f"Не удалось импортировать SyncService: {e}")
-
-
 def test_import_remna_client():
     """Тест: импорт RemnaClient"""
     try:
@@ -85,17 +73,6 @@ def test_import_cache_layer():
         pytest.fail(f"Не удалось импортировать cache layer: {e}")
 
 
-def test_import_handlers():
-    """Тест: импорт handlers"""
-    try:
-        from app.routers.start import router as start_router
-        from app.routers.admin import router as admin_router
-        from app.legacy.routers.payments import router as payments_router
-        assert start_router is not None
-        assert admin_router is not None
-        assert payments_router is not None
-    except ImportError as e:
-        pytest.fail(f"Не удалось импортировать handlers: {e}")
 
 
 def test_import_models():
@@ -136,21 +113,6 @@ def test_config_validation():
     _ = settings.ADMINS
 
 
-def test_no_circular_imports():
-    """Тест: основные модули импортируются в чистом интерпретаторе в разном порядке"""
-    modules = [
-        "app.config",
-        "app.remnawave.client",
-        "app.services.cache",
-        "app.services.sync_service",
-        "app.routers.start",
-        "app.api.main",
-        "app.main",
-    ]
-    for order in (modules, list(reversed(modules))):
-        _import_in_subprocess("import importlib\n" + "\n".join(
-            f"importlib.import_module({m!r})" for m in order
-        ))
 
 
 def test_project_structure():
@@ -173,7 +135,6 @@ def test_import_without_services():
     try:
         # Импортируем модули, которые могут пытаться подключиться к сервисам
         from app.services.cache import get_redis_client
-        from app.db.session import SessionLocal
         from app.remnawave.client import RemnaClient
         
         # Проверяем, что объекты создаются (даже если сервисы недоступны)

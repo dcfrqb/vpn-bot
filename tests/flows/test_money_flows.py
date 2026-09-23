@@ -230,7 +230,7 @@ async def test_gifts_hidden_and_refused_when_flag_off(money_flow):
     f = money_flow
     await f.press(Nav(s="plans").pack())
     assert not [b for b in _buttons(_last_screen(f)) if (b["data"] or "").startswith("gf:")]
-    await f.press("gf:buy")
+    await f.press("gf:buy:")
     assert f.answers()[-1].params.get("show_alert")
 
 

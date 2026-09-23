@@ -3,15 +3,11 @@
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
-from typing import Dict, Any
 
 from app.services.payments.yookassa import (
-    create_payment,
     check_payment_status,
 )
-from app.services.payments.errors import ProvisioningPendingError
 from app.db.models import Payment as PaymentModel, Subscription, TelegramUser
-from app.config import settings
 
 
 @pytest.fixture
@@ -103,79 +99,10 @@ def webhook_data_succeeded():
     }
 
 
-@pytest.mark.asyncio
-async def test_create_payment_success(mock_payment_object):
-    """Тест успешного создания платежа"""
-    with patch('app.services.payments.yookassa._create_yookassa_payment', new_callable=AsyncMock) as mock_create, \
-         patch('app.services.payments.yookassa.SessionLocal') as mock_session_local, \
-         patch('app.services.payments.yookassa.settings') as mock_settings:
-        
-        # Мокируем настройки YooKassa
-        mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
-        mock_settings.YOOKASSA_API_KEY = "test_api_key"
-        mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
-        
-        # Настройка моков (3.0: async-клиент возвращает JSON YooKassa)
-        mock_create.return_value = _payment_json(mock_payment_object)
-        
-        mock_session = AsyncMock()
-        mock_session_local.return_value.__aenter__.return_value = mock_session
-        mock_session_local.return_value.__aexit__.return_value = None
-        
-        # Мокируем запрос к БД
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None  # Платеж не существует
-        mock_session.execute.return_value = mock_result
-        
-        # Вызываем функцию
-        payment_url, external_id = await create_payment(
-            amount_rub=129,
-            description="CRS VPN - Lite (1 месяц)",
-            user_id=123456789,
-            plan_code="lite",
-            period_months=1,
-        )
-        
-        # Проверки
-        assert payment_url == "https://yookassa.ru/checkout/payments/test_payment_123"
-        assert external_id == "test_payment_123"
-        mock_create.assert_awaited_once()
-        mock_session.add.assert_called_once()
-        mock_session.commit.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_create_payment_without_db(mock_payment_object):
-    """Тест создания платежа без БД — теперь должен вызывать исключение"""
-    with patch('app.services.payments.yookassa._create_yookassa_payment', new_callable=AsyncMock) as mock_create, \
-         patch('app.services.payments.yookassa.SessionLocal', None), \
-         patch('app.services.payments.yookassa.settings') as mock_settings:
-        
-        mock_settings.YOOKASSA_SHOP_ID = "test_shop_id"
-        mock_settings.YOOKASSA_API_KEY = "test_api_key"
-        mock_settings.YOOKASSA_RETURN_URL = "https://example.com/return"
-        
-        mock_create.return_value = _payment_json(mock_payment_object)
-        
-        with pytest.raises(ValueError, match="БД не настроена"):
-            await create_payment(
-                amount_rub=129,
-                description="CRS VPN - Lite (1 месяц)",
-                user_id=123456789,
-                plan_code="lite",
-                period_months=1,
-            )
 
 
-@pytest.mark.asyncio
-async def test_create_payment_missing_config():
-    """Тест создания платежа без настроек"""
-    with patch('app.services.payments.yookassa.settings') as mock_settings:
-        mock_settings.YOOKASSA_SHOP_ID = None
-        mock_settings.YOOKASSA_API_KEY = None
-        
-        with pytest.raises(ValueError, match="YOOKASSA_SHOP_ID и YOOKASSA_API_KEY должны быть настроены"):
-            await create_payment(129, "Test", 123456789, plan_code="lite", period_months=1)
 
 
 # test_process_payment_webhook_pending: removed in 3.0 with the 2.x provisioning (tests/money/test_webhook.py and test_fulfillment.py)

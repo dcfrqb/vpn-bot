@@ -3,13 +3,11 @@
 Без сети: YooKassa и Remnawave не вызываются, БД — фейковая сессия.
 """
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from aiogram import types
 
 from app.core.plans import get_expected_amount, get_plan_price
-from app.legacy.routers import payments as legacy_payments
 from app.services.payments import yookassa as yk
 
 
@@ -17,51 +15,16 @@ from app.services.payments import yookassa as yk
 # Разбор callback_data
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "data,expected",
-    [
-        ("pay_yookassa_pro_12", ("pro", 12)),
-        ("pay_yookassa_pro_12_1", ("pro", 12)),        # старый формат: сумма игнорируется
-        ("pay_yookassa_lite_1_129", ("lite", 1)),
-        ("pay_yookassa_basic", ("basic", 1)),           # самый старый формат
-        ("pay_yookassa_pro_x", None),
-        ("pay_yookassa_pro_0", None),
-        ("pay_yookassa_pro_-1", None),
-        ("pay_yookassa_", None),
-        ("pay_yookassa_pro_1_2_3", None),
-    ],
-)
-def test_parse_pay_callback(data, expected):
-    assert legacy_payments.parse_pay_callback(data) == expected
 
 
 # --------------------------------------------------------------------------
 # Какие покупки разрешены
 # --------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_menu_plan_priced_from_catalog():
-    with patch("app.services.users.get_user_last_plan", AsyncMock(return_value=None)):
-        assert await legacy_payments.resolve_purchase_amount("pro", 12, 1) == get_plan_price("pro", 12)
-        assert await legacy_payments.resolve_purchase_amount("lite", 1, 1) == 129
 
 
-@pytest.mark.asyncio
-async def test_unsold_period_and_service_plans_rejected():
-    with patch("app.services.users.get_user_last_plan", AsyncMock(return_value=None)):
-        assert await legacy_payments.resolve_purchase_amount("pro", 600, 1) == 0
-        assert await legacy_payments.resolve_purchase_amount("trial", 1, 1) == 0
-        assert await legacy_payments.resolve_purchase_amount("obhod_250", 1, 1) == 0
-        assert await legacy_payments.resolve_purchase_amount("nope", 1, 1) == 0
 
 
-@pytest.mark.asyncio
-async def test_legacy_plan_only_for_its_owner():
-    with patch("app.services.users.get_user_last_plan", AsyncMock(return_value="basic")):
-        assert await legacy_payments.resolve_purchase_amount("basic", 3, 1) == 249
-        assert await legacy_payments.resolve_purchase_amount("premium", 1, 1) == 0
-    with patch("app.services.users.get_user_last_plan", AsyncMock(return_value="lite")):
-        assert await legacy_payments.resolve_purchase_amount("basic", 1, 1) == 0
 
 
 def _pay_callback(data: str) -> MagicMock:
@@ -75,44 +38,14 @@ def _pay_callback(data: str) -> MagicMock:
     return cb
 
 
-@pytest.mark.asyncio
-async def test_forged_amount_in_callback_is_ignored():
-    cb = _pay_callback("pay_yookassa_pro_12_1")
-    create = AsyncMock(return_value=("https://pay.example/x", "ext-1"))
-    with patch.object(legacy_payments, "create_payment", create), \
-         patch.object(legacy_payments, "try_schedule_autorecheck", AsyncMock(return_value=False)), \
-         patch("app.services.users.get_user_last_plan", AsyncMock(return_value=None)):
-        await legacy_payments.handle_yookassa_payment(cb)
-    create.assert_awaited_once()
-    assert create.await_args.kwargs["amount_rub"] == 3999
-    assert create.await_args.kwargs["plan_code"] == "pro"
-    assert create.await_args.kwargs["period_months"] == 12
 
 
-@pytest.mark.asyncio
-async def test_forged_legacy_plan_not_sold_to_stranger():
-    cb = _pay_callback("pay_yookassa_basic_12_1")
-    create = AsyncMock()
-    with patch.object(legacy_payments, "create_payment", create), \
-         patch("app.services.users.get_user_last_plan", AsyncMock(return_value=None)):
-        await legacy_payments.handle_yookassa_payment(cb)
-    create.assert_not_awaited()
-    assert "недоступен" in cb.message.edit_text.await_args.args[0]
 
 
 # --------------------------------------------------------------------------
 # create_payment сам отказывает в неверной сумме (до вызова YooKassa)
 # --------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_create_payment_rejects_wrong_amount():
-    with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
-         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as yk_create:
-        with pytest.raises(ValueError):
-            await yk.create_payment(amount_rub=1, description="x", user_id=1, plan_code="pro", period_months=12)
-        with pytest.raises(ValueError):
-            await yk.create_payment(amount_rub=0, description="x", user_id=1, plan_code="trial", period_months=1)
-        yk_create.assert_not_called()
 
 
 # --------------------------------------------------------------------------
@@ -186,41 +119,7 @@ def test_quote_purchase_is_the_single_rule():
     assert quote_purchase("obhod_250", 1, allow_obhod_package=True) == get_expected_amount("obhod_250", 1)
 
 
-def test_router_reexports_checkout_resolver():
-    from app.services import checkout
-
-    assert legacy_payments.resolve_purchase_amount is checkout.resolve_purchase_amount
 
 
-@pytest.mark.asyncio
-async def test_create_payment_computes_amount_without_caller_amount():
-    from app.services.payments import yookassa as yk
-
-    created = {}
-
-    async def _create(data, key):
-        created["data"] = data
-        return {"id": "pay-900000001", "status": "pending",
-                "confirmation": {"confirmation_url": "https://pay.example/1"}}
-
-    with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
-         patch.object(yk.settings, "YOOKASSA_SHOP_ID", "shop"), \
-         patch.object(yk.settings, "YOOKASSA_API_KEY", "key"), \
-         patch.object(yk.settings, "YOOKASSA_RETURN_URL", "https://example.com/r"), \
-         patch.object(yk, "_create_yookassa_payment", side_effect=_create), \
-         patch.object(yk, "SessionLocal", None):
-        with pytest.raises(ValueError, match="БД не настроена"):
-            await yk.create_payment(description="x", user_id=900000001, plan_code="standard", period_months=3)
-    assert created["data"]["amount"]["value"] == f"{get_plan_price('standard', 3)}.00"
 
 
-@pytest.mark.asyncio
-async def test_create_payment_refuses_legacy_plan_to_stranger():
-    from app.services.payments import yookassa as yk
-
-    with patch("app.services.blocklist.get_user_block_reason", AsyncMock(return_value=None)), \
-         patch("app.services.users.get_user_last_plan", AsyncMock(return_value="lite")), \
-         patch.object(yk, "_create_yookassa_payment", AsyncMock()) as create:
-        with pytest.raises(ValueError, match="недоступен"):
-            await yk.create_payment(description="x", user_id=900000001, plan_code="basic", period_months=1)
-    create.assert_not_called()

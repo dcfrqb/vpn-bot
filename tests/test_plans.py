@@ -1,12 +1,10 @@
 """Тесты для справочника тарифов (core.plans)"""
-import pytest
 from app.core.plans import (
     LEGACY_PLAN_CODES,
     MENU_PLAN_CODES,
     NEW_PLAN_CODES,
     PLAN_CATALOG,
     PLAN_NAMES,
-    VALID_PLAN_CODES,
     get_plan_device_limit,
     get_plan_features,
     get_plan_name,

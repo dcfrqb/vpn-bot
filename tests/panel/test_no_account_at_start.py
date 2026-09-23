@@ -1,13 +1,12 @@
 """Panel accounts are created only by ProvisioningService (stream B).
 
-/start (SyncService) and get_or_create_telegram_user only look up; the FK
+/start (get_or_create_telegram_user) only looks up; the FK
 invariant (telegram_users row first) is kept; a found account is linked."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
 from app.services import remna_service
-from app.services.sync_service import SyncService
 from tests.fakes.remnawave import FakeRemna
 
 
@@ -20,15 +19,6 @@ async def test_ensure_user_lookup_only_does_not_create():
         fake.add_user(501, "u", telegram_id=7)
         assert await remna_service.ensure_user_in_remnawave(7, create=False) == "501"
         link.assert_awaited()
-
-
-async def test_start_sync_never_creates_a_panel_account():
-    client = AsyncMock()
-    client.get_user_with_subscription_by_telegram_id = AsyncMock(return_value=None)
-    with patch("app.services.sync_service.ensure_user_in_remnawave", AsyncMock(return_value=None)) as ensure:
-        r = await SyncService(remna_client=client).sync_user_and_subscription(7, use_cache=False)
-    assert ensure.await_args.kwargs["create"] is False
-    assert r.subscription_status == "none" and r.user_remna_uuid is None and not r.is_new_user_created
 
 
 async def test_get_or_create_telegram_user_looks_up_only():

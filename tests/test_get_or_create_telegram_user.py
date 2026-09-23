@@ -3,8 +3,6 @@
 строку в Postgres `telegram_users`, иначе FK-зависимые insert-ы в payments
 падают с ForeignKeyViolationError.
 """
-import sys
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

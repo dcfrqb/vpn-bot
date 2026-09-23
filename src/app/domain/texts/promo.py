@@ -24,6 +24,8 @@ BTN_WRITE_USER = "📩 Написать пользователю"
 
 ENTER_CODE = "Пришли промокод одним сообщением. Отмена: /cancel"
 ENTER_CANCELLED = "Ввод промокода отменен."
+FRIEND_REQUEST_CANCELLED = "Запрос отменен"
+FRIEND_USE_COMMAND = "Используй команду /friend"
 CODES_DISABLED = "Промокоды сейчас не принимаются."
 GIFTS_DISABLED = "Подарки пока не активируются. Попробуй позже."
 
@@ -117,7 +119,7 @@ def gift_link_text(period_title: str, link: str) -> str:
 
 __all__ = [
     "BTN_CONNECT", "BTN_MENU", "BTN_ENTER_CODE", "BTN_TRIAL", "BTN_WRITE_USER",
-    "ENTER_CODE", "ENTER_CANCELLED", "CODES_DISABLED", "GIFTS_DISABLED",
+    "ENTER_CODE", "ENTER_CANCELLED", "CODES_DISABLED", "FRIEND_REQUEST_CANCELLED", "FRIEND_USE_COMMAND", "GIFTS_DISABLED",
     "REQUEST_SENT", "REQUEST_ALREADY_ACTIVE", "REQUEST_CHECK_FAILED", "REQUEST_DUPLICATE",
     "ACCESS_GRANTED", "ACCESS_REJECTED", "applied_text", "outcome_text", "gift_link_text",
 ]

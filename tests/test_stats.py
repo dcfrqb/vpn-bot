@@ -2,10 +2,9 @@
 """Тесты для сервиса статистики"""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timedelta
 
 from app.services.stats import get_statistics, get_users_list, get_payments_list
-from app.db.models import TelegramUser, Subscription, Payment
+from app.db.models import TelegramUser, Payment
 
 
 @pytest.mark.asyncio

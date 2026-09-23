@@ -1,16 +1,17 @@
 """Callback matrix: every callback the bot can receive resolves to exactly one handler.
 
 Resolution is computed on the REAL dispatcher by evaluating router and
-handler filters (no handler is executed):
+handler filters (no handler is executed). After the 3.0 cutover there are no
+2.x UI routers left:
 
   * a packed 3.0 callback (sample of every class in app.bot.callbacks) must be
-    accepted by exactly ONE handler of the new routers - unless its owner
-    stream has not landed yet (PENDING_PACKED). A stream that ships the
-    handler removes the entry; the test fails if an entry is stale;
-  * a 2.x string (LEGACY_SAMPLES) must map to the expected alias key and
-    packed rewrite, and then resolve to exactly one handler: the new one when
-    a new handler accepts the rewrite, otherwise exactly one specific 2.x
-    handler, or (no specific handler) the 2.x catch-all legacy_callbacks.
+    accepted by exactly ONE specific handler (the ``r3_fallback`` catch-all
+    does not count);
+  * a 2.x string still sitting in users' chats (LEGACY_SAMPLES: every string
+    the 2.1.1 code ever produced) must map to the expected alias key and
+    packed rewrite, and the rewrite must reach exactly ONE specific handler.
+    Only the strings in BY_DESIGN_FALLBACK land on the fallback (answer +
+    main menu); ``sitelogin:*`` goes to the site_login router untouched.
 """
 import pytest
 
@@ -19,7 +20,8 @@ from app.bot.legacy_aliases import NATIVE_LEGACY_STRINGS, find_alias, rewrite
 from app.bot.routers import NEW_ROUTER_MODULES
 from tests.fakes.bot import callback_update
 
-CATCH_ALL = ("legacy_callbacks", "legacy_callback_handler")
+FALLBACK = "r3_fallback"
+SITE_LOGIN = "site_login"
 
 # One worst-case-ish sample per packed class/area -> owner stream.
 PACKED_SAMPLES = {
@@ -42,15 +44,6 @@ PACKED_SAMPLES = {
     cb.BcAdm(a="new").pack(): "E",
     cb.Gift(a="buy").pack(): "A",
 }
-# Streams delete their entries when their handlers land: add the stream letter
-# to LANDED_STREAMS (one line per stream keeps merges trivial).
-LANDED_STREAMS = {
-    "A",
-    "E",
-    "D",
-}
-PENDING_PACKED = {k for k, owner in PACKED_SAMPLES.items() if owner not in LANDED_STREAMS}
-
 # 2.x strings (every producer in the 2.1.1 code) -> (alias key, packed rewrite or None).
 LEGACY_SAMPLES = {
     "back_to_main": ("back_to_main", "n:main:"),
@@ -106,13 +99,37 @@ LEGACY_SAMPLES = {
     "rv_ok:42": ("review", "av:ok:42"),
     "rv_no:42": ("review", "av:no:42"),
     "sitelogin:confirm:abc": ("sitelogin", None),
+    # the rest of the 2.1.1 producers (keyboards, ScreenManager, admin, payments)
+    "plan_premium_6": ("plan_period", "pe:premium:6"),
+    "check_payment": ("check_payment_bare", None),
+    "ui:main_menu:open:-": ("ui", "n:main_menu:open"),
+    "ui:subscription_plans:back:-": ("ui", "n:subscription_plans:back"),
+    "ui:subscription_plans:extend:-": ("ui", "n:subscription_plans:extend"),
+    "ui:subscription_plans:select:pro": ("ui", "n:subscription_plans:select.pro"),
+    "ui:subscription_plans:buy_obhod:obhod_250": ("ui", "n:subscription_plans:buy_obhod.obhod_250"),
+    "ui:connect:back:-": ("ui", "n:connect:back"),
+    "ui:connect_success:back:-": ("ui", "n:connect_success:back"),
+    "ui:help:back:-": ("ui", "n:help:back"),
+    "ui:profile:back:-": ("ui", "n:profile:back"),
+    "ui:error:back:-": ("ui", "n:error:back"),
+    "ui:subscription:back:-": ("ui", "n:subscription:back"),
+    "ui:subscription_payment:back:-": ("ui", "n:subscription_payment:back"),
+    "ui:admin_panel:refresh:-": ("ui", "n:admin_panel:refresh"),
+    "ui:admin_stats:refresh:-": ("ui", "n:admin_stats:refresh"),
+    "ui:admin_users:open:-": ("ui", "n:admin_users:open"),
+    "ui:admin_users:back:-": ("ui", "n:admin_users:back"),
+    "ui:admin_payments:open:-": ("ui", "n:admin_payments:open"),
+    "ui:admin_payments:filter:succeeded": ("ui", "n:admin_payments:filter.succeeded"),
+    "admin_grant_17_basic_1": ("admin_grant", "ad:access:grant:17.basic.1"),
+    "friend_grant_3m_900000101": ("friend_grant", "ad:friend:grant_3m:900000101"),
+    "admin_promo_grant_1m_900000101": ("admin_promo_grant", "ad:promo_req:grant_1m:900000101"),
+    "admin_promo_grant_forever_900000101": ("admin_promo_grant", "ad:promo_req:grant_forever:900000101"),
 }
 
-# 2.x overlaps that exist in 2.1.1 (aiogram takes the first registered one).
-# Listed so the matrix stays honest; cutover removes them with the old routers.
-KNOWN_LEGACY_OVERLAPS = {
-    "admin_grant_forever_17": ("admin", "admin_grant_forever"),
-}
+# 2.x strings with no 3.0 target on purpose: the fallback answers them and opens
+# the main menu. pay_yookassa_obhod_*: 2.1 already refused to sell packages from
+# that button; bare check_payment had no payment id.
+BY_DESIGN_FALLBACK = {"pay_yookassa_obhod_250_1", "check_payment"}
 
 NEW_NAMES = {m.rsplit(".", 1)[-1] for m in NEW_ROUTER_MODULES}
 
@@ -141,19 +158,17 @@ def _user():
     return user()
 
 
-def _is_new(router_name: str) -> bool:
-    return router_name.startswith("r3_")
+def _specific(found):
+    return [h for h in found if h[0] != FALLBACK]
 
 
 async def test_every_packed_callback_resolves_to_exactly_one_new_handler(flow):
     problems = []
-    for data, owner in PACKED_SAMPLES.items():
-        found = [h for h in await _accepting(flow.dp, flow.bot, data) if _is_new(h[0])]
-        if data in PENDING_PACKED:
-            if found:
-                problems.append(f"{data}: handled by {found}, remove it from PENDING_PACKED (stream {owner})")
-        elif len(found) != 1:
-            problems.append(f"{data}: expected 1 new handler, got {found}")
+    for data in PACKED_SAMPLES:
+        found = await _accepting(flow.dp, flow.bot, data)
+        specific = _specific(found)
+        if len(specific) != 1 or not specific[0][0].startswith("r3_"):
+            problems.append(f"{data}: expected 1 specific new handler, got {found}")
     assert not problems, "\n".join(problems)
 
 
@@ -168,27 +183,22 @@ async def test_every_legacy_string_maps_to_expected_alias(legacy):
 
 @pytest.mark.parametrize("legacy", sorted(LEGACY_SAMPLES) + list(NATIVE_LEGACY_STRINGS))
 async def test_every_legacy_string_resolves_to_exactly_one_handler(flow, legacy):
-    packed = rewrite(legacy)
-    if packed:
-        new = [h for h in await _accepting(flow.dp, flow.bot, packed) if _is_new(h[0])]
-        assert len(new) <= 1, f"{legacy} -> {packed}: several new handlers {new}"
-        if new:
-            return  # the alias middleware hands it to that one new handler
-    found = await _accepting(flow.dp, flow.bot, legacy)
-    if legacy in NATIVE_LEGACY_STRINGS:
-        # bc:unsub / bc:close are valid packed Bc callbacks: the new Bc handler
-        # (stream E) takes them over directly, exactly one new handler.
-        new = [h for h in found if _is_new(h[0])]
-        assert len(new) == 1, f"{legacy}: expected one new Bc handler, got {new}"
+    target = rewrite(legacy) or legacy
+    found = await _accepting(flow.dp, flow.bot, target)
+    specific = _specific(found)
+    if legacy.startswith("sitelogin:"):
+        assert [h[0] for h in specific] == [SITE_LOGIN]
         return
-    assert not [h for h in found if _is_new(h[0])], "a new handler must not take raw 2.x strings"
-    specific = [h for h in found if h != CATCH_ALL]
-    if legacy in KNOWN_LEGACY_OVERLAPS:
-        assert specific[0] == KNOWN_LEGACY_OVERLAPS[legacy]
+    if legacy in BY_DESIGN_FALLBACK:
+        assert not specific and [h[0] for h in found] == [FALLBACK]
         return
-    assert len(specific) <= 1, f"{legacy}: several 2.x handlers {specific}"
-    if not specific:
-        assert CATCH_ALL in found
+    assert len(specific) == 1, f"{legacy} -> {target}: expected exactly one handler, got {found}"
+    assert specific[0][0].startswith("r3_")
+
+
+async def test_unknown_callback_lands_on_the_fallback_only(flow):
+    found = await _accepting(flow.dp, flow.bot, "totally_unknown_button")
+    assert [h[0] for h in found] == [FALLBACK]
 
 
 def test_packed_samples_cover_every_callback_class():

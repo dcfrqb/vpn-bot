@@ -1,7 +1,7 @@
 """Admin: panel home and stats (Adm s=panel|stats, /admin, /stats). Owner: E.
 
 Old buttons land here through aliases: admin_panel, admin_back, admin_stats
-(Adm) and ui:admin_panel:* (Nav s=admin_panel). Admins only (AdminGuard).
+(Adm) ui:admin_panel:* (Nav s=admin_panel) and ui:admin_stats:* (Nav s=admin_stats). Admins only (AdminGuard).
 """
 from __future__ import annotations
 
@@ -39,5 +39,6 @@ async def cmd_stats(message: Message) -> None:
 
 
 @router.callback_query(Adm.filter(F.s == "stats"))
+@router.callback_query(Nav.filter(F.s == "admin_stats"))
 async def cb_stats(callback: CallbackQuery) -> None:
     await render(callback, *V.stats(await bot_stats()))

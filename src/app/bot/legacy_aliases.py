@@ -7,13 +7,14 @@ middleware maps each such string to a packed 3.0 callback:
   1. find the alias (ordered table below; first match wins);
   2. INCR ``legacy_hits:<alias key>`` in Redis (fail-open) so we can see when
      an alias is dead and can be dropped;
-  3. build the packed callback; if some handler of the NEW routers
+  3. build the packed callback; if some handler of the 3.0 routers
      (app.bot.routers) accepts the rewritten event, the event continues
-     with the new ``data``; otherwise the ORIGINAL event continues and the
-     2.x handler answers it exactly as before.
+     with the new ``data``; otherwise the ORIGINAL event continues (after
+     the 3.0 cutover only the site_login router and the r3_fallback
+     catch-all are left for it).
 
-So an alias "switches on" by itself the moment a stream registers a handler
-for its target, with no edit here. Money never comes from the old string:
+tests/flows/test_callback_matrix.py proves every 2.1.1 string reaches exactly
+one specific 3.0 handler. Money never comes from the old string:
 ``pay_yookassa_<plan>_<months>_<amount>`` maps to Period(plan, months).
 
 The rewritten event is a ``model_copy`` of the original CallbackQuery: it

@@ -9,9 +9,7 @@
 Здесь — только тесты, которые можно запустить в локальном venv без тяжёлых зависимостей.
 """
 import sys
-import types as pytypes
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------

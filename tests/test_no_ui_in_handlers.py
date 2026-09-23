@@ -8,12 +8,10 @@
 - Исключения только через whitelist с комментариями
 """
 import ast
-import os
 from pathlib import Path
 import pytest
 from tests.ui_guards_whitelist import (
     WHITELIST_FILES,
-    ALLOWED_PATTERNS,
     REQUIRED_COMMENT_PATTERN
 )
 

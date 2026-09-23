@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.payments import yookassa as yk
 from app.services.remna_tariff import RemnaUserDisabledError, apply_tariff_to_remna_user
 from tests.fakes.redis import FakeRedis
 from tests.fakes.remnawave import FakeRemna

@@ -17,7 +17,8 @@ from app.utils.html import safe_format_user_name
 router = Router(name="r3_menu")
 
 # ui: alias reuses the 2.x screen ids; back_to_main/refresh_info map to "main".
-_MAIN_SCREENS = ("main", "main_menu", "plan")
+# Retired 2.x screens (profile, error pages) also land on the main menu.
+_MAIN_SCREENS = ("main", "main_menu", "plan", "profile", "error", "access_denied", "remna_unavailable")
 
 
 async def show_main_screen(event, *, force: bool = False, answer_callback: bool = True, notice: "str | None" = None, **data) -> None:

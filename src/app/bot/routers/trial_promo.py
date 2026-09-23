@@ -1,9 +1,9 @@
 """User-side promo commands and buttons (stream E).
 
 /trial, /solokhin, /sun718, /promo [code], PromoAct(enter|trial|apply),
-Gift(claim), /friend (access request) and /admin from a non-admin (promo
-request, PROMO_ADMIN_ENABLED). Included into the promo_deeplink router
-(see its module docstring), so these commands win over 2.x routers.
+Gift(claim), /friend (access request), the 2.x «friend_request_yes/no»
+buttons (Nav(s="friend_req")) and /admin from a non-admin (promo request,
+PROMO_ADMIN_ENABLED). Registered right after promo_deeplink, before start.
 Everything goes through the PromoEngine (services.promo) and the Notifier.
 """
 from __future__ import annotations
@@ -181,3 +181,16 @@ async def cmd_admin_as_promo(message: Message, container: Any) -> None:
         await render(message, "❌ У тебя нет прав администратора")
         return
     await _access_request(message, container, section="promo_req", title=TA.REQUEST_TITLE_ADMIN)
+
+
+@router.callback_query(Nav.filter(F.s == "friend_req"))
+async def cb_friend_request_legacy(callback: CallbackQuery, callback_data: Nav) -> None:
+    """2.x buttons «friend_request_yes/no» from old /friend confirmations."""
+    if callback_data.p == "no":
+        await callback.answer()
+        try:
+            await callback.message.edit_text(T.FRIEND_REQUEST_CANCELLED, reply_markup=None)
+        except Exception:  # noqa: BLE001 - message too old to edit
+            pass
+        return
+    await callback.answer(T.FRIEND_USE_COMMAND, show_alert=True)

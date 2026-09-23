@@ -1,5 +1,5 @@
 """raw_data в remna_users не должен хранить ключи доступа к VPN."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

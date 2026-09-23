@@ -1,7 +1,5 @@
 """Хотфикс 2.1, п.3: выдача тарифа не затирает ручные сквады и не понижает лимит устройств."""
-from datetime import datetime, timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

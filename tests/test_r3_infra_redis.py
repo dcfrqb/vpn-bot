@@ -16,10 +16,8 @@ def redis():
 
 def test_old_paths_are_the_same_modules():
     import app.services.redis_flags as old_flags
-    import app.services.user_lock as old_lock
 
-    assert old_flags is flags and old_lock is locks
-    from app.services.user_lock import user_action_lock  # noqa: F401
+    assert old_flags is flags
     from app.services.redis_flags import set_once  # noqa: F401
 
 

@@ -80,3 +80,19 @@ async def cmd_devices(message: types.Message, **data) -> None:
     from app.bot.routers.devices import show_devices_screen
 
     await show_devices_screen(message, **data)
+
+
+@router.message(Command("myid"))
+async def cmd_myid(message: types.Message) -> None:
+    from app.config import is_admin
+    from app.domain.texts.common import myid_text
+
+    await message.answer(myid_text(message.from_user.id, is_admin(message.from_user.id)))
+
+
+@router.message(Command("profile"))
+async def cmd_profile(message: types.Message, **data) -> None:
+    """2.x /profile: the profile is the main menu status card in 3.0."""
+    from app.bot.routers.menu import show_main_screen
+
+    await show_main_screen(message, force=True, **data)

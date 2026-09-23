@@ -15,8 +15,8 @@ def build_dispatcher(bot: Bot, storage=None, container=None) -> Dispatcher:
 
     3.0: контейнер портов (app.container), внешние middleware DI, техработ и
     алиасов старых колбэков, порядок роутеров из app.bot.routers.ROUTERS.
-    Поведение 2.1.1 не меняется: новые роутеры пустые, техработы выключены,
-    алиас переписывает колбэк только если его принимает новый роутер.
+    После cutover 3.0 роутеров 2.x нет: старые колбэки переписывает слой
+    алиасов, неизвестные ловит r3_fallback.
     """
     dp = Dispatcher(storage=storage if storage is not None else MemoryStorage())
     logger.info("Диспетчер создан")
@@ -57,12 +57,9 @@ def build_dispatcher(bot: Bot, storage=None, container=None) -> Dispatcher:
     dp.callback_query.middleware(AuthMiddleware())
     logger.info("Middleware подключены")
 
-    # Порядок: site_login -> новые роутеры 3.0 -> роутеры 2.x в порядке 2.1.1
-    # (ui, start, legacy payments, admin_broadcast, admin, legacy_callbacks) ->
-    # глобальный errors-handler. site_login первым: диплинк /start login_* и
-    # callback sitelogin: не должны доходить до cmd_start и catch-all роутеров.
-    # app.routers.payments НЕ регистрируется намеренно (дубль pay_yookassa_).
+    # Порядок: site_login -> роутеры 3.0 (r3_fallback последним) -> глобальный
+    # errors-handler. site_login первым: диплинк /start login_* и callback
+    # sitelogin: не должны доходить до других роутеров.
     include_routers(dp)
-    logger.info("Режим legacy: YooKassa + БД")
     logger.info("Роутеры подключены")
     return dp

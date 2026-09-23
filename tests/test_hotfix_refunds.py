@@ -1,7 +1,7 @@
 """Хотфикс 2.1, п.10: возвраты (refund.succeeded) записываются и отзывают доступ."""
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 

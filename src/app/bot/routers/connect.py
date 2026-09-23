@@ -44,7 +44,7 @@ async def show_connect_screen(event, *, answer_callback: bool = True, **data) ->
     await render(event, text, markup, answer_callback=answer_callback)
 
 
-@router.callback_query(Nav.filter((F.s == "connect") & F.p.in_(_OPEN_PAYLOADS)))
+@router.callback_query(Nav.filter(((F.s == "connect") & F.p.in_(_OPEN_PAYLOADS)) | (F.s == "connect_success")))
 async def open_connect(callback: CallbackQuery, callback_data: Nav, **data) -> None:
     await show_connect_screen(callback, **data)
 

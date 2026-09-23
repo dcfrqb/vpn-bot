@@ -58,3 +58,13 @@ HELP_TEXT = (
     "Не нашел ответ? Напиши в поддержку."
 )
 
+
+# --- fallback router (unknown or retired buttons) and small commands ---
+STALE_BUTTON = "Эта кнопка устарела, открыл главное меню"
+
+
+def myid_text(user_id: int, is_admin: bool) -> str:
+    text = f"🆔 <b>Твой Telegram ID:</b> <code>{int(user_id)}</code>"
+    if is_admin:
+        text += "\n\n✅ Статус: администратор"
+    return text

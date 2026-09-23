@@ -535,66 +535,8 @@ def _mock_buy_obhod_callback(user_id=555):
     return cb
 
 
-@pytest.mark.asyncio
-async def test_buy_obhod_without_active_pro_no_payment():
-    """H1: без активного обхода/Pro платёж за пакет НЕ создаётся."""
-    from app.ui.screens.subscription import SubscriptionPlansScreen
-    from app.services import obhod_service
-
-    cb = _mock_buy_obhod_callback()
-
-    # Делаем пакет покупаемым (реальная цена) и гарантируем «нет активного обхода».
-    with patch.dict(
-        plans.OBHOD_PACKAGE_CATALOG,
-        {"obhod_250": {**plans.OBHOD_PACKAGE_CATALOG["obhod_250"], "price": 199}},
-    ), patch.object(
-        obhod_service, "has_active_obhod", AsyncMock(return_value=False)
-    ), patch(
-        "app.services.payments.yookassa.create_payment", new=AsyncMock()
-    ) as mock_create:
-        result = await SubscriptionPlansScreen().handle_action(
-            action="buy_obhod",
-            payload="obhod_250",
-            message_or_callback=cb,
-            user_id=555,
-        )
-
-    # callback уже отвечен роутером, поэтому отказ показывается редактированием
-    # сообщения, а handle_action возвращает True (действие обработано).
-    assert result is True
-    mock_create.assert_not_called()  # платёж НЕ создан
-    cb.message.edit_text.assert_awaited()
-    assert "Pro" in cb.message.edit_text.await_args.args[0]
 
 
-@pytest.mark.asyncio
-async def test_buy_obhod_with_active_pro_creates_payment():
-    """H1: при активном обходе платёж за пакет создаётся (гейт пропускает)."""
-    from app.ui.screens.subscription import SubscriptionPlansScreen
-    from app.services import obhod_service
-
-    cb = _mock_buy_obhod_callback()
-
-    with patch.dict(
-        plans.OBHOD_PACKAGE_CATALOG,
-        {"obhod_250": {**plans.OBHOD_PACKAGE_CATALOG["obhod_250"], "price": 199}},
-    ), patch.object(
-        obhod_service, "has_active_obhod", AsyncMock(return_value=True)
-    ), patch(
-        "app.services.payments.yookassa.create_payment",
-        new=AsyncMock(return_value=("https://pay/url", "ext-id-1")),
-    ) as mock_create:
-        result = await SubscriptionPlansScreen().handle_action(
-            action="buy_obhod",
-            payload="obhod_250",
-            message_or_callback=cb,
-            user_id=555,
-        )
-
-    assert result is True
-    mock_create.assert_awaited_once()
-    # Пакет передан как plan_code в платёж.
-    assert mock_create.await_args.kwargs["plan_code"] == "obhod_250"
 
 
 @pytest.mark.asyncio
@@ -679,26 +621,6 @@ async def test_get_obhod_link_info_soft_degrades_to_saved_url():
     assert info["active"] is True
 
 
-@pytest.mark.asyncio
-async def test_connect_renderer_pro_link_shown_without_live_traffic():
-    """M3: Pro с сохранённой ссылкой, но без live-остатка → ссылка показана,
-    а не заглушка «готовим ссылку»."""
-    from app.ui.renderers.connect import render_connect_success_with_obhod
-    from app.ui.viewmodels.connect import ConnectViewModel
-
-    vm = ConnectViewModel(
-        has_subscription=True,
-        subscription_url="https://sub/main",
-        status="success",
-        is_pro=True,
-        obhod_url="https://saved/obhod",
-        obhod_used_bytes=None,  # live недоступен
-        obhod_limit_bytes=None,
-        obhod_active=True,
-    )
-    text = await render_connect_success_with_obhod(vm)
-    assert "https://saved/obhod" in text  # ссылка показана
-    assert "Готовим" not in text  # не заглушка
 
 
 # ---------------------------------------------------------------------------
@@ -706,68 +628,10 @@ async def test_connect_renderer_pro_link_shown_without_live_traffic():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_connect_renderer_pro_two_links():
-    from app.ui.renderers.connect import render_connect_success_with_obhod
-    from app.ui.viewmodels.connect import ConnectViewModel
-
-    vm = ConnectViewModel(
-        has_subscription=True,
-        subscription_url="https://sub/main",
-        status="success",
-        is_pro=True,
-        obhod_url="https://sub/obhod",
-        obhod_used_bytes=10 * 1024**3,
-        obhod_limit_bytes=100 * 1024**3,
-        obhod_active=True,
-    )
-    text = await render_connect_success_with_obhod(vm)
-    assert "https://sub/main" in text
-    assert "https://sub/obhod" in text
-    assert "Обход блокировок" in text
     # Остаток трафика обхода рендерер пока не показывает (04 M7, план 3.0).
 
 
-@pytest.mark.asyncio
-async def test_connect_renderer_non_pro_stub():
-    from app.ui.renderers.connect import render_connect_success_with_obhod
-    from app.ui.viewmodels.connect import ConnectViewModel
-
-    vm = ConnectViewModel(
-        has_subscription=True,
-        subscription_url="https://sub/main",
-        status="success",
-        is_pro=False,
-    )
-    text = await render_connect_success_with_obhod(vm)
-    assert "https://sub/main" in text
-    assert "https://sub/obhod" not in text
-    assert "Доступен в тарифе Pro" in text
 
 
-@pytest.mark.asyncio
-async def test_connect_keyboard_pro_has_obhod_button():
-    from app.ui.keyboards.connect import build_connect_success_keyboard_with_obhod
-
-    kb = build_connect_success_keyboard_with_obhod(
-        subscription_url="https://sub/main",
-        is_pro=True,
-        obhod_url="https://sub/obhod",
-        show_more_obhod=True,
-    )
-    texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert any("основную ссылку" in t for t in texts)
-    assert any("обхода" in t for t in texts)
-    assert any("больше обхода" in t for t in texts)
 
 
-@pytest.mark.asyncio
-async def test_connect_keyboard_non_pro_no_obhod_button():
-    from app.ui.keyboards.connect import build_connect_success_keyboard_with_obhod
-
-    kb = build_connect_success_keyboard_with_obhod(
-        subscription_url="https://sub/main",
-        is_pro=False,
-    )
-    texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert not any("обхода" in t.lower() for t in texts)

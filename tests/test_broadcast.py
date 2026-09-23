@@ -11,7 +11,6 @@ Smoke-тесты broadcast модуля.
 from __future__ import annotations
 
 import pytest
-from aiogram.types import InlineKeyboardButton
 
 from app.services.broadcast import (
     CHUNK_SIZE,
@@ -104,20 +103,3 @@ class TestUnsubButton:
         assert CLOSE_CALLBACK_DATA in all_cbs
 
 
-class TestRouterRegistration:
-    def test_admin_broadcast_router_has_bc_commands(self):
-        from aiogram.filters import Command
-        from app.routers.admin_broadcast import router
-
-        registered_cmds: set[str] = set()
-        for handler in router.message.handlers:
-            for flt in handler.filters or []:
-                cb = getattr(flt, "callback", None)
-                if isinstance(cb, Command):
-                    for c in cb.commands:
-                        registered_cmds.add(c)
-
-        # /bc_* семейство + /stop + /cancel должны быть на своих местах.
-        expected = {"bc_new", "bc_preview", "bc_list", "bc_send", "bc_stats", "bc_cancel", "stop", "cancel"}
-        missing = expected - registered_cmds
-        assert not missing, f"отсутствуют команды в admin_broadcast router: {missing}"
