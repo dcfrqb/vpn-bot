@@ -17,6 +17,18 @@ _LENIENT_BOOL_FIELDS = (
     "TASK_BROADCAST_RESUME_ENABLED",
 )
 
+# Выключатели фоновых задач (ревью N5): непонятное значение = False (fail safe).
+# На отладочном боте, который ходит в прод-панель, опечатка вроде «fasle» не
+# должна запускать recovery, реконсилер и рассылки по проду.
+_KILL_SWITCH_FIELDS = frozenset({
+    "BACKGROUND_TASKS_ENABLED",
+    "TASK_RECOVERY_ENABLED",
+    "TASK_EXPIRY_NOTIFIER_ENABLED",
+    "TASK_RECONCILER_ENABLED",
+    "TASK_SUN718_REVERT_ENABLED",
+    "TASK_BROADCAST_RESUME_ENABLED",
+})
+
 _TRUE = {"1", "true", "yes", "y", "on"}
 _FALSE = {"0", "false", "no", "n", "off"}
 
@@ -121,11 +133,18 @@ class Settings(BaseSettings):
     def _lenient_bool(cls, v, info):
         """true/false/1/0/yes/no/on/off без учета регистра. Непонятное значение
         не роняет старт (раньше ValidationError клал оба контейнера), а
-        логируется и заменяется дефолтом поля."""
-        default = cls.model_fields[info.field_name].default
+        логируется и заменяется: для PROMO_* дефолтом поля, для выключателей
+        фоновых задач (BACKGROUND_TASKS_ENABLED, TASK_*) значением False."""
         parsed = parse_bool(v)
         if parsed is None:
             from app.logger import logger
+            if info.field_name in _KILL_SWITCH_FIELDS:
+                logger.warning(
+                    f"{info.field_name}={v!r}: не булево значение, задача ВЫКЛЮЧЕНА "
+                    f"(fail safe). Исправьте .env: true или false"
+                )
+                return False
+            default = cls.model_fields[info.field_name].default
             logger.warning(f"{info.field_name}={v!r}: не булево значение, используем дефолт {default}")
             return default
         return parsed

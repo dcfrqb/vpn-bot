@@ -20,13 +20,17 @@ def test_promo_flags_accept_common_spellings(monkeypatch, raw, expected):
     assert s.PROMO_SOLOKHIN_ENABLED is expected
 
 
-@pytest.mark.parametrize("raw", ["maybe", "", "2", "выкл"])
-def test_invalid_flag_does_not_crash_and_uses_default(monkeypatch, raw):
+@pytest.mark.parametrize("raw", ["maybe", "", "2", "выкл", "fasle", "0ff"])
+def test_invalid_flag_does_not_crash(monkeypatch, raw):
+    """PROMO_* при непонятном значении берут дефолт, а выключатели фоновых
+    задач выключаются (фикс-раунд 2, ревью N5: fail safe)."""
     monkeypatch.setenv("PROMO_ADMIN_ENABLED", raw)
     monkeypatch.setenv("BACKGROUND_TASKS_ENABLED", raw)
+    monkeypatch.setenv("TASK_RECOVERY_ENABLED", raw)
     s = Settings(_env_file=None)  # раньше ValidationError клал оба контейнера
     assert s.PROMO_ADMIN_ENABLED is True
-    assert s.BACKGROUND_TASKS_ENABLED is True
+    assert s.BACKGROUND_TASKS_ENABLED is False
+    assert s.TASK_RECOVERY_ENABLED is False
 
 
 def test_parse_bool_unknown_is_none():
