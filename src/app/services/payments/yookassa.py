@@ -888,12 +888,16 @@ async def _hold_payment_for_review(
         f"Telegram ID: <code>{telegram_user_id}</code>\n"
         f"Сумма: {_he(str(payment.amount))} {_he(str(payment.currency or ''))}\n"
         f"Причина: {_he(reason)}\n\n"
-        "Подписка НЕ выдана. Проверьте платеж: выдайте доступ вручную "
-        "(payment_metadata.review_approved=true) или оформите возврат."
+        "Подписка НЕ выдана. «Одобрить и выдать» проведет обычную выдачу, "
+        "«Отклонить» оставит без доступа (возврат оформите в кабинете YooKassa)."
     )
+    from app.keyboards import get_payment_review_keyboard, get_support_keyboard
     for admin_id in (settings.ADMINS or []):
         try:
-            await bot.send_message(chat_id=admin_id, text=admin_text, parse_mode="HTML")
+            await bot.send_message(
+                chat_id=admin_id, text=admin_text, parse_mode="HTML",
+                reply_markup=get_payment_review_keyboard(payment.id),
+            )
             alerted = True
         except Exception as e:
             logger.warning(f"[{trace_id}] review alert to admin {admin_id} failed: {e}")
@@ -903,9 +907,11 @@ async def _hold_payment_for_review(
             text=(
                 "⏳ <b>Оплата получена</b>\n\n"
                 "Платеж передан на ручную проверку администратору. "
-                "Мы свяжемся с вами в ближайшее время."
+                "Мы свяжемся с вами в ближайшее время. Если есть вопросы, "
+                "напишите в поддержку."
             ),
             parse_mode="HTML",
+            reply_markup=get_support_keyboard(),
         )
     except Exception as e:
         logger.debug(f"[{trace_id}] review notice to user failed: {e}")

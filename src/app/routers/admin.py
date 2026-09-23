@@ -1105,3 +1105,41 @@ async def cmd_referral_stats(message: types.Message):
     except Exception as e:
         logger.error(f"referral_stats error: code={promo_code} err={e}")
         await message.answer(f"❌ Ошибка: {escape_html(str(e)[:200])}", parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("rv_ok:") | F.data.startswith("rv_no:"))
+async def payment_review_decision(callback: types.CallbackQuery):
+    """Кнопки под алертом «Платеж на ручной проверке»: одобрить и выдать / отклонить."""
+    admin_id = callback.from_user.id
+    if not is_admin(admin_id):
+        logger.warning(f"payment review click by non-admin user_id={admin_id} data={callback.data!r}")
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    action, _, raw_id = (callback.data or "").partition(":")
+    try:
+        payment_row_id = int(raw_id)
+    except ValueError:
+        await callback.answer("Неверные данные", show_alert=True)
+        return
+    approve = action == "rv_ok"
+    await callback.answer("⏳ Обрабатываю..." if approve else "Отклоняю...")
+
+    from app.services.payments.review import decide_held_payment
+    try:
+        _code, result_text = await decide_held_payment(payment_row_id, admin_id, approve, callback.bot)
+    except Exception as e:
+        logger.error(f"payment review decision failed: payment_id={payment_row_id} err={e}")
+        result_text = "⚠️ Ошибка при обработке, попробуйте еще раз."
+        await callback.message.answer(result_text)
+        return
+
+    who = escape_html(callback.from_user.full_name or str(admin_id))
+    try:
+        await callback.message.edit_text(
+            f"{callback.message.html_text}\n\n<b>{escape_html(result_text)}</b>\nРешение: {who}",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    except Exception as e:
+        logger.debug(f"payment review: edit alert failed ({e}), sending reply")
+        await callback.message.answer(result_text)

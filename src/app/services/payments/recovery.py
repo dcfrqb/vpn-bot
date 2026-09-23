@@ -215,7 +215,7 @@ async def recheck_single_payment(
 
     _pmeta = payment.payment_metadata if isinstance(payment.payment_metadata, dict) else {}
     if _pmeta.get("needs_review") and not _pmeta.get("review_approved"):
-        result["status"] = "review"
+        result["status"] = "review_rejected" if _pmeta.get("review_rejected") else "review"
         return result
 
     if payment.status == "succeeded" and payment.subscription_id:

@@ -279,3 +279,26 @@ def get_admin_access_request_keyboard(request_id: int) -> types.InlineKeyboardMa
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
+
+def support_handle() -> str:
+    """@-ник поддержки без «@»: ADMIN_SUPPORT_USERNAME из .env, иначе dcfrq."""
+    from app.config import settings
+
+    return (getattr(settings, "ADMIN_SUPPORT_USERNAME", None) or "dcfrq").lstrip("@").strip() or "dcfrq"
+
+
+def get_support_keyboard() -> types.InlineKeyboardMarkup:
+    """Кнопка поддержки + главное меню (платеж на ручной проверке, возврат)."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✍️ Написать в поддержку", url=f"https://t.me/{support_handle()}")],
+        [types.InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_to_main")],
+    ])
+
+
+def get_payment_review_keyboard(payment_row_id: int) -> types.InlineKeyboardMarkup:
+    """Админу под алертом «платеж на ручной проверке»."""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ Одобрить и выдать", callback_data=f"rv_ok:{int(payment_row_id)}")],
+        [types.InlineKeyboardButton(text="❌ Отклонить", callback_data=f"rv_no:{int(payment_row_id)}")],
+    ])
