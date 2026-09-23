@@ -3,6 +3,10 @@ from datetime import datetime
 from typing import Dict, Any
 
 
+# Не деньги клиентов: промо-записи, тестовые (r30_03 помечает payments.id=2), выплаты рефералки.
+_NON_REVENUE = ("promo", "test", "referral_payout", "admin")
+
+
 def _empty_stats() -> Dict[str, Any]:
     return {
         "total_users": 0,
@@ -60,13 +64,15 @@ async def get_statistics() -> Dict[str, Any]:
         today_payments = today_payments_result.scalar() or 0
 
         total_revenue_result = await session.execute(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == "succeeded")
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.status == "succeeded", Payment.provider.notin_(_NON_REVENUE))
         )
         total_revenue = float(total_revenue_result.scalar() or 0)
 
         today_revenue_result = await session.execute(
             select(func.coalesce(func.sum(Payment.amount), 0)).where(
                 Payment.status == "succeeded",
+                Payment.provider.notin_(_NON_REVENUE),
                 Payment.created_at >= today_start,
             )
         )

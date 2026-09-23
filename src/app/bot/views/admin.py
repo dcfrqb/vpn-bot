@@ -28,6 +28,7 @@ def home(stats: Any) -> View:
         [(T.BTN_PAYMENTS, Adm(s="payments", a="open")), (T.BTN_PROMO, PromoAdm(a="list"))],
         [(T.BTN_BROADCASTS, BcAdm(a="list")), (T.BTN_OBHOD, Adm(s="obhod", a="open"))],
         [(T.BTN_BLOCKLIST, Adm(s="block", a="open")), (T.BTN_REFERRAL, Adm(s="ref", a="open"))],
+        [(T.BTN_MAINT, Adm(s="maint", a="show"))],  # stream C: bot/routers/admin/panel.py
     ])
 
 

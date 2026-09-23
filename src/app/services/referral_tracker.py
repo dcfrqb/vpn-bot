@@ -71,7 +71,7 @@ async def compute_sun718_earned_months(session) -> int:
         pays_res = await session.execute(
             select(Payment)
             .where(Payment.telegram_user_id == tg_id)
-            .where(Payment.provider != "promo")
+            .where(Payment.provider.notin_(("promo", "test", "referral_payout")))  # F->E: без тестовых
             .where(Payment.status == "succeeded")
             .where(Payment.paid_at != None)  # noqa: E711
         )
