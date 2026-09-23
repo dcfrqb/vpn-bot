@@ -1,7 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import (
     String, BigInteger, DateTime, Boolean, Numeric, ForeignKey, func, Text, JSON, Integer,
-    UniqueConstraint, Index, text,
+    UniqueConstraint, Index, CheckConstraint, text,
 )
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -98,6 +98,18 @@ class Subscription(Base):
         ),
         Index("ix_subscriptions_provisioning_state_valid_until", "provisioning_state", "valid_until"),
         Index("ix_subscriptions_updated_at", "updated_at"),
+        # r30_02: full (not partial) uniqueness — the code already treats the
+        # main row as a singleton reused across renewals (07 Q6).
+        UniqueConstraint("telegram_user_id", "sub_kind", name="uq_subscriptions_user_kind"),
+        CheckConstraint("sub_kind IN ('main', 'obhod')", name="ck_subscriptions_sub_kind"),
+        CheckConstraint(
+            "provisioning_state IN ('pending', 'synced', 'failed', 'expired')",
+            name="ck_subscriptions_provisioning_state",
+        ),
+        CheckConstraint(
+            "active = false OR valid_until IS NOT NULL OR is_lifetime",
+            name="ck_subscriptions_active_has_end",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -153,7 +165,11 @@ class Subscription(Base):
     )
     # --- 3.0 (r30_01, NULL на старых строках) ---
     autorenew: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)  # автопродление включено
-    autorenew_method_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # payment_methods.id (FK в r30_02)
+    autorenew_method_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("payment_methods.id", ondelete="SET NULL", name="fk_subscriptions_autorenew_method_id"),
+        nullable=True,
+    )
     grace_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # конец льготного периода
     grace_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # none | active | ended
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
@@ -178,6 +194,13 @@ class Payment(Base):
         UniqueConstraint("external_id", name="payments_external_id_key"),
         Index("ix_payments_external_id", "external_id"),
         Index("ix_payments_updated_at", "updated_at"),
+        CheckConstraint(
+            "status IN ('pending', 'succeeded', 'canceled', 'failed')", name="ck_payments_status"
+        ),
+        CheckConstraint("amount >= 0", name="ck_payments_amount_nonneg"),
+        CheckConstraint(
+            "status <> 'succeeded' OR paid_at IS NOT NULL", name="ck_payments_succeeded_has_paid_at"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -187,8 +210,8 @@ class Payment(Base):
         nullable=False,
         index=True
     )
-    # varchar(16) как в живой БД (модель раньше врала String(32), 07 §1.2 D3).
-    provider: Mapped[str] = mapped_column(String(16), default="yookassa", index=True, comment="Провайдер платежей")
+    # varchar(32) с r30_02 (07 §1.2 D3; нужно для provider='telegram_stars', поток A).
+    provider: Mapped[str] = mapped_column(String(32), default="yookassa", index=True, comment="Провайдер платежей")
     external_id: Mapped[str] = mapped_column(String(128), nullable=False, comment="ID платежа во внешней системе")
     amount: Mapped[Numeric] = mapped_column(Numeric(10, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")

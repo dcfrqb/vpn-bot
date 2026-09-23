@@ -43,9 +43,11 @@ async def test_profile_from_real_rows_hides_raw_data_and_urls():
             await s.flush()
             s.add_all([
                 Subscription(telegram_user_id=uid, remna_user_id=main_id, plan_code="pro", sub_kind="main",
-                             active=True, config_data={"subscription_url": "https://sub.example/CFGSECRET"}),
+                             active=True, valid_until=datetime(2026, 10, 1, 10, 0, 0),
+                             config_data={"subscription_url": "https://sub.example/CFGSECRET"}),
                 Subscription(telegram_user_id=uid, remna_user_id=obhod_id, plan_code="obhod", sub_kind="obhod",
-                             active=True, config_data={"subscription_url": "https://sub.example/CFGSECRET2",
+                             active=True, valid_until=datetime(2026, 10, 20, 0, 0, 0),
+                             config_data={"subscription_url": "https://sub.example/CFGSECRET2",
                                                        "package": "obhod_500",
                                                        "package_until": "2026-10-20T00:00:00",
                                                        "package_limit_bytes": 536870912000}),
@@ -55,6 +57,7 @@ async def test_profile_from_real_rows_hides_raw_data_and_urls():
                         payment_metadata={"plan_code": "pro", "period_months": "1"}),
                 Payment(telegram_user_id=uid, provider="promo", external_id=f"sp-{uid}-2", amount=0,
                         status="succeeded", created_at=datetime(2026, 8, 1, 10, 0),
+                        paid_at=datetime(2026, 8, 1, 10, 0),
                         payment_metadata={"promo_code": "trial", "tariff": "trial_standard_5d"}),
             ])
             await s.commit()
