@@ -223,6 +223,7 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         from app.remnawave.client import RemnaClient, normalize_expire_at
 
         user_text = None
+        new_expire_for_notices: Optional[datetime] = None
         if can_revoke:
             client = RemnaClient()
             try:
@@ -262,6 +263,7 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                             str(subscription.remna_user_id), expire_at=normalize_expire_at(expire_dt)
                         )
                         naive = expire_dt.replace(tzinfo=None)
+                        new_expire_for_notices = expire_dt
                         subscription.active = False
                         subscription.valid_until = naive
                         subscription.remnawave_expected_expire_at = naive
@@ -288,6 +290,7 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                         await client.update_user(str(subscription.remna_user_id), expire_at=target)
                         new_dt = _parse_expire(target)
                         naive = new_dt.replace(tzinfo=None) if new_dt else None
+                        new_expire_for_notices = new_dt
                         subscription.valid_until = naive
                         subscription.remnawave_expected_expire_at = naive
                         action = "shortened"
@@ -350,6 +353,14 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         await invalidate_sync_cache(tg_id)
     except Exception:
         pass
+
+    # Ревью N1: следом за «Возврат оформлен» не слать «истекает сегодня, продлите».
+    if new_expire_for_notices is not None:
+        try:
+            from app.tasks.expiry_notifier import suppress_expiry_notices
+            await suppress_expiry_notices(tg_id, new_expire_for_notices)
+        except Exception as e:
+            logger.debug(f"refund {refund_id}: suppress expiry notices failed: {e}")
 
     await _notify_admins(bot, (
         f"↩️ <b>{'Полный' if is_full else 'Частичный'} возврат</b>\n\n"

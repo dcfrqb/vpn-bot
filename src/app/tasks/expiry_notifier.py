@@ -76,6 +76,40 @@ async def _set_dedup(redis_client, key: str, ttl: int) -> bool:
         return False
 
 
+async def suppress_expiry_notices(telegram_id: int, expire_at: datetime) -> None:
+    """Глушит «подписка истекает» для срока, который поставил возврат (ревью N1).
+
+    После возврата юзер уже получил сообщение «Возврат оформлен» с датой или
+    «доступ закончился». Без этого часовой прогон нотификатора следом слал бы
+    «истекает сегодня, продлите» (expire-now) или «через 3 дня» (укороченный
+    срок в пределах 3 дней). Ставим те же dedup-ключи, что и сам нотификатор:
+      0d — если новый срок наступает сегодня (UTC);
+      3d — если до нового срока не больше 3 дней (окно 3d сегодня или уже прошло).
+    Более далекий срок не трогаем: обычные напоминания по нему уместны.
+    Redis недоступен — ничего не делаем (нотификатор без Redis тоже молчит).
+    """
+    from app.services.cache import get_redis_client
+
+    redis_client = get_redis_client()
+    if not redis_client:
+        return
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+    expire_date = expire_at.astimezone(timezone.utc).date()
+    days_until = (expire_date - datetime.now(timezone.utc).date()).days
+    kinds = []
+    if days_until <= WINDOW_TODAY:
+        kinds.append(("0d", TTL_0D))
+    if days_until <= WINDOW_SOON:
+        kinds.append(("3d", TTL_3D))
+    for notice_type, ttl in kinds:
+        key = f"expiry_notice:{notice_type}:{int(telegram_id)}:{expire_date.isoformat()}"
+        try:
+            await redis_client.set(key, "refund", ex=ttl)
+        except Exception as e:
+            logger.debug(f"expiry_notifier: suppress {key} failed: {e}")
+
+
 async def _fetch_all_remna_users(client) -> list:
     """Paginate through Remnawave get_users() and return all user dicts."""
     all_users = []
