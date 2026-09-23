@@ -1,7 +1,7 @@
-"""Стоп-лист: кому не продаём.
+"""Стоп-лист: кому не продаем.
 
 Две таблицы:
-  blocked_users  — telegram_id, проверяется ДО создания платежа (деньги не берём);
+  blocked_users  — telegram_id, проверяется ДО создания платежа (деньги не берем);
   blocked_cards  — отпечаток карты (first6-last4-MM/YY), проверяется в вебхуке
                    уже после оплаты, поэтому только уведомляет админа.
 
@@ -65,7 +65,7 @@ async def get_card_block_reason(fingerprint: Optional[str]) -> Optional[str]:
 
 
 async def notify_admins(text_message: str) -> None:
-    """Шлёт сообщение админам из settings.ADMINS. Молча проглатывает ошибки."""
+    """Шлет сообщение админам из settings.ADMINS. Молча проглатывает ошибки."""
     try:
         from aiogram import Bot
         from app.config import settings
@@ -87,3 +87,108 @@ async def notify_admins(text_message: str) -> None:
             await bot.session.close()
     except Exception as e:
         logger.warning(f"blocklist: notify_admins failed: {e}")
+
+
+# =============================================================================
+# 3.0 (stream E): admin control of the stop-list and of the bot blocklist.
+# =============================================================================
+
+import re as _re
+from dataclasses import dataclass as _dataclass
+from datetime import datetime as _datetime
+
+CARD_FP_RE = _re.compile(r"^\d{6}-\d{4}-\d{1,2}/\d{2,4}$")
+
+
+@_dataclass(frozen=True)
+class StopEntry:
+    key: str  # telegram id or card fingerprint
+    reason: Optional[str]
+    blocked_at: Optional[_datetime]
+
+
+class BlocklistAdmin:
+    """Two lists, both managed from the admin bot:
+
+    - stop-list (tables blocked_users / blocked_cards): nobody on it can buy;
+      checked before a payment is created and in the webhook (2.x);
+    - bot blocklist (Redis set + BLOCKED_TELEGRAM_IDS): the bot ignores the
+      user completely (app.middlewares.blocklist).
+    """
+
+    @staticmethod
+    def _session():
+        if not SessionLocal:
+            raise RuntimeError("database is not configured")
+        return SessionLocal()
+
+    async def stop_list(self) -> tuple[list[StopEntry], list[StopEntry]]:
+        from sqlalchemy import select
+
+        from app.db.models import BlockedCard, BlockedUser
+
+        async with self._session() as s:
+            users = (await s.execute(select(BlockedUser).order_by(BlockedUser.blocked_at.desc()))).scalars().all()
+            cards = (await s.execute(select(BlockedCard).order_by(BlockedCard.blocked_at.desc()))).scalars().all()
+        return ([StopEntry(str(u.telegram_id), u.reason, u.blocked_at) for u in users],
+                [StopEntry(c.fingerprint, c.reason, c.blocked_at) for c in cards])
+
+    async def stop_user(self, telegram_id: int, reason: str = "") -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from app.db.models import BlockedUser
+
+        async with self._session() as s:
+            stmt = pg_insert(BlockedUser).values(telegram_id=int(telegram_id), reason=reason or None)
+            await s.execute(stmt.on_conflict_do_update(index_elements=["telegram_id"], set_={"reason": reason or None}))
+            await s.commit()
+
+    async def unstop_user(self, telegram_id: int) -> bool:
+        from sqlalchemy import delete
+
+        from app.db.models import BlockedUser
+
+        async with self._session() as s:
+            r = await s.execute(delete(BlockedUser).where(BlockedUser.telegram_id == int(telegram_id)))
+            await s.commit()
+            return bool(r.rowcount)
+
+    async def stop_card(self, fingerprint: str, reason: str = "") -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        from app.db.models import BlockedCard
+
+        if not CARD_FP_RE.match(fingerprint or ""):
+            raise ValueError("fingerprint must look like 220220-7882-09/2028")
+        async with self._session() as s:
+            stmt = pg_insert(BlockedCard).values(fingerprint=fingerprint, reason=reason or None)
+            await s.execute(stmt.on_conflict_do_update(index_elements=["fingerprint"], set_={"reason": reason or None}))
+            await s.commit()
+
+    async def unstop_card(self, fingerprint: str) -> bool:
+        from sqlalchemy import delete
+
+        from app.db.models import BlockedCard
+
+        async with self._session() as s:
+            r = await s.execute(delete(BlockedCard).where(BlockedCard.fingerprint == fingerprint))
+            await s.commit()
+            return bool(r.rowcount)
+
+    @staticmethod
+    async def bot_block(telegram_id: int) -> None:
+        from app.middlewares.blocklist import block_user
+
+        await block_user(int(telegram_id))
+
+    @staticmethod
+    async def bot_unblock(telegram_id: int) -> None:
+        from app.middlewares.blocklist import unblock_user
+
+        await unblock_user(int(telegram_id))
+
+    @staticmethod
+    def bot_blocked(telegram_id: int) -> bool:
+        from app.middlewares.blocklist import is_blocked
+
+        return is_blocked(int(telegram_id))
