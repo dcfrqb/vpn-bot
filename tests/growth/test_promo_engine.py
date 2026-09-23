@@ -264,7 +264,7 @@ async def test_gift_single_use_and_idempotent_creation(engine_parts):
     assert code.startswith("g_") and await engine.create_gift(777, "pro", 3, payment_id=55) == code
     assert await engine.is_known_code(code)
     r = await engine.redeem(TG, code)
-    assert r.applied and r.plan_code == "pro" and r.days == 91
+    assert r.applied and r.plan_code == "pro" and r.days == 91 and r.months == 3
     assert prov.calls[0][1].source is EntitlementSource.GIFT
     assert (await engine.redeem(TG + 1, code)).outcome is PromoOutcome.ALREADY_USED
     assert (await engine.redeem(TG, code)).outcome is PromoOutcome.ALREADY_USED

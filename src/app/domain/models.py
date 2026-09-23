@@ -224,6 +224,7 @@ class PromoReward:
     outcome: PromoOutcome
     plan_code: Optional[str] = None
     days: Optional[int] = None
+    months: Optional[int] = None
     expires_at: Optional[datetime] = None
     discount_percent: Optional[int] = None
     redemption_id: Optional[int] = None

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.domain.models import PromoOutcome, PromoReward
-from app.domain.texts import days_ru, fmt_date_msk, h
+from app.domain.texts import days_ru, fmt_date_msk, h, months_ru
 from app.domain.texts import common as _c
 
 # ----------------------------------------------------------------- buttons
@@ -60,7 +60,9 @@ def applied_text(code: str, reward: PromoReward, *, plan_title: str, support: Op
         body = f"{h(plan_title)} на {days_ru(days)}, чтобы спокойно попробовать."
     elif code_l.startswith("g_"):
         head = "🎁 <b>Подарок активирован</b>"
-        body = f"Подписка {h(plan_title)} на {days_ru(days)} уже подключена."
+        # gifts grant paid calendar months (A-5); show the same unit the buyer saw
+        duration = months_ru(reward.months) if reward.months else days_ru(days)
+        body = f"Подписка {h(plan_title)} на {duration} уже подключена."
     elif code_l == "sun718":
         head = "🎉 <b>Промокод активирован</b>"
         body = (
@@ -70,7 +72,7 @@ def applied_text(code: str, reward: PromoReward, *, plan_title: str, support: Op
     else:
         head = "🎉 <b>Промокод активирован</b>"
         body = f"{h(plan_title)}: +{days_ru(days)}." if days else "Бонус начислен."
-    tail = "\n\nНажми «Подключить VPN», чтобы настроить приложение."
+    tail = "\n\nНажми «Подключиться», чтобы настроить приложение."
     extra = _support_line(support) if code_l == "sun718" else ""
     return f"{head}\n\n{body}{_until(reward)}{tail}{extra}"
 

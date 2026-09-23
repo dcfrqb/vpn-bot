@@ -502,6 +502,7 @@ class PromoEngine:
         await self._alert(title, tg, f"📦 {h(plan)} +{row.days} дн.\n📅 До: {fmt_date_msk(new_state.expires_at)}"
                                      f"\nИспользований: {row.uses + 1}{'/' + str(row.max_uses) if row.max_uses else ''}")
         return PromoReward(code=code, outcome=PromoOutcome.APPLIED, plan_code=plan, days=row.days,
+                           months=int(gift_months) if gift_months else None,
                            expires_at=new_state.expires_at, redemption_id=res.redemption_id)
 
     async def _alert(self, title_html: str, tg: int, body_html: str) -> None:
