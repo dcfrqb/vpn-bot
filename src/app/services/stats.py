@@ -43,6 +43,9 @@ async def get_statistics() -> Dict[str, Any]:
         active_subs_result = await session.execute(
             select(func.count(Subscription.id)).where(
                 Subscription.active == True,
+                # Только основные подписки: строки обхода (sub_kind='obhod') не
+                # отдельные клиенты, раньше завышали счетчик (04 M10).
+                Subscription.sub_kind == "main",
                 (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now),
             )
         )
@@ -105,6 +108,7 @@ async def get_users_list(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
             )
             .where(
                 Subscription.active == True,
+                Subscription.sub_kind == "main",  # тариф юзера = основная подписка, не обход
                 (Subscription.valid_until.is_(None)) | (Subscription.valid_until > now),
             )
             .subquery()

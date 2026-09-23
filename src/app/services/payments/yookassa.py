@@ -1109,6 +1109,44 @@ async def handle_successful_payment(
                     f"[{trace_id}] obhod package paid but NOT applied "
                     f"(нет активного обхода?): tg_id={telegram_user_id} package={plan_code}"
                 )
+                # 04 M9: деньги взяты, пакет не применен — раньше только лог.
+                # Алерт админам и честное сообщение юзеру (один раз на платеж).
+                if not _pmeta.get("obhod_package_alerted"):
+                    from html import escape as _he
+                    _alerted = False
+                    for admin_id in (settings.ADMINS or []):
+                        try:
+                            await bot.send_message(
+                                chat_id=admin_id,
+                                text=(
+                                    "⚠️ <b>Пакет обхода оплачен, но НЕ применен</b>\n\n"
+                                    f"Telegram ID: <code>{telegram_user_id}</code>\n"
+                                    f"Пакет: {_he(str(plan_code))}\n"
+                                    f"Payment: <code>{_he(str(payment.external_id))}</code>\n\n"
+                                    "Скорее всего нет активного обхода (Pro истек). "
+                                    "Примените кап вручную или оформите возврат."
+                                ),
+                                parse_mode="HTML",
+                            )
+                            _alerted = True
+                        except Exception as _ae:
+                            logger.warning(f"[{trace_id}] obhod package alert to {admin_id} failed: {_ae}")
+                    try:
+                        await bot.send_message(
+                            chat_id=telegram_user_id,
+                            text=(
+                                "⏳ <b>Оплата пакета обхода получена</b>\n\n"
+                                "Автоматически применить пакет не получилось. "
+                                "Администратор применит его вручную и свяжется с вами."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as _ue:
+                        logger.debug(f"[{trace_id}] obhod package user notice failed: {_ue}")
+                    if _alerted:
+                        _pmeta["obhod_package_alerted"] = True
+                        payment.payment_metadata = dict(_pmeta)
+                        await session.commit()
             return
 
         # Если не нашли в metadata, определяем тариф и период по сумме платежа.

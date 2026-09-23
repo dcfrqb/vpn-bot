@@ -202,6 +202,14 @@ class RemnawaveReconciler:
                     Subscription.remna_user_id.isnot(None),
                     Subscription.valid_until.isnot(None),
                 )
+                # Раньше LIMIT без ORDER BY: при >50 подписок одни и те же ~50
+                # проверялись вечно, остальные никогда (07 §6 п.6). Теперь сначала
+                # давно не сверенные; после успешной сверки remnawave_synced_at
+                # сдвигается, и очередь ротируется.
+                .order_by(
+                    Subscription.remnawave_synced_at.asc().nulls_first(),
+                    Subscription.id.asc(),
+                )
                 .limit(DEEP_BATCH_SIZE)
             )
             rows = await session.execute(stmt)
@@ -211,6 +219,7 @@ class RemnawaveReconciler:
         if not subs:
             return out
 
+        verified_ids: list = []
         client = RemnaClient()
         try:
             for sub in subs:
@@ -283,13 +292,35 @@ class RemnawaveReconciler:
                         f"tg_id={sub.telegram_user_id} reason={desync_reason!r}"
                     )
                     await self._mark_failed_for_resync(sub.id, desync_reason)
+                else:
+                    verified_ids.append(sub.id)
         finally:
             try:
                 await client.close()
             except Exception:
                 pass
 
+        await self._bump_verified(verified_ids)
         return out
+
+    async def _bump_verified(self, subscription_ids: list) -> None:
+        """Отмечает подписки как сверенные сейчас (ротация очереди deep-скана)."""
+        if not subscription_ids or not SessionLocal:
+            return
+        try:
+            from sqlalchemy import update
+            async with SessionLocal() as session:
+                await session.execute(
+                    update(Subscription)
+                    .where(
+                        Subscription.id.in_(subscription_ids),
+                        Subscription.provisioning_state == "synced",
+                    )
+                    .values(remnawave_synced_at=datetime.utcnow())
+                )
+                await session.commit()
+        except Exception as e:
+            logger.warning(f"reconciler_deep_scan: bump remnawave_synced_at failed: {e}")
 
     async def _mark_naturally_expired(self, subscription_id: int) -> None:
         """Снимает active и переводит в provisioning_state='expired' для подписок,
