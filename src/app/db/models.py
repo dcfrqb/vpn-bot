@@ -56,7 +56,7 @@ class TelegramUser(Base):
         server_default=func.true(),
         nullable=False,
         index=True,
-        comment="False если бот получил TelegramForbiddenError (юзер заблокировал бота)",
+        comment="False если бот получил TelegramForbiddenError",  # юзер заблокировал бота
     )
     broadcast_opt_out: Mapped[bool] = mapped_column(
         Boolean,
@@ -64,7 +64,7 @@ class TelegramUser(Base):
         server_default=func.false(),
         nullable=False,
         index=True,
-        comment="True если юзер отписался от рассылок (/stop или bc:unsub)",
+        comment="True если юзер отписался от рассылок",  # /stop или bc:unsub
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -121,7 +121,7 @@ class Subscription(Base):
         server_default="main",
         nullable=False,
         index=True,
-        comment="Дискриминатор подписки: main (основная) | obhod (обход с лимитом трафика)",
+        comment="main (основная) | obhod (обход с лимитом трафика)",  # дискриминатор подписки
     )
     active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
@@ -137,7 +137,7 @@ class Subscription(Base):
         default="pending",
         server_default="pending",
         nullable=False,
-        comment="pending | synced | failed — состояние синка с Remnawave",
+        comment="pending | synced | failed",  # состояние синка с Remnawave
     )
     remnawave_synced_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True, comment="Время последнего успешного sync Remnawave",
@@ -227,7 +227,7 @@ class ReferralPayout(Base):
         ForeignKey("telegram_users.telegram_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
-        comment="Админ, выдавший выплату (FK мягкий: журнал переживает удаление учётки)",
+        # админ, выдавший выплату (FK мягкий: журнал переживает удаление учетки)
     )
     promo_code: Mapped[str] = mapped_column(String(32), nullable=False, default="sun718", server_default="sun718", index=True)
     payout_months: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -327,22 +327,22 @@ class Broadcast(Base):
     __tablename__ = "broadcasts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    text_html: Mapped[str] = mapped_column(Text, nullable=False, comment="Текст сообщения в HTML")
+    text_html: Mapped[str] = mapped_column(Text, nullable=False)  # текст сообщения в HTML
     photo_file_id: Mapped[Optional[str]] = mapped_column(
-        String(256), nullable=True, comment="Telegram file_id фото (опционально)"
+        String(256), nullable=True  # Telegram file_id фото (опционально)
     )
     buttons_json: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(
-        JSON, nullable=True, comment="Массив {text, url | callback_data}"
+        JSON, nullable=True  # массив {text, url | callback_data}
     )
     segment: Mapped[str] = mapped_column(
         String(16), nullable=False, default="all",
-        comment="Сегмент: all | active | expired | never",
+        # сегмент: all | active | expired | never
     )
     disable_notification: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=func.false(), nullable=False,
     )
     created_by: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, index=True, comment="Telegram ID админа-автора",
+        BigInteger, nullable=False, index=True,  # Telegram ID админа-автора
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), server_default=func.now(), nullable=False, index=True,
@@ -382,7 +382,7 @@ class BroadcastRecipient(Base):
     )
     status: Mapped[str] = mapped_column(
         String(16), default="pending", server_default="pending", nullable=False,
-        comment="pending | sent | failed | blocked",
+        # pending | sent | failed | blocked
     )
     error_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
