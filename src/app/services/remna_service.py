@@ -156,6 +156,7 @@ async def ensure_user_in_remnawave(
     name: Optional[str] = None,
     tg_first_name: Optional[str] = None,
     tg_last_name: Optional[str] = None,
+    create: bool = True,
 ) -> Optional[str]:
     """
     Получает или создает пользователя в Remnawave.
@@ -164,18 +165,25 @@ async def ensure_user_in_remnawave(
     Логика:
     1. Найти по telegram_id → использовать
     2. Не найден → создать с username по build_remna_username()
+
+    create=False (3.0, поток B): только поиск. /start и синк статуса больше
+    не создают аккаунт в панели; его создает только выдача (оплата, промо,
+    триал, админ-грант). Не найден -> None.
     """
     client = RemnaClient()
     try:
-        user = await asyncio.wait_for(
-            client.get_or_create_user(
+        if create:
+            lookup = client.get_or_create_user(
                 telegram_id=telegram_id,
                 tg_username=username,
                 tg_first_name=tg_first_name,
                 tg_last_name=tg_last_name,
-            ),
-            timeout=REMNAWAVE_CALL_TIMEOUT,
-        )
+            )
+        else:
+            lookup = client.get_user_by_telegram_id(telegram_id, strict=True)
+        user = await asyncio.wait_for(lookup, timeout=REMNAWAVE_CALL_TIMEOUT)
+        if user is None:
+            return None
         # Фикс B1: связь tg -> юзер панели пишем в БД сразу (/start, промо,
         # триал, гранты), а не только при оплате.
         await persist_remna_link(

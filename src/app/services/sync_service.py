@@ -91,18 +91,22 @@ class SyncService:
             raise RemnaUnavailableError(f"Remna API недоступна: {e}")
 
         if not result:
+            # 3.0 (поток B): аккаунт в панели создает только выдача доступа
+            # (ProvisioningService / оплата / промо). Здесь только повторный
+            # строгий поиск и запись связи в БД, если аккаунт уже есть.
             remna_user_id = await ensure_user_in_remnawave(
                 telegram_id,
                 username=tg_username,
                 tg_first_name=tg_first_name,
                 tg_last_name=tg_last_name,
+                create=False,
             )
             if remna_user_id:
                 try:
                     await self._save_sync_result_to_cache(
                         telegram_id,
                         SyncResult(
-                            is_new_user_created=True,
+                            is_new_user_created=False,
                             user_remna_uuid=remna_user_id,
                             subscription_status="none",
                             expires_at=None,
@@ -112,7 +116,7 @@ class SyncService:
                 except Exception:
                     pass
                 return SyncResult(
-                    is_new_user_created=True,
+                    is_new_user_created=False,
                     user_remna_uuid=remna_user_id,
                     subscription_status="none",
                     expires_at=None,

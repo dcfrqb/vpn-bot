@@ -159,7 +159,7 @@ async def test_get_user_by_id_uses_endpoint_constant(remna_client):
     
     remna_client._own_client.request = AsyncMock(return_value=success_response)
     
-    await remna_client.get_user_by_id("test-uuid")
+    await remna_client.get_user_by_id("42")
     
     # Проверяем, что был вызван request с правильным endpoint
     call_args = remna_client._own_client.request.call_args
@@ -167,7 +167,13 @@ async def test_get_user_by_id_uses_endpoint_constant(remna_client):
     # call_args[0] - позиционные аргументы: (method, url, ...)
     # call_args[1] - именованные аргументы: {headers: ..., ...}
     url_arg = call_args[0][1] if len(call_args[0]) > 1 else str(call_args)
-    assert "/api/users/test-uuid" in url_arg or "/api/user/test-uuid" in url_arg
+    assert "/api/users/42" in url_arg
+
+    # 06 L3: a legacy UUID is rejected before any request
+    remna_client._own_client.request.reset_mock()
+    with pytest.raises(ValueError):
+        await remna_client.get_user_by_id("test-uuid")
+    remna_client._own_client.request.assert_not_called()
 
 
 @pytest.mark.asyncio
