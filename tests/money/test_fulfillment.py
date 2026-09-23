@@ -291,3 +291,30 @@ async def test_bad_plan_refusal_is_held_not_retried():
     rec = await _paid_payment(m, deps)
     assert (await m.fulfillment.process(rec.id, source="webhook")).outcome is Outcome.HELD
     assert "bad_plan" in (await deps.store.get(rec.id)).meta["review_reason"]
+
+
+async def test_old_2x_row_is_not_announced_again():
+    """Review money m-1: an old «Проверить оплату» or a YooKassa re-delivery on
+    a 2.x row (no v3 marker, no notified marks) sends nothing."""
+    m, deps = make_money()
+    rec = deps.store.add_payment(700777, kind="subscription", status="succeeded", plan_code="lite",
+                                 period_months=1, subscription_id=42, meta={"plan_code": "lite"})
+    r = await m.fulfillment.process(rec.id, source="check")
+    assert r.outcome is Outcome.ALREADY
+    assert not deps.notifier.sent
+
+
+async def test_payment_lock_is_released_only_by_its_owner(monkeypatch):
+    """Review money m-5: a lock another process took after our TTL ran out is
+    not deleted by our release."""
+    from tests.fakes.redis import FakeRedis
+
+    redis = FakeRedis()
+    monkeypatch.setattr("app.services.cache.get_redis_client", lambda: redis)
+    m, deps = make_money()
+    ff = m.fulfillment
+    assert await ff._lock("ext-9") is True
+    assert await ff._lock("ext-9") is False
+    redis.store["provision_lock:ext-9"] = "someone-else"  # our TTL expired, another process took it
+    await ff._unlock("ext-9")
+    assert redis.store.get("provision_lock:ext-9") == "someone-else"

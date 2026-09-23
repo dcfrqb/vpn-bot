@@ -300,3 +300,66 @@ async def test_is_known_code(engine_parts):
     assert await engine.is_known_code("spring")
     settings.PROMO_SUN718_ENABLED = False
     assert not await engine.is_known_code("sun718")
+
+
+# ----------------------------------------------------------------- review money M-4: never downgrade
+
+
+async def test_lite_gift_extends_an_active_pro_subscriber_on_pro(engine_parts):
+    engine, _, prov, status, *_ = engine_parts
+    status.set(TG, active=True, plan_code="pro", expires_at=datetime.now(timezone.utc) + timedelta(days=150))
+    code = await engine.create_gift(777, "lite", 1, payment_id=91)
+    r = await engine.redeem(TG, code)
+    assert r.applied and prov.calls[0][1].plan_code == "pro" and prov.calls[0][1].months == 1
+
+
+async def test_plan_code_never_downgrades_but_upgrades(engine_parts):
+    engine, _, prov, status, *_ = engine_parts
+    status.set(TG, active=True, plan_code="pro", expires_at=datetime.now(timezone.utc) + timedelta(days=40))
+    await _code(engine, kind="plan", plan_code="lite")
+    assert (await engine.redeem(TG, "spring")).applied
+    assert prov.calls[0][1].plan_code == "pro"
+
+
+async def test_legacy_premium_keeps_its_plan_on_a_standard_gift(engine_parts):
+    engine, _, prov, status, *_ = engine_parts
+    status.set(TG, active=True, plan_code="premium", expires_at=datetime.now(timezone.utc) + timedelta(days=40))
+    code = await engine.create_gift(777, "standard", 1, payment_id=92)
+    assert (await engine.redeem(TG, code)).applied
+    assert prov.calls[0][1].plan_code == "premium"
+
+
+async def test_gift_to_a_lifetime_user_is_refused_and_stays_valid(engine_parts):
+    engine, _, prov, status, *_ = engine_parts
+    status.set(TG, active=True, plan_code="pro", is_lifetime=True)
+    code = await engine.create_gift(777, "pro", 1, payment_id=93)
+    assert (await engine.redeem(TG, code)).outcome is PromoOutcome.NOT_ELIGIBLE
+    assert not prov.calls
+    assert (await engine.redeem(TG + 1, code)).applied  # still redeemable by someone else
+
+
+def test_plan_for_recipient_rules():
+    from app.domain.models import SubscriptionState
+    from app.services.promo import plan_for_recipient
+
+    def st(plan, active=True):
+        return SubscriptionState(telegram_id=1, active=active, plan_code=plan)
+
+    assert plan_for_recipient(st(None, active=False), "pro") == "pro"
+    assert plan_for_recipient(st("lite", active=False), "standard") == "standard"  # expired: the offered plan
+    assert plan_for_recipient(st("lite"), "pro") == "pro"
+    assert plan_for_recipient(st("pro"), "lite") == "pro"
+    assert plan_for_recipient(st("standard"), "standard") == "standard"
+    assert plan_for_recipient(st("basic"), "pro") == "pro"          # clear upgrade
+    assert plan_for_recipient(st("basic"), "lite") == "basic"       # fewer devices
+    assert plan_for_recipient(st("premium"), "pro") == "premium"    # 15 devices -> 10: not clear
+
+
+async def test_refunded_gift_code_stops_working(engine_parts):
+    """Review money m-3: the refund webhook switches the code off."""
+    engine, repo, prov, *_ = engine_parts
+    code = await engine.create_gift(777, "pro", 1, payment_id=94)
+    row = await repo.get_code(code)
+    await repo.set_active(row.id, False)
+    assert (await engine.redeem(TG, code)).outcome is PromoOutcome.EXPIRED
+    assert not prov.calls

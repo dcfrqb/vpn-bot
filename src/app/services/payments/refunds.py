@@ -71,6 +71,25 @@ async def _notify_admins(bot, text: str) -> None:
             logger.warning(f"refund alert to admin {admin_id} failed: {e}")
 
 
+async def _deactivate_gift(code: str, refund_id: str) -> str:
+    """Full refund of a gift purchase: the unused code stops working (review
+    money m-3). A code that was already redeemed is left to the admin."""
+    try:
+        from app.services.promo_repo import SqlPromoRepo
+
+        repo = SqlPromoRepo()
+        row = await repo.get_code(code)
+        if row is None:
+            return "Подарок: код не найден в БД, проверьте вручную."
+        if row.uses and row.max_uses is not None and row.uses >= row.max_uses:
+            return "Подарок уже активирован получателем: доступ получателя НЕ менялся, решите вручную."
+        await repo.set_active(row.id, False)
+        return "Подарок еще не активирован: код отключен, по нему больше ничего не выдать."
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"refund {refund_id}: gift code deactivation failed ({type(e).__name__})")
+        return "Подарок: отключить код НЕ удалось, отключите вручную (/promo_list)."
+
+
 def _provisioning():
     """ProvisioningService of the running process (bot or webhook API)."""
     from app.container import get_container
@@ -219,6 +238,9 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                 if meta["refund_24h"].get("revoked") else
                 "Возврат по запросу клиента (24 часа): доступ отключить НЕ удалось, проверь вручную"
             )
+        elif is_full and meta.get("gift_code"):
+            action = "gift"
+            action_note = await _deactivate_gift(str(meta["gift_code"]), refund_id)
         elif is_full:
             action_note = (
                 "Доступ НЕ менялся: "

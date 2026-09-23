@@ -190,3 +190,18 @@ async def test_stars_gateway_sends_xtr_invoice_and_refunds():
     with pytest.raises(ValueError):
         await gw.send_invoice(5, PaymentIntent(plan_code="lite", months=1, amount_rub=1), title="t",
                               description="d", payload="p:1")
+
+
+async def test_stars_refund_already_refunded_counts_as_done():
+    """Review money m-7: a retry after a lost answer is not a failure."""
+    from app.infra.telegram_stars import TelegramStarsGateway
+
+    class Bot:
+        def __init__(self, err):
+            self.err = err
+
+        async def refund_star_payment(self, **kw):
+            raise RuntimeError(self.err)
+
+    assert await TelegramStarsGateway(Bot("Bad Request: CHARGE_ALREADY_REFUNDED")).refund(5, "c") is True
+    assert await TelegramStarsGateway(Bot("Bad Request: CHARGE_NOT_FOUND")).refund(5, "c") is False

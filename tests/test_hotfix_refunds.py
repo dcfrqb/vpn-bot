@@ -224,3 +224,32 @@ def test_webhook_endpoint_routes_refund_and_503_on_retry():
                AsyncMock(side_effect=WebhookRetryableError("x"))):
         r = client.post("/webhook/yookassa", json=WEBHOOK, headers=headers)
     assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_full_refund_of_an_unused_gift_switches_the_code_off():
+    """Review money m-3."""
+    from app.services.promo_types import PromoCodeRow
+
+    fake, payment, sub, session, refund, api_payment = _setup(expire_in_days=25)
+    payment.subscription_id = None
+    payment.payment_metadata = {"plan_code": "pro", "period_months": 1, "gift_code": "g_abc"}
+    row = PromoCodeRow(id=5, code="g_abc", kind="gift", plan_code="pro", days=31, max_uses=1, uses=0)
+
+    class Repo:
+        switched = []
+
+        async def get_code(self, code):
+            return row if code == "g_abc" else None
+
+        async def set_active(self, code_id, active):
+            self.switched.append((code_id, active))
+            return True
+
+    bot = AsyncMock()
+    with patch("app.services.promo_repo.SqlPromoRepo", Repo):
+        assert await _call(fake, session, refund, api_payment, bot) is True
+    assert Repo.switched == [(5, False)]
+    assert fake.patches == []
+    admin = [c.kwargs["text"] for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 900][0]
+    assert "код отключен" in admin

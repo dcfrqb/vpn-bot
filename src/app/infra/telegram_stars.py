@@ -56,6 +56,10 @@ class TelegramStarsGateway:
                 user_id=int(telegram_id), telegram_payment_charge_id=str(telegram_charge_id),
             ))
         except Exception as e:  # noqa: BLE001 - the caller records the failure
+            if "ALREADY_REFUNDED" in str(e).upper():
+                # A retry after a lost answer: the stars are already back (m-7).
+                logger.warning(f"stars refund for user={telegram_id}: already refunded, counted as done")
+                return True
             logger.error(f"stars refund failed for user={telegram_id}: {type(e).__name__}: {str(e)[:200]}")
             return False
 

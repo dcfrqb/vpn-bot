@@ -23,7 +23,8 @@ quoted in each step.
                       stream's own query of provider='promo' rows)
    - period_months:  metadata->>'period_months' (numeric string on every
                       yookassa row that has it)
-   - kind:            'promo' for provider='promo', else 'subscription'
+   - kind:            'promo' for provider='promo', 'obhod_package' for a
+                      2.x obhod package (plan_code obhod_*), else 'subscription'
    - method:          'yookassa' for provider in ('yookassa','test'), else
                       left NULL (promo grants have no payment method)
    - card_fingerprint: metadata->'last_webhook'->'object'->'payment_method'
@@ -111,7 +112,11 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE payments
-        SET kind = CASE WHEN provider = 'promo' THEN 'promo' ELSE 'subscription' END
+        SET kind = CASE
+            WHEN provider = 'promo' THEN 'promo'
+            WHEN payment_metadata::jsonb ->> 'plan_code' LIKE 'obhod\\_%' THEN 'obhod_package'
+            ELSE 'subscription'
+        END
         WHERE kind IS NULL
         """
     )

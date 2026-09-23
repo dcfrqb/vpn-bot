@@ -42,6 +42,7 @@ from app.services.payments.pricing import (
 )
 from app.services.payments.store import (
     M_NEEDS_PROVISIONING,
+    M_CREATED_V3,
     M_NEEDS_REVIEW,
     M_REFUND_24H,
     M_REVIEW_APPROVED,
@@ -107,15 +108,36 @@ class Fulfillment(FulfillmentNotices):
 
     # ------------------------------------------------------------------ locks
 
-    async def _lock(self, external_id: str) -> bool:
-        from app.services.cache import acquire_provision_lock
+    # Same key as 2.x (``provision_lock:<external_id>``, so the 2.x reconciler
+    # still interlocks), but with an owner token: a slow grant that outlives the
+    # TTL no longer deletes a lock another process took meanwhile (review
+    # money m-5). Redis down = fail-open (DB CAS and grant idempotency hold).
 
-        return await acquire_provision_lock(external_id)
+    async def _lock(self, external_id: str) -> bool:
+        from app.infra.redis.flags import set_once
+        from app.services.cache import PROVISION_LOCK_PREFIX, PROVISION_LOCK_TTL
+
+        token = uuid.uuid4().hex
+        got = await set_once(f"{PROVISION_LOCK_PREFIX}{external_id}", token, ttl=PROVISION_LOCK_TTL)
+        if got is None:
+            return True
+        if got:
+            self._tokens()[external_id] = token
+        return bool(got)
 
     async def _unlock(self, external_id: str) -> None:
-        from app.services.cache import release_provision_lock
+        from app.infra.redis.flags import compare_and_delete
+        from app.services.cache import PROVISION_LOCK_PREFIX
 
-        await release_provision_lock(external_id)
+        token = self._tokens().pop(external_id, None)
+        if token:
+            await compare_and_delete(f"{PROVISION_LOCK_PREFIX}{external_id}", token)
+
+    def _tokens(self) -> dict:
+        tokens = self.__dict__.get("_lock_tokens")
+        if tokens is None:
+            tokens = self.__dict__["_lock_tokens"] = {}
+        return tokens
 
     # ------------------------------------------------------------------ entry points
 
@@ -220,7 +242,10 @@ class Fulfillment(FulfillmentNotices):
         try:
             rec = await store.get(rec.id) or rec
             if rec.fulfilled:
-                await self._notify(rec, None, trace)
+                # Only 3.0 rows: 2.x rows have no notified marks, and a press on
+                # an old «Проверить оплату» must not re-announce them (m-1).
+                if rec.meta.get(M_CREATED_V3):
+                    await self._notify(rec, None, trace)
                 return FulfilResult(Outcome.ALREADY, rec)
             meta = rec.meta
             if meta.get(M_REFUND_24H):

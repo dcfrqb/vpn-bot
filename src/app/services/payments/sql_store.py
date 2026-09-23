@@ -13,6 +13,7 @@ from app.services.payments.store import (
     M_CREATED_V3,
     M_FULFILLED_AT,
     M_NEEDS_PROVISIONING,
+    M_OBHOD_APPLIED,
     PENDING_STATUSES,
     PaymentRecord,
     _naive,
@@ -266,6 +267,10 @@ class SqlPaymentStore(SqlRefundsAutorenewMixin):
                     Payment.provider.in_(("yookassa", "stars")),
                     Payment.subscription_id.is_(None),
                     Payment.created_at > now - horizon,
+                    # delivered gifts/packages stay unlinked forever: keep them
+                    # out of the window so they cannot crowd out a stuck row (m-4)
+                    Payment.payment_metadata.op("->>")(M_FULFILLED_AT).is_(None),
+                    Payment.payment_metadata.op("->>")(M_OBHOD_APPLIED).is_(None),
                 ).order_by(Payment.created_at).limit(limit * 5)
             )).scalars().all()
         stuck = []

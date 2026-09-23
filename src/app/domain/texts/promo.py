@@ -91,6 +91,8 @@ def outcome_text(code: str, reward: PromoReward, *, support: Optional[str] = Non
     if o is PromoOutcome.NOT_ELIGIBLE:
         if code_l == "sun718" and reward.plan_code == "lifetime":
             return "🌟 У тебя бессрочная подписка, промокод не нужен. Спасибо, что ты с нами!" + _support_line(support)
+        if code_l.startswith("g_"):
+            return "У тебя бессрочная подписка, подарок тебе не нужен. Передай ссылку другу, она еще действует."
         if code_l in ("trial", "solokhin"):
             return (
                 "У тебя уже есть активная подписка. Этот промокод только для тех, "
@@ -100,6 +102,8 @@ def outcome_text(code: str, reward: PromoReward, *, support: Optional[str] = Non
     if o is PromoOutcome.NOT_FOUND:
         return f"Промокод <b>{shown}</b> не найден. Проверь, нет ли опечатки."
     if o is PromoOutcome.EXPIRED:
+        if code_l.startswith("g_"):
+            return "Этот подарок больше не действует: покупку отменили."
         return f"Срок действия промокода <b>{shown}</b> закончился."
     if o is PromoOutcome.EXHAUSTED:
         return f"Промокод <b>{shown}</b> уже закончился."

@@ -122,6 +122,35 @@ def builtin_external_id(code: str, telegram_id: int) -> str:
 # --------------------------------------------------------------------------- engine
 
 
+def _is_clear_upgrade(current: str, offered: str) -> bool:
+    """``offered`` costs more per month and allows at least as many devices."""
+    from app.domain.plans import get_plan_device_limit, get_plan_price, is_valid_plan_code
+
+    if not (is_valid_plan_code(current) and is_valid_plan_code(offered)):
+        return False
+    try:
+        return (get_plan_price(offered, 1) > get_plan_price(current, 1)
+                and get_plan_device_limit(offered) >= get_plan_device_limit(current))
+    except Exception:  # noqa: BLE001 - unknown price: not an upgrade
+        return False
+
+
+def plan_for_recipient(state: SubscriptionState, offered: Optional[str]) -> Optional[str]:
+    """Plan a gift or a ``plan`` promo code is granted on (review money M-4).
+
+    A grant sets the plan for the WHOLE remaining term, so an active subscriber
+    is never moved to a lower plan: the gift's time is added to the plan they
+    already have. Only a clear upgrade (higher monthly price and at least as
+    many devices, e.g. lite -> pro, basic -> standard) switches the plan; any
+    other pair (pro -> lite, premium -> standard, ...) keeps the current plan.
+    No active subscription: the offered plan."""
+    offered_l = (offered or "").lower() or None
+    current = (state.plan_code or "").lower() if state.active else ""
+    if not current or not offered_l or current == offered_l:
+        return offered_l or current or None
+    return offered_l if _is_clear_upgrade(current, offered_l) else current
+
+
 class PromoEngine:
     """ports.PromoService + admin API for codes + create_gift for stream A."""
 
@@ -366,7 +395,12 @@ class PromoEngine:
             return PromoReward(code=code, outcome=PromoOutcome.ERROR)
         if not await self._audience_ok(tg, row.audience, state):
             return PromoReward(code=code, outcome=PromoOutcome.NOT_ELIGIBLE)
-        plan = row.plan_code if (row.kind == KIND_PLAN or not state.active) else (state.plan_code or row.plan_code)
+        if row.kind == KIND_PLAN:
+            if state.active and state.is_lifetime:
+                return PromoReward(code=code, outcome=PromoOutcome.NOT_ELIGIBLE)
+            plan = plan_for_recipient(state, row.plan_code)
+        else:
+            plan = (state.plan_code or row.plan_code) if state.active else row.plan_code
         plan = (plan or "standard").lower()
         return await self._reserve_and_grant(tg, row, plan, EntitlementSource.PROMO, source)
 
@@ -378,9 +412,17 @@ class PromoEngine:
             return PromoReward(code=code, outcome=PromoOutcome.NOT_FOUND)
         if row.max_uses is not None and row.uses >= row.max_uses:
             return PromoReward(code=code, outcome=PromoOutcome.ALREADY_USED)
+        if not row.is_active:  # the purchase was refunded (review money m-3)
+            return PromoReward(code=code, outcome=PromoOutcome.EXPIRED)
         await self.repo.ensure_user(tg)
-        reward = await self._reserve_and_grant(tg, row, (row.plan_code or "standard").lower(),
-                                               EntitlementSource.GIFT, source)
+        state = await self._state(tg)
+        if state.stale:
+            return PromoReward(code=code, outcome=PromoOutcome.ERROR)
+        if state.active and state.is_lifetime:
+            # Nothing to add; the code stays valid for someone else.
+            return PromoReward(code=code, outcome=PromoOutcome.NOT_ELIGIBLE)
+        plan = (plan_for_recipient(state, row.plan_code) or "standard").lower()
+        reward = await self._reserve_and_grant(tg, row, plan, EntitlementSource.GIFT, source)
         if reward.outcome is PromoOutcome.EXHAUSTED:
             return PromoReward(code=code, outcome=PromoOutcome.ALREADY_USED)
         buyer = (row.meta or {}).get("buyer")

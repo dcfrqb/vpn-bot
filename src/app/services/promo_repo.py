@@ -202,7 +202,7 @@ class SqlPromoRepo:
         tg = int(telegram_id)
         async with self._session() as s:
             pc = (await s.execute(select(PromoCode).where(PromoCode.id == int(code_id)).with_for_update())).scalar_one_or_none()
-            if pc is None:
+            if pc is None or not pc.is_active:  # switched off meanwhile (refunded gift, admin)
                 await s.rollback()
                 return ReserveResult("not_found")
             if pc.max_uses is not None and int(pc.uses or 0) >= int(pc.max_uses):
