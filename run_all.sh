@@ -140,11 +140,11 @@ run() {
     # Проверяем наличие .env файла
     if [ ! -f .env ]; then
         warning ".env файл не найден. Создаю из примера..."
-        if [ -f config.example.env ]; then
-            cp config.example.env .env
+        if [ -f .env.example ]; then
+            cp .env.example .env
             warning "Пожалуйста, заполните .env файл перед запуском"
         else
-            error "config.example.env не найден"
+            error ".env.example не найден"
             return 1
         fi
     fi

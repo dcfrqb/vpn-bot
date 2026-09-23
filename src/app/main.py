@@ -215,7 +215,7 @@ async def run_webhook():
     webhook_requests_handler.register(app, path=webhook_path)
     setup_application(app, dp, bot=bot)
     
-    # YooKassa webhook отключен — платежи обрабатываются вручную администратором
+    # Вебхуки YooKassa и панели обслуживает отдельный процесс API (app.api.app).
     
     logger.info("=" * 50)
     logger.info("БОТ РАБОТАЕТ В WEBHOOK РЕЖИМЕ!")

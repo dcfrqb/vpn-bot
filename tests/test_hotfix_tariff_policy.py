@@ -1,5 +1,4 @@
 """Хотфикс 2.1, п.3: выдача тарифа не затирает ручные сквады и не понижает лимит устройств."""
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -72,22 +71,7 @@ async def test_panel_down_raises():
         await apply_tariff_to_remna_user(fake, "8", "lite")
 
 
-@pytest.mark.asyncio
-async def test_provision_tariff_uses_policy():
-    """Промо/админ-выдача (provision_tariff) тоже не сносит ручные сквады."""
-    from app.services import remna_service
-
-    fake = FakeRemna()
-    fake.add_user(42, "tg_friend", telegram_id=4242, squads=["premium-friend"], limit=15,
-                  expire="2000-01-01T00:00:00Z")
-    with patch.object(remna_service, "RemnaClient", return_value=fake), \
-         patch.object(remna_service, "ensure_user_in_remnawave", AsyncMock(return_value="42")), \
-         patch("app.db.session.SessionLocal", None):
-        ok = await remna_service.provision_tariff(4242, "solokhin_15d", req_id="t")
-    assert ok is True
-    assert set(fake.squad_names(42)) == {"premium-friend", "premium"}
-    assert fake.users[42]["hwidDeviceLimit"] == 15
-    assert len(fake.patches) == 1
+# test_provision_tariff_uses_policy: removed with the 2.x provision_tariff; covered by tests/panel/test_provisioning.py::test_manual_squads_survive_any_grant
 
 
 # test_sun718_revert_keeps_manual_squads_and_limit: the 2.x Sun718RevertTask was removed at the

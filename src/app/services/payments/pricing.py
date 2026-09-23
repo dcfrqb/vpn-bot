@@ -7,10 +7,8 @@ anything is granted: the paid amount must match the catalog price, or the
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Optional
 
-from dateutil.relativedelta import relativedelta
 
 from app.domain.plans import amounts_match, get_expected_amount
 
@@ -79,9 +77,3 @@ def amount_fallback_plan(amount: float) -> tuple[str, int]:
         if amount >= threshold:
             return plan, months
     return "basic", 1
-
-
-def months_to_days(months: int, now: Optional[datetime] = None) -> int:
-    """Calendar months from now as days (1 month from 31.01 = 28/29 days, 12 months = 365/366)."""
-    now = now or datetime.now(timezone.utc)
-    return ((now + relativedelta(months=int(months))) - now).days

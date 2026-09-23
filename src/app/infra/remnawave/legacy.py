@@ -1,4 +1,5 @@
-"""2.x surface of the Remnawave client (stream B), kept until the cutover.
+"""2.x surface of the Remnawave client (stream B), kept for the 2.x services
+that still use it (retire in 3.0.1).
 
 The 2.x modules (sync_service, users, obhod_service, remna_service, yookassa)
 still call these methods on RemnaClient; 3.0 code uses

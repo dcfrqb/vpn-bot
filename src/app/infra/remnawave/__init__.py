@@ -1,6 +1,6 @@
 """Remnawave panel adapter. Owner stream: B (Panel core).
 
-- client.py  - own httpx client (transport; 2.x surface kept until cutover),
+- client.py  - own httpx client (transport; 2.x surface kept for the 2.x services),
                old path app.remnawave.client is an alias of this module;
 - util.py    - pure helpers (ids, dates, payloads, errors);
 - legacy.py  - 2.x-only client methods (mixin), removed at cutover;

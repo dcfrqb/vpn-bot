@@ -64,31 +64,6 @@ async def get_card_block_reason(fingerprint: Optional[str]) -> Optional[str]:
         return None
 
 
-async def notify_admins(text_message: str) -> None:
-    """Шлет сообщение админам из settings.ADMINS. Молча проглатывает ошибки."""
-    try:
-        from aiogram import Bot
-        from app.config import settings
-
-        admins = getattr(settings, "ADMINS", None) or []
-        if isinstance(admins, (str, int)):
-            admins = [admins]
-        token = getattr(settings, "BOT_TOKEN", None)
-        if not token or not admins:
-            return
-        bot = Bot(token=str(token))
-        try:
-            for admin_id in admins:
-                try:
-                    await bot.send_message(int(admin_id), text_message, parse_mode="HTML")
-                except Exception as e:
-                    logger.warning(f"blocklist: notify admin {admin_id} failed: {e}")
-        finally:
-            await bot.session.close()
-    except Exception as e:
-        logger.warning(f"blocklist: notify_admins failed: {e}")
-
-
 # =============================================================================
 # 3.0 (stream E): admin control of the stop-list and of the bot blocklist.
 # =============================================================================

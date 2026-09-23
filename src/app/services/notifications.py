@@ -15,7 +15,7 @@ Safety:
     never logged.
 
 No aiogram imports: ``bot`` is anything with an async ``send_message``.
-Old notify helpers (blocklist.notify_admins, refunds._notify_admins, ...) keep
+Old notify helpers (refunds._notify_admins, the 2.x reconciler loop) keep
 working unchanged; stream E moves callers here.
 """
 from __future__ import annotations

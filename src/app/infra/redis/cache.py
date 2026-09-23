@@ -2,7 +2,8 @@
 
 For short-lived derived data (status card, device list). JSON, never pickle.
 Fail-open: Redis unavailable -> get returns None, set/invalidate are no-ops.
-The legacy pickle cache (app.services.cache) stays as is until cutover.
+The 2.x pickle cache (app.services.cache) is still used by 2.x code
+(site profile, reconciler, payment locks) and retires in 3.0.1.
 """
 import json
 from typing import Any, Optional

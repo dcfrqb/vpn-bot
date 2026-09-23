@@ -7,8 +7,10 @@ reconciler страхует на случай, если YooKassa переста�
 """
 
 
-class ProvisioningError(Exception):
-    """Базовая ошибка provisioning."""
+# One class for the whole bot (review architecture R5): the webhook routes catch
+# this name, and ProvisioningService raises the same class, so a failed grant is
+# always a 503 for YooKassa, never a 500.
+from app.services.provisioning_rules import ProvisioningError  # noqa: E402,F401
 
 
 class ProvisioningPendingError(ProvisioningError):

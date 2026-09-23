@@ -519,11 +519,9 @@ _engine_cache: dict[int, PromoEngine] = {}
 
 
 def get_promo(container: Any) -> PromoEngine:
-    """The promo engine for this container.
-
-    Until app.container wires PromoEngine as ``promo`` (request E.md), the
-    port holds the Foundation placeholder; routers then get an engine built
-    over the container's ports (one per container).
+    """The promo engine for this container: ``container.promo`` (wired in
+    app.container). A container built with another PromoService (tests) gets
+    an engine over its ports, one per container.
     """
     promo = getattr(container, "promo", None)
     if isinstance(promo, PromoEngine):

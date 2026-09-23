@@ -109,20 +109,24 @@ Telegram-бот для продажи и управления VPN-подписк
 
 ## Структура проекта
 
+Слои и правила расширения: [`docs/ARCHITECTURE_3.0.md`](docs/ARCHITECTURE_3.0.md).
+
 ```
 vpn-bot/
 ├── src/app/              # Основной код приложения
-│   ├── api/              # FastAPI webhook сервер
-│   ├── routers/          # Обработчики команд и callback'ов
-│   ├── services/         # Бизнес-логика (платежи, подписки, синхронизация)
-│   ├── repositories/     # Слой доступа к данным
+│   ├── domain/           # Чистые правила: тарифы и цены (plans.py), DTO, тексты
+│   ├── infra/            # Адаптеры: Redis, Remnawave, YooKassa, Telegram Stars
+│   ├── services/         # Бизнес-логика: ports.py, checkout, fulfillment, provisioning, promo, ...
+│   ├── bot/              # aiogram: callbacks, routers, views, middlewares
+│   ├── api/              # FastAPI: вебхуки YooKassa и панели, /internal/site
+│   ├── worker/           # Один планировщик фоновых задач (scheduler.py, jobs/)
+│   ├── container.py      # Сборка реализаций портов
 │   ├── db/               # Модели БД и миграции Alembic
-│   ├── remnawave/        # Клиент Remna API
-│   ├── ui/               # Система UI и навигации
-│   ├── navigation/       # Система навигации между экранами
-│   ├── middlewares/      # Middleware для обработки запросов
-│   └── tasks/            # Фоновые задачи
-├── tests/                # Unit и интеграционные тесты
+│   ├── remnawave/        # Алиас infra/remnawave/client.py (2.x импорты)
+│   ├── routers/          # Только site_login (2.x)
+│   ├── middlewares/      # 2.x middleware (blocklist, timing, auth, tg_errors)
+│   └── tasks/            # 2.x задачи (expiry_notifier, reconciler), уходят в 3.0.1
+├── tests/                # Unit, flows, контракты, интеграционные тесты
 ├── С4 diagrams/          # Архитектурные диаграммы
 ├── docker-compose.yml     # Конфигурация Docker Compose
 ├── Dockerfile            # Образ для контейнеризации
@@ -139,11 +143,11 @@ vpn-bot/
 pip install -r requirements.txt
 
 # 2. Конфиг
-cp config.example.env .env
+cp .env.example .env
 # Заполните BOT_TOKEN, ADMINS, DATABASE_URL, REDIS_URL, YooKassa, Remna
 
 # 3. Тесты (без БД — ключевые модули)
-PYTHONPATH=src pytest tests/test_payments.py tests/test_recovery.py tests/test_admin_grant_forever.py tests/test_build.py -v
+PYTHONPATH=src pytest tests/ -m "not integration" -q
 
 # 4. Полный запуск — требуется Docker
 docker compose up -d db redis
@@ -180,7 +184,7 @@ docker compose logs -f bot webhook-api --tail 50
 
 ### Переменные окружения
 
-Создайте `.env` на основе `config.example.env`. Обязательные параметры:
+Создайте `.env` на основе `.env.example` (там все ключи 3.0 с комментариями). Обязательные параметры:
 
 - `BOT_TOKEN` — токен Telegram бота от @BotFather
 - `ADMINS` — список ID администраторов (через запятую)

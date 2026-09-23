@@ -1,7 +1,8 @@
 """ProvisioningService: the ONE place that gives or takes access (stream B).
 
-Merges 2.x ``remna_service.provision_tariff`` (promo/admin/day grants) and
-``yookassa.get_or_create_remna_user_and_get_subscription_url`` (payments).
+Replaces 2.x ``remna_service.provision_tariff`` (promo/admin/day grants) and
+``yookassa.get_or_create_remna_user_and_get_subscription_url`` (payments);
+both are deleted, this is the only grant path.
 Callers build an ``Entitlement`` and call ``grant`` (alias ``provision``).
 
 grant(telegram_id, entitlement, trace_id):

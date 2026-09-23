@@ -20,7 +20,7 @@ app/
                  LeaderLock), cache (JSON)
     remnawave/   client.py (own httpx, 3.4.3), dto.py, gateway.py (stream B);
                  app/remnawave/client.py is an alias of client.py
-    yookassa/    stream A adds the async client here
+    yookassa/    async YooKassa client + PaymentGateway (gateway.py, no SDK)
     telegram_stars.py
   services/
     ports.py     Protocols every consumer depends on
@@ -41,12 +41,30 @@ app/
     app.py             FastAPI assembly; api/main.py and api/server.py are shims
     routes/            yookassa, remnawave (panel webhook), health
     internal_site.py   /internal/site/* for the site, contract frozen
-  container.py         composition root (the only place that picks implementations)
+  container.py         composition root of the 3.0 ports
 ```
 
-Dependency direction: `bot`, `api`, `worker` -> `services.ports` -> `domain`.
-Implementations (`services/*`, `infra/*`) are wired only in `container.py`.
-Nothing in `domain` or `services` imports aiogram or FastAPI.
+Dependency direction: `bot`, `api`, `worker` -> `services` -> `domain`, with
+`infra` behind the ports. The 3.0 ports (table below) are wired in
+`container.py`. Not everything goes through it yet (3.0.x debt, review
+architecture R2):
+
+- 2.x services still build their own `RemnaClient()`: `obhod_service`,
+  `users`, `site_profile`, `grants` (obhod admin), `tasks/expiry_notifier`,
+  `tasks/remnawave_reconciler`;
+- `PanelProvisioningService`, `PanelStatusService`, `PanelDevicesService` and
+  `ObhodLifecycle` fall back to a fresh `HttpRemnaGateway()` when built
+  without one (only tests and 2.x helpers do that);
+- `services/money.money(container)` assembles the money services lazily and
+  caches them on the container; `promo.get_promo(container)` returns
+  `container.promo`; `infra/yookassa.default_gateway()` is a process
+  singleton used by the refund webhook and `legacy_yookassa`.
+
+At import time nothing in `domain` or `services` imports aiogram or FastAPI.
+A few lazy imports cross that line at call time: `services/broadcast.py`
+(the broadcast sender and keyboard from `app.bot`), `services/payments/ui.py`
+(the default MoneyUi from `app.bot.views.money`), and `services/money.py` /
+`services/blocklist.py` (`is_blocked` from the 2.x `app.middlewares.blocklist`).
 
 ## Ports (`app/services/ports.py`)
 
@@ -67,9 +85,13 @@ Services that depend on an overridden port are built over the override
 (`build_container(bot, remna=Fake...)` gives provisioning/status/devices over the fake).
 `services/shims.py` was deleted at the cutover.
 
-Handlers get ports from DI by name: `container, remna, payments, stars,
-provisioning, status_service, devices, checkout, promo, notifier, maintenance`.
-Jobs get `ctx.container`; API routes call `app.container.get_container()`.
+The DI middleware puts `container` and the ports by name (`remna, payments,
+stars, provisioning, status_service, devices, checkout, promo, notifier,
+maintenance`) into handler data. In practice most handlers take `container`
+and call `money(container)`, `get_promo(container)` or a service module;
+D's screens take `status_service` / `devices` / `promo` by name. Both are
+accepted; new code should take a port by name when one exists. Jobs get
+`ctx.container`; API routes call `app.container.get_container()`.
 
 To ship a real implementation: add the class in your area, change ONE line in
 `container.build_container`, keep the signature. Tests build containers with
@@ -86,9 +108,25 @@ fakes: `build_container(bot, remna=FakeRemnaGateway(), notifier=RecordingNotifie
   Optional kwargs: `enable_if_disabled` (admin approved a payment of a
   DISABLED user), `clear_grace` (default True). Idempotent per `payment_id`,
   else per `trace_id`. `GrantRefused` (reason `disabled`, `bad_plan`,
-  `bad_entitlement`) = nothing written; `ProvisioningError` = retry.
+  `bad_entitlement`) = nothing written; `ProvisioningError` = retry. There is
+  one `ProvisioningError` class (`services/payments/errors.py` re-exports it),
+  so the webhook routes answer 503 for any failed grant.
+- Retry of a grant: the Phase A record keeps the target date and the panel
+  date it was computed from (`base`). A retry re-applies the target only while
+  the panel still sits on the base (or on the target: the PATCH landed);
+  if another grant, a credit or an admin moved the panel, the period is
+  recomputed on top of the current date. The term is never shortened.
 - Credits for existing accounts: `add_days`, `add_traffic`, `add_devices`
-  (never lowering, idempotent per trace_id). Refund: `revoke`.
+  (never lowering, idempotent per trace_id; `add_days` runs under the grant lock).
+- Refunds: `revoke(tg, months=N)` / `rollback(...)` take back exactly the
+  refunded months from the current expiry (full cut only when nothing is
+  left), under the same per-user lock, idempotent per trace id. Both the 24h
+  refund (`refund_requests.py`) and the YooKassa `refund.succeeded` webhook
+  (`refunds.py`) use it. A payment carrying `refund_24h` is never granted by
+  fulfillment or recovery.
+- Gifts and `plan` promo codes never move an active subscriber to a lower
+  plan (`promo.plan_for_recipient`): the time goes onto the current plan,
+  only a clear upgrade switches it.
 - Squads: only the bot's tariff squads (and the grace squad) are swapped;
   manual squads (`*-m`, `*-friend`, `arcadia`) are never written; the HWID
   limit is never lowered. Squad names are cached 10 min in the gateway.

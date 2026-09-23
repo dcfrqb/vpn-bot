@@ -9,7 +9,6 @@ N5 — выключатели фоновых задач: непонятное з
 N6 — после таймаута PATCH перепроверка выдачи идет с задержкой.
 Все id и имена здесь выдуманные.
 """
-import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -115,28 +114,7 @@ async def test_apply_expired_user_is_revived_by_date_only():
     assert fake.enabled == []
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tariff", ["trial_standard_5d", "premium_1"])
-async def test_promo_and_admin_grant_refused_for_disabled_one_alert(tariff):
-    from app.services import remna_service
-
-    fake = FakeRemna()
-    fake.add_user(9, "tg_test_user", telegram_id=TG_ID, squads=["lite"], status="DISABLED",
-                  expire=_iso(datetime.now(timezone.utc) + timedelta(days=10)))
-    before = dict(fake.users[9])
-    notify = AsyncMock()
-    with patch.object(remna_service, "RemnaClient", return_value=fake), \
-         patch.object(remna_service, "ensure_user_in_remnawave", AsyncMock(return_value="9")), \
-         patch("app.services.cache.get_redis_client", return_value=FakeRedis()), \
-         patch("app.services.blocklist.notify_admins", notify), \
-         patch("app.db.session.SessionLocal", None):
-        assert await remna_service.provision_tariff(TG_ID, tariff, req_id="t1") is False
-        assert await remna_service.provision_tariff(TG_ID, tariff, req_id="t2") is False
-    assert fake.patches == [] and fake.enabled == []
-    assert fake.users[9]["status"] == "DISABLED"
-    assert fake.users[9]["expireAt"] == before["expireAt"]
-    notify.assert_awaited_once()
-    assert "отключен вручную" in notify.await_args.args[0]
+# test_promo_and_admin_grant_refused_for_disabled_one_alert: removed with the 2.x provision_tariff (review architecture M1); covered by tests/panel/test_provisioning.py::test_disabled_user_is_refused_with_one_alert
 
 
 class _Res:
@@ -228,40 +206,7 @@ async def test_dedup_vanished_marker_is_not_swallowed():
 # N6
 # --------------------------------------------------------------------------
 
-class _LatePatchRemna(FakeRemna):
-    """Ответ на PATCH теряется по таймауту, а сам PATCH ложится чуть позже."""
-
-    async def update_user(self, user_id, **kwargs):
-        async def _late():
-            await asyncio.sleep(0.05)
-            await FakeRemna.update_user(self, user_id, **kwargs)
-        asyncio.get_running_loop().create_task(_late())
-        raise asyncio.TimeoutError()
+# test_late_patch_after_timeout_counts_as_granted: removed with the 2.x provision_tariff; covered by tests/panel/test_provisioning.py::test_patch_that_timed_out_but_landed_counts
 
 
-@pytest.mark.asyncio
-async def test_late_patch_after_timeout_counts_as_granted(monkeypatch):
-    from app.services import remna_service
-
-    monkeypatch.setattr(remna_service, "GRANT_RECHECK_DELAY_SECONDS", 0.2)
-    fake = _LatePatchRemna()
-    fake.add_user(71, "tg_test_user", telegram_id=TG_ID, squads=[], expire="2000-01-01T00:00:00Z")
-    with patch.object(remna_service, "RemnaClient", return_value=fake), \
-         patch.object(remna_service, "ensure_user_in_remnawave", AsyncMock(return_value="71")), \
-         patch("app.db.session.SessionLocal", None):
-        assert await remna_service.provision_tariff(TG_ID, "trial_standard_5d", req_id="t") is True
-    assert fake.squad_names(71) == ["standard"]
-
-
-def test_timeout_detection_follows_cause_chain():
-    from app.services.remna_service import _is_timeout_error
-    from app.services.remna_tariff import RemnaTariffError
-
-    try:
-        try:
-            raise asyncio.TimeoutError()
-        except asyncio.TimeoutError as e:
-            raise RemnaTariffError("update_user failed") from e
-    except RemnaTariffError as wrapped:
-        assert _is_timeout_error(wrapped)
-    assert not _is_timeout_error(RemnaTariffError("squad_not_found"))
+# test_timeout_detection_follows_cause_chain: removed with remna_service._is_timeout_error (dead since the 3.0 cutover)

@@ -1,4 +1,5 @@
-"""Re-export shim (release 3.0, stream A). Keep until the cutover.
+"""Re-export shim (release 3.0, stream A). Used by the 2.x reconciler,
+refunds.py and obhod_service; removed in 3.0.1 with them.
 
 2.x imported everything money-related from here. In 3.0 the money path is
 split into services:

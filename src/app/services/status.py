@@ -224,7 +224,7 @@ class PanelStatusService:
     async def invalidate(self, telegram_id: int) -> None:
         tg = int(telegram_id)
         await cache.invalidate(FRESH_KEY.format(tg))
-        # 2.x caches read by the old screens until the cutover
+        # 2.x caches still read by site_profile and the 2.x reconciler (3.0.1)
         try:
             from app.services.cache import invalidate_subscription_cache, invalidate_sync_cache, invalidate_user_cache
 

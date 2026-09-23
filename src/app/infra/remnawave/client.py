@@ -3,7 +3,8 @@
 Moved from app.remnawave.client in 3.0 (the old path is an alias of this
 module). New code talks to the panel through app.infra.remnawave.gateway
 (RemnaGateway port); this class stays the transport underneath and keeps the
-2.x surface the old code still calls until the cutover.
+2.x surface the 2.x services (obhod_service, users, site_profile, tasks)
+still call; it retires with them in 3.0.1.
 
 Fixes from review 06 applied here:
 - M3: a panel error is not "user not found". ``_find_user_by_username``
