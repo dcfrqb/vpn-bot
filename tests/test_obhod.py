@@ -101,7 +101,8 @@ async def test_create_obhod_user_has_no_telegram_id():
 def test_build_obhod_username_suffix():
     from app.services.obhod_service import build_obhod_username
 
-    assert build_obhod_username(123, username="kozlova") == "tg_kozlova_obhod"
+    # Хотфикс 2.1: только от telegram_id (@ник переиспользуемый -> захват чужого obhod)
+    assert build_obhod_username(123, username="test_user") == "tg_123_obhod"
     assert build_obhod_username(123) == "tg_123_obhod"
 
 
@@ -167,7 +168,7 @@ async def test_ensure_obhod_creates_user_for_pro():
     # Создан obhod-юзер без telegramId через create_obhod_user.
     mock_client.create_obhod_user.assert_awaited_once()
     kwargs = mock_client.create_obhod_user.await_args.kwargs
-    assert kwargs["username"] == "tg_vasya_obhod"
+    assert kwargs["username"] == "tg_555_obhod"
     assert kwargs["traffic_limit_bytes"] == plans.obhod_base_limit_bytes()
     assert kwargs["traffic_limit_strategy"] == "MONTH"
     # Создана obhod-подписка.
@@ -240,7 +241,9 @@ async def test_ensure_obhod_recovers_orphan_by_username():
     session, state = _fake_session(existing_obhod=None, tg=tg)
     mock_client = _patch_remna_for_obhod()
     # Предрезолв находит существующего obhod-юзера.
-    mock_client.get_user_by_username = AsyncMock(return_value={"uuid": "orphan-uuid-1"})
+    mock_client.get_user_by_username = AsyncMock(
+        return_value={"uuid": "orphan-uuid-1", "username": "tg_555_obhod", "telegramId": None}
+    )
     valid_until = datetime.utcnow() + timedelta(days=30)
 
     with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
@@ -273,7 +276,7 @@ async def test_ensure_obhod_recovers_on_duplicate_create():
     mock_client = _patch_remna_for_obhod()
     # Предрезолв пуст в первый раз, после duplicate-create — находит юзера.
     mock_client.get_user_by_username = AsyncMock(
-        side_effect=[None, {"uuid": "dup-uuid-2"}]
+        side_effect=[None, {"uuid": "dup-uuid-2", "username": "tg_555_obhod"}]
     )
     mock_client.create_obhod_user = AsyncMock(
         side_effect=Exception("user already exists")
@@ -295,6 +298,31 @@ async def test_ensure_obhod_recovers_on_duplicate_create():
     subs = [o for o in state["added"] if isinstance(o, Subscription)]
     assert len(subs) == 1
     assert subs[0].remna_user_id == "dup-uuid-2"
+
+
+@pytest.mark.asyncio
+async def test_ensure_obhod_never_adopts_foreign_user_by_username():
+    """Хотфикс 2.1: юзер с тем же username, но с telegramId (чужой основной
+    аккаунт) — не забираем, obhod не выдаем этим путем."""
+    from app.services import obhod_service
+
+    tg = TelegramUser(telegram_id=555, username="vasya")
+    session, state = _fake_session(existing_obhod=None, tg=tg)
+    mock_client = _patch_remna_for_obhod()
+    mock_client.get_user_by_username = AsyncMock(
+        return_value={"uuid": "foreign", "username": "tg_555_obhod", "telegramId": 999}
+    )
+    mock_client.create_obhod_user = AsyncMock(side_effect=Exception("user already exists"))
+    valid_until = datetime.utcnow() + timedelta(days=30)
+
+    with patch.object(obhod_service, "RemnaClient", return_value=mock_client):
+        url = await obhod_service.ensure_obhod_for_pro(
+            session=session, telegram_user_id=555, plan_code="pro", valid_until=valid_until,
+        )
+
+    assert url is None
+    mock_client.update_user.assert_not_called()
+    assert [o for o in state["added"] if isinstance(o, Subscription)] == []
 
 
 @pytest.mark.asyncio

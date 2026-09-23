@@ -100,6 +100,43 @@ def build_user_payload_from_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def is_username_taken_error(exc: Exception) -> bool:
+    """True если ошибка Remnawave = «username уже занят» (A019 / already exists)."""
+    if not isinstance(exc, httpx.HTTPStatusError):
+        text = str(exc).lower()
+        return "already exists" in text or "a019" in text
+    try:
+        body = exc.response.text or ""
+    except Exception:
+        body = ""
+    status = exc.response.status_code if exc.response is not None else 0
+    low = body.lower()
+    return status in (400, 409) and ("exists" in low or "a019" in low)
+
+
+def is_own_remna_user(
+    user_data: Dict[str, Any], telegram_id: int, known_remna_id: Optional[str] = None
+) -> bool:
+    """Можно ли считать найденного по username юзера Remnawave «своим».
+
+    Только если его telegramId совпадает с текущим юзером, ИЛИ telegramId пуст и
+    это тот же юзер, чей id уже сохранен у нас в БД (известная привязка).
+    Иначе это чужой аккаунт (переиспользованный @ник, тезка) — не забирать.
+    """
+    if not isinstance(user_data, dict):
+        return False
+    tg = user_data.get("telegramId")
+    if tg not in (None, "", 0):
+        try:
+            return int(tg) == int(telegram_id)
+        except (TypeError, ValueError):
+            return False
+    if known_remna_id is None:
+        return False
+    uid = user_data.get("id") or user_data.get("uuid")
+    return uid is not None and str(uid) == str(known_remna_id)
+
+
 @dataclass
 class RemnaUser:
     """DTO для пользователя Remna"""
@@ -396,6 +433,58 @@ class RemnaClient:
             payload["trafficLimitStrategy"] = traffic_limit_strategy
         return await self.request("POST", "/api/users", json=payload)
 
+    async def create_user_unique(
+        self,
+        *,
+        telegram_id: int,
+        base_username: str,
+        known_remna_id: Optional[str] = None,
+        **create_kwargs,
+    ) -> tuple:
+        """Создает юзера Remnawave, при занятом username НИКОГДА не забирая чужого.
+
+        Кандидаты: base_username -> tg_<telegram_id> -> tg_<telegram_id>_<rand>.
+        На «username занят» смотрим владельца: если is_own_remna_user — возвращаем
+        его (adopted=True, это наш же юзер после сбоя), иначе пробуем следующий
+        кандидат. telegramId чужого юзера не переписывается никогда.
+
+        Возвращает (user_data: dict, adopted: bool). Прочие ошибки пробрасывает.
+        """
+        import secrets as _secrets
+
+        candidates = [base_username]
+        fallback = f"tg_{int(telegram_id)}"
+        if fallback not in candidates:
+            candidates.append(fallback)
+        candidates.append(f"tg_{int(telegram_id)}_{_secrets.token_hex(3)}")
+
+        last_exc: Optional[Exception] = None
+        for name in candidates:
+            try:
+                response = await self.create_user(
+                    username=name, telegram_id=telegram_id, **create_kwargs
+                )
+                user_data = response.get("response", response) if isinstance(response, dict) else response
+                return user_data, False
+            except Exception as e:
+                if not is_username_taken_error(e):
+                    raise
+                last_exc = e
+                existing = await self._find_user_by_username(name)
+                if existing and is_own_remna_user(existing, telegram_id, known_remna_id):
+                    logger.info(
+                        f"Remna username {name} уже принадлежит этому же юзеру "
+                        f"(tg={telegram_id}, id={existing.get('id')}) — используем его"
+                    )
+                    return existing, True
+                logger.warning(
+                    f"Remna username {name} занят ДРУГИМ юзером "
+                    f"(id={(existing or {}).get('id')}, telegramId={(existing or {}).get('telegramId')}) — "
+                    f"не забираем, пробуем другой username для tg={telegram_id}"
+                )
+        assert last_exc is not None
+        raise last_exc
+
     async def create_obhod_user(
         self,
         username: str,
@@ -473,7 +562,8 @@ class RemnaClient:
         Логика:
         1. Попробовать найти по telegram_id
         2. Если не найден — создать нового
-        3. Если username занят — найти по username и добавить telegramId
+        3. Если username занят — чужой аккаунт НЕ забираем, создаем с другим
+           username (см. create_user_unique)
 
         Args:
             telegram_id:    Telegram ID пользователя
@@ -518,83 +608,33 @@ class RemnaClient:
         # 2. Не найден — создаем без подписки.
         # expire_at не выставляем — пользователь создается без активной подписки.
         # Подписка появится только после оплаты (provision_tariff).
+        # Хотфикс 2.1: при занятом username чужой аккаунт НЕ забираем и его
+        # telegramId НЕ переписываем (раньше так уводили чужую подписку).
         password = secrets.token_urlsafe(16)
-
-        try:
-            response = await self.create_user(
-                username=username,
-                password=password,
-                expire_at=expire_at,
-                telegram_id=telegram_id,
-                display_name=display_name,
-            )
-
-            user_data = response.get('response', response) if isinstance(response, dict) else response
-            uuid = user_data.get('uuid') or user_data.get('id')
-            if not uuid:
-                raise ValueError(f"Не удалось получить uuid из ответа: {response}")
-
-            logger.info(f"Создан пользователь Remna: uuid={uuid}, telegram_id={telegram_id}, name={display_name}")
-            return RemnaUser(
-                uuid=str(uuid),
-                telegram_id=telegram_id,
-                username=username,
-                name=display_name,
-                raw_data=user_data
-            )
-
-        except httpx.HTTPStatusError as e:
-            # 3. Username уже занят
-            if e.response.status_code in (400, 409) and 'exists' in e.response.text.lower():
-                logger.warning(f"Username {username} занят, пробуем найти или создать с суффиксом")
-
-                # Сначала пробуем найти существующего пользователя
-                try:
-                    found = await self._find_user_by_username(username)
-                    if found:
-                        uuid = found.get('uuid') or found.get('id')
-                        if uuid:
-                            await self.update_user(uuid, telegramId=telegram_id)
-                            logger.info(f"Обновлен telegramId для пользователя {uuid}")
-                            return RemnaUser(
-                                uuid=str(uuid),
-                                telegram_id=telegram_id,
-                                username=username,
-                                name=display_name,
-                                raw_data=found
-                            )
-                except Exception as find_err:
-                    logger.debug(f"Не удалось найти по username: {find_err}")
-
-                # Пользователь не найден в API — создаем с альтернативным username
-                import time
-                alt_username = f"tg_{telegram_id}_{int(time.time())}"
-                logger.info(f"Создаем пользователя с альтернативным username: {alt_username}")
-
-                try:
-                    alt_response = await self.create_user(
-                        username=alt_username,
-                        password=password,
-                        expire_at=expire_at,
-                        telegram_id=telegram_id,
-                        display_name=display_name,
-                    )
-                    alt_user_data = alt_response.get('response', alt_response) if isinstance(alt_response, dict) else alt_response
-                    alt_uuid = alt_user_data.get('uuid') or alt_user_data.get('id')
-                    if alt_uuid:
-                        logger.info(f"Создан пользователь с alt username: uuid={alt_uuid}, name={display_name}")
-                        return RemnaUser(
-                            uuid=str(alt_uuid),
-                            telegram_id=telegram_id,
-                            username=alt_username,
-                            name=display_name,
-                            raw_data=alt_user_data
-                        )
-                except Exception as alt_err:
-                    logger.error(f"Не удалось создать с альтернативным username: {alt_err}")
-
-            logger.error(f"Ошибка создания пользователя {telegram_id}: {e.response.status_code}")
-            raise
+        user_data, adopted = await self.create_user_unique(
+            telegram_id=telegram_id,
+            base_username=username,
+            password=password,
+            expire_at=expire_at,
+            display_name=display_name,
+        )
+        uuid = user_data.get('uuid') or user_data.get('id') if isinstance(user_data, dict) else None
+        if not uuid:
+            raise ValueError(f"Не удалось получить id из ответа: {user_data}")
+        if adopted and not user_data.get('telegramId'):
+            # Свой юзер (совпал сохраненный id) без telegramId — привязываем.
+            await self.update_user(str(uuid), telegramId=telegram_id)
+        logger.info(
+            f"{'Найден свой' if adopted else 'Создан'} пользователь Remna: id={uuid}, "
+            f"telegram_id={telegram_id}, username={user_data.get('username')}"
+        )
+        return RemnaUser(
+            uuid=str(uuid),
+            telegram_id=telegram_id,
+            username=user_data.get('username') or username,
+            name=display_name,
+            raw_data=user_data,
+        )
 
     async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """Публичный резолв пользователя Remnawave по username (или None).

@@ -31,7 +31,6 @@ from app.core.plans import (
 from app.db.models import RemnaUser, Subscription, TelegramUser
 from app.logger import logger
 from app.remnawave.client import RemnaClient, normalize_expire_at
-from app.utils.remna_username import build_remna_username
 
 OBHOD_PLAN_CODE = "obhod"  # plan_code строки sub_kind='obhod' (не из меню тарифов)
 
@@ -42,18 +41,27 @@ def build_obhod_username(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
 ) -> str:
-    """Уникальный username обходного юзера: <main_username>_obhod.
+    """Уникальный username обходного юзера: tg_<telegram_id>_obhod.
 
-    main дает tg_<...>; добавляем суффикс _obhod, чтобы не коллидировать с
-    основным юзером в Remnawave.
+    Хотфикс 2.1: раньше строился от @ника/имени (tg_<nick>_obhod). @ник в
+    Telegram переиспользуемый, и «восстановление по username» отдавало новому
+    Pro-покупателю чужого obhod-юзера со ссылкой. telegram_id уникален и не
+    меняется, поэтому username однозначно принадлежит этому юзеру.
+    Параметры username/first_name/last_name оставлены для совместимости вызовов.
+    Уже созданные obhod-юзеры адресуются по сохраненному id и не переименовываются.
     """
-    base = build_remna_username(
-        telegram_id=telegram_id,
-        username=username,
-        first_name=first_name,
-        last_name=last_name,
-    )
-    return f"{base}_obhod"
+    return f"tg_{int(telegram_id)}_obhod"
+
+
+def _is_own_obhod_orphan(remote: Optional[dict], expected_username: str) -> bool:
+    """Орфан из прошлой попытки можно переиспользовать, только если это точно наш
+    obhod-юзер: username ровно tg_<id>_obhod и у него нет telegramId (obhod-юзеры
+    создаются без telegramId)."""
+    if not isinstance(remote, dict):
+        return False
+    if remote.get("username") != expected_username:
+        return False
+    return remote.get("telegramId") in (None, "", 0)
 
 
 async def _get_obhod_squad_uuid(client: RemnaClient) -> Optional[str]:
@@ -180,7 +188,7 @@ async def ensure_obhod_for_pro(
             obhod_uuid = None
             try:
                 existing_remote = await client.get_user_by_username(username)
-                if existing_remote:
+                if _is_own_obhod_orphan(existing_remote, username):
                     obhod_uuid = existing_remote.get("uuid") or existing_remote.get(
                         "id"
                     )
@@ -229,7 +237,7 @@ async def ensure_obhod_for_pro(
                     resolved = None
                     try:
                         existing_remote = await client.get_user_by_username(username)
-                        if existing_remote:
+                        if _is_own_obhod_orphan(existing_remote, username):
                             resolved = existing_remote.get(
                                 "uuid"
                             ) or existing_remote.get("id")

@@ -1780,273 +1780,29 @@ async def get_or_create_remna_user_and_get_subscription_url(
 
                 new_device_limit = _device_limit_for_plan(subscription.plan_code)
                 logger.info(f"remna user create: tg_id={telegram_user_id} username={username} expire_at={expire_at} device_limit={new_device_limit}")
+                # Хотфикс 2.1: при занятом username чужого юзера НЕ забираем (раньше
+                # тут искали по username и продлевали/перетарифицировали чужой
+                # аккаунт, привязывая его к плательщику). create_user_unique
+                # берет другой username; «свой» юзер возможен только при совпадении
+                # telegramId или сохраненного у нас id.
+                adopted = False
                 try:
-                    remna_user_data = await client.create_user(
-                        username=username,
+                    remna_user_data, adopted = await client.create_user_unique(
+                        telegram_id=telegram_user_id,
+                        base_username=username,
+                        known_remna_id=telegram_user.remna_user_id,
                         password=password,
                         expire_at=expire_at,
-                        telegram_id=telegram_user_id,
                         active_internal_squads=[squad_uuid] if squad_uuid else None,
                         hwid_device_limit=new_device_limit,
                     )
-                    logger.debug(f"remna user created: tg_id={telegram_user_id} response_keys={list(remna_user_data.keys()) if isinstance(remna_user_data, dict) else type(remna_user_data).__name__}")
+                    logger.debug(f"remna user created: tg_id={telegram_user_id} adopted={adopted}")
                 except Exception as e:
-                    error_msg = str(e)
-                    # Пробуем извлечь текст ошибки из response, если это HTTPStatusError
-                    error_text = error_msg
-                    error_json = None
-                    
-                    # Проверяем, есть ли response с текстом ошибки (для httpx.HTTPStatusError)
-                    import httpx
-                    if isinstance(e, httpx.HTTPStatusError):
-                        try:
-                            if hasattr(e, 'response') and e.response:
-                                if hasattr(e.response, 'text') and e.response.text:
-                                    error_text = e.response.text
-                                    try:
-                                        import json
-                                        error_json = json.loads(e.response.text)
-                                        if isinstance(error_json, dict):
-                                            error_text = error_json.get('message', error_text)
-                                            logger.warning(f"⚠️ Ошибка при создании пользователя (из JSON): {error_text}")
-                                        else:
-                                            logger.warning(f"⚠️ Ошибка при создании пользователя (из response.text): {error_text}")
-                                    except:
-                                        logger.warning(f"⚠️ Ошибка при создании пользователя (из response.text): {error_text}")
-                        except Exception as parse_e:
-                            logger.warning(f"⚠️ Не удалось извлечь текст ошибки: {parse_e}")
-                    
-                    if not error_json:
-                        logger.warning(f"⚠️ Ошибка при создании пользователя: {error_msg}")
-                    
-                    # Если пользователь уже существует, получаем его из API
-                    # Проверяем все возможные варианты ошибки
-                    is_already_exists = (
-                        "already exists" in error_msg.lower() or 
-                        "already exists" in error_text.lower() or
-                        "A019" in error_msg or 
-                        "A019" in error_text or
-                        (error_json and error_json.get('errorCode') == 'A019') or
-                        "User username already exists" in error_msg or
-                        "User username already exists" in error_text or
-                        "username already exists" in error_msg.lower() or
-                        "username already exists" in error_text.lower()
-                    )
-                    if is_already_exists:
-                        logger.info(f"✅ Обнаружена ошибка 'already exists', ищем пользователя в Remna API...")
-                        logger.info(f"   error_msg: {error_msg[:100]}")
-                        logger.info(f"   error_text: {error_text[:100]}")
-                        if error_json:
-                            logger.info(f"   error_json: {error_json}")
-                        logger.warning(f"⚠️ Пользователь {username} уже существует в Remna API, получаю его данные...")
-                        # Ищем пользователя по telegram_id (приоритет) или username через API
-                        try:
-                            users_response = await client.get_users(size=100, start=1)
-                            response_data = users_response.get('response', {})
-                            users = response_data.get('users', [])
-                            
-                            found_user = None
-                            # Сначала ищем по telegram_id (более надежно)
-                            for user_data in users:
-                                if user_data.get('telegramId') == telegram_user_id:
-                                    found_user = user_data
-                                    logger.info(f"✅ Найден пользователь по telegramId={telegram_user_id}")
-                                    break
-                            
-                            # Если не нашли по telegram_id, ищем по username
-                            if not found_user:
-                                for user_data in users:
-                                    if user_data.get('username') == username:
-                                        found_user = user_data
-                                        logger.info(f"✅ Найден пользователь по username={username}")
-                                        break
-                            
-                            # Если не нашли на первой странице, ищем дальше
-                            if not found_user:
-                                page_size = 50
-                                start = 51
-                                while True:
-                                    users_response = await client.get_users(size=page_size, start=start)
-                                    response_data = users_response.get('response', {})
-                                    users = response_data.get('users', [])
-                                    
-                                    if not users:
-                                        break
-                                    
-                                    # Сначала по telegram_id
-                                    for user_data in users:
-                                        if user_data.get('telegramId') == telegram_user_id:
-                                            found_user = user_data
-                                            logger.info(f"✅ Найден пользователь по telegramId={telegram_user_id} (страница {start//page_size + 1})")
-                                            break
-                                    
-                                    # Если не нашли, по username
-                                    if not found_user:
-                                        for user_data in users:
-                                            if user_data.get('username') == username:
-                                                found_user = user_data
-                                                logger.info(f"✅ Найден пользователь по username={username} (страница {start//page_size + 1})")
-                                                break
-                                    
-                                    if found_user or len(users) < page_size:
-                                        break
-                                    
-                                    start += page_size
-                            
-                            if found_user:
-                                user_uuid = found_user.get('uuid')
-                                if user_uuid:
-                                    logger.info(f"✅ Найден существующий пользователь: {user_uuid}")
-                                    
-                                    # Обновляем expireAt в Remna: продлеваем от текущего (как provision_tariff)
-                                    if period_months is not None and period_months > 0:
-                                        from datetime import timezone as _tz
-                                        from dateutil.relativedelta import relativedelta as _rd
-                                        _now_utc = datetime.now(_tz.utc)
-                                        _base = _now_utc
-                                        _expire_raw = found_user.get("expireAt") or found_user.get("expires_at")
-                                        if _expire_raw:
-                                            try:
-                                                _exp_str = str(_expire_raw).replace("Z", "+00:00")
-                                                _current_exp = datetime.fromisoformat(_exp_str)
-                                                if _current_exp.tzinfo is None:
-                                                    _current_exp = _current_exp.replace(tzinfo=_tz.utc)
-                                                else:
-                                                    _current_exp = _current_exp.astimezone(_tz.utc)
-                                                if _current_exp > _now_utc:
-                                                    _base = _current_exp
-                                                    logger.info(f"📝 Продлеваю expireAt от текущего: {_current_exp.isoformat()}")
-                                            except Exception:
-                                                pass
-                                        _new_expire_str = (_base + _rd(months=period_months)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}: {_new_expire_str}")
-                                        try:
-                                            await client.update_user(str(user_uuid), expire_at=_new_expire_str)
-                                            logger.info(f"✅ expireAt обновлен в Remna")
-                                        except Exception as update_e:
-                                            logger.warning(f"⚠️ Не удалось обновить expireAt: {update_e}")
-                                    elif subscription.valid_until:
-                                        logger.info(f"📝 Обновляю expireAt для пользователя {user_uuid}: {subscription.valid_until} (fallback)")
-                                        try:
-                                            await client.update_user(str(user_uuid), expire_at=subscription.valid_until)
-                                            logger.info(f"✅ expireAt обновлен в Remna")
-                                        except Exception as update_e:
-                                            logger.warning(f"⚠️ Не удалось обновить expireAt: {update_e}")
-                                    
-                                    # Обновляем telegramId если его нет
-                                    if not found_user.get('telegramId'):
-                                        logger.info(f"📝 Обновляю telegramId для пользователя {user_uuid}")
-                                        try:
-                                            await client.update_user(str(user_uuid), telegramId=int(telegram_user_id))
-                                            logger.info(f"✅ telegramId обновлен")
-                                        except Exception as update_e:
-                                            logger.warning(f"⚠️ Не удалось обновить telegramId: {update_e}")
-                                    
-                                    # Обновляем сквад если нужно
-                                    squad_name = await get_squad_name_for_plan(subscription.plan_code)
-                                    if squad_name:
-                                        try:
-                                            squad = await client.get_squad_by_name(squad_name)
-                                            if squad:
-                                                squad_uuid = squad.get('uuid')
-                                                logger.info(f"📝 Обновляю сквад для пользователя {user_uuid}: {squad_name}")
-                                                try:
-                                                    await client.update_user(str(user_uuid), activeInternalSquads=[squad_uuid])
-                                                    logger.info(f"✅ Сквад обновлен в Remna")
-                                                except Exception as squad_update_e:
-                                                    logger.warning(f"⚠️ Не удалось обновить сквад: {squad_update_e}")
-                                        except Exception as squad_e:
-                                            logger.warning(f"⚠️ Ошибка при получении сквада {squad_name}: {squad_e}")
-                                    
-                                    # Получаем полные данные пользователя
-                                    remna_user_data = await client.get_user_by_id(str(user_uuid))
-                                    logger.info(f"✅ Получены данные существующего пользователя")
-                                    logger.info(f"📋 Структура данных пользователя: {list(remna_user_data.keys()) if isinstance(remna_user_data, dict) else type(remna_user_data)}")
-                                    if isinstance(remna_user_data, dict):
-                                        logger.info(f"📋 Ключи в response: {list(remna_user_data.get('response', {}).keys()) if isinstance(remna_user_data.get('response'), dict) else 'response не dict'}")
-                                    
-                                    # Пытаемся извлечь subscription URL напрямую из данных пользователя
-                                    subscription_url = None
-                                    if isinstance(remna_user_data, dict):
-                                        # Проверяем разные варианты структуры
-                                        subscription_url = (
-                                            remna_user_data.get('subscriptionUrl') or 
-                                            remna_user_data.get('subscription_url') or
-                                            (remna_user_data.get('response', {}) or {}).get('subscriptionUrl') or
-                                            (remna_user_data.get('response', {}) or {}).get('subscription_url')
-                                        )
-                                        
-                                        # Если нашли token, формируем URL
-                                        if not subscription_url:
-                                            subscription_token = (
-                                                remna_user_data.get('subscriptionToken') or 
-                                                remna_user_data.get('subscription_token') or
-                                                (remna_user_data.get('response', {}) or {}).get('subscriptionToken') or
-                                                (remna_user_data.get('response', {}) or {}).get('subscription_token')
-                                            )
-                                            if subscription_token:
-                                                _sub_base = str(settings.SUBSCRIPTION_BASE_URL).rstrip("/") if settings.SUBSCRIPTION_BASE_URL else "https://sub.crs-projects.com"
-                                                subscription_url = f"{_sub_base}/{subscription_token}"
-                                                logger.info(f"✅ Сформирован subscription URL из token: {subscription_url[:50]}...")
-                                    
-                                    # Если не нашли в данных, используем метод клиента
-                                    if not subscription_url:
-                                        subscription_url = await client.get_user_subscription_url(str(user_uuid))
-                                    
-                                    if subscription_url and subscription_url.strip():
-                                        subscription_url = subscription_url.strip()
-                                        logger.info(f"✅ Получен subscription URL для существующего пользователя: {subscription_url[:50]}...")
-                                        
-                                        # Сохраняем remna_user_id и subscription_url в БД
-                                        remna_user_result = await session.execute(
-                                            select(RemnaUser).where(RemnaUser.remna_id == str(user_uuid))
-                                        )
-                                        remna_user = remna_user_result.scalar_one_or_none()
-                                        
-                                        if not remna_user:
-                                            remna_user = RemnaUser(
-                                                remna_id=str(user_uuid),
-                                                username=username,
-                                                raw_data=remna_user_data if isinstance(remna_user_data, dict) else {}
-                                            )
-                                            session.add(remna_user)
-                                        
-                                        telegram_user.remna_user_id = str(user_uuid)
-                                        subscription.remna_user_id = str(user_uuid)
-                                        
-                                        if not subscription.config_data:
-                                            subscription.config_data = {}
-                                        subscription.config_data["subscription_url"] = subscription_url
-                                        
-                                        await session.commit()
-                                        logger.info(f"✅ Данные сохранены в БД для существующего пользователя")
-                                        
-                                        await client.close()
-                                        return subscription_url
-                                    else:
-                                        logger.warning(f"⚠️ Не удалось получить subscription URL для существующего пользователя {user_uuid}")
-                                        logger.debug(f"Данные пользователя: {remna_user_data}")
-                                        # Обновляем remna_user_id в БД даже если URL не получен
-                                        telegram_user.remna_user_id = str(user_uuid)
-                                        subscription.remna_user_id = str(user_uuid)
-                                        await session.commit()
-                                        await client.close()
-                                        return None
-                                else:
-                                    logger.error(f"❌ Не удалось получить UUID существующего пользователя")
-                                    return None
-                            else:
-                                logger.error(f"❌ Пользователь {username} не найден в API после ошибки 'already exists'")
-                                return None
-                        except Exception as search_e:
-                            logger.error(f"❌ Ошибка при поиске существующего пользователя: {search_e}")
-                            return None
-                    else:
-                        logger.error(f"Ошибка при создании пользователя в Remna API: {e}")
-                        import traceback
-                        logger.debug(traceback.format_exc())
-                        return None
-                
+                    logger.error(f"Ошибка при создании пользователя в Remna API: tg_id={telegram_user_id} err={e}")
+                    return None
+                if isinstance(remna_user_data, dict) and remna_user_data.get("username"):
+                    username = remna_user_data["username"]
+
                 remna_user_id = None
                 if isinstance(remna_user_data, dict):
                     # Пробуем разные варианты получения UUID
@@ -2172,7 +1928,9 @@ async def get_or_create_remna_user_and_get_subscription_url(
                 # засчитается, а не «оплачено, но без нод»). expireAt уже задан в create.
                 from app.services.remna_tariff import apply_tariff_to_remna_user
                 await apply_tariff_to_remna_user(
-                    client, str(remna_user_id), subscription.plan_code, expire_at=None,
+                    client, str(remna_user_id), subscription.plan_code,
+                    # свой юзер после сбоя: create не выполнялся, дату ставим здесь
+                    expire_at=normalize_expire_at(expire_at) if adopted else None,
                 )
 
                 return subscription_url
