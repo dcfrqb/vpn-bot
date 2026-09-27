@@ -323,7 +323,7 @@ class PanelEventProcessor:
         else:
             text = T.admin_node_restored(name, address)
         n = await self.c.notifier.notify_admins(
-            AdminTopic.PANEL, text, dedup_key=f"rw:{ev.event}:{uuid}", dedup_ttl=NODE_DEDUP_TTL,
+            AdminTopic.PANEL, text, html=True, dedup_key=f"rw:{ev.event}:{uuid}", dedup_ttl=NODE_DEDUP_TTL,
         )
         return "notified" if n else "deduped"
 

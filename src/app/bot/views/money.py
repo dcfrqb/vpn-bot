@@ -11,10 +11,10 @@ from typing import Any, Optional, Sequence
 from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.callbacks import AdmRefund, AdmReview, AutoPay, Gift, Nav, PayCheck, PayStars, Period, Plan, RefundReq
-from app.bot.views import kb, kit
+from app.bot.views import kit
 from app.domain.texts import checkout as T
 from app.domain.texts.common import OFFER_URL, PRIVACY_URL
-from app.domain.texts.ui import Screen
+from app.domain.texts.ui import B, Screen
 
 
 @dataclass(frozen=True)
@@ -142,12 +142,16 @@ class TelegramMoneyUi:
         return kit.keyboard(footer=kit.Footer.to_menu())
 
     def review_admin(self, payment_id: int) -> Any:
-        return kb([[(T.BTN_REVIEW_OK, AdmReview(a="ok", pid=payment_id)),
-                    (T.BTN_REVIEW_NO, AdmReview(a="no", pid=payment_id))]])
+        """Decision row of the «held» payment alert (screen kit ``kit.pair``)."""
+        return kit.markup_only(primary=[kit.pair(
+            kit.action(B.APPROVE.format(label="Одобрить и выдать"), AdmReview(a="ok", pid=payment_id)),
+            kit.action(B.REJECT.format(label="Отклонить"), AdmReview(a="no", pid=payment_id)))])
 
     def refund_admin(self, request_id: int) -> Any:
-        return kb([[(T.BTN_REFUND_OK, AdmRefund(a="ok", rid=request_id)),
-                    (T.BTN_REFUND_NO, AdmRefund(a="no", rid=request_id))]])
+        """Decision row of the 24h refund request alert (screen kit ``kit.pair``)."""
+        return kit.markup_only(primary=[kit.pair(
+            kit.action(B.APPROVE.format(label="Вернуть"), AdmRefund(a="ok", rid=request_id)),
+            kit.action(B.REJECT.format(label="Отклонить"), AdmRefund(a="no", rid=request_id)))])
 
     def autopay_notice(self) -> Any:
         return kit.markup_only(primary=[kit.action(T.BTN_AUTOPAY_STOP, AutoPay(a="stop"))])

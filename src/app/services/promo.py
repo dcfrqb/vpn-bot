@@ -39,6 +39,7 @@ from app.domain.models import (
     ensure_utc,
 )
 from app.domain.texts import fmt_date_msk, h
+from app.domain.texts import ui
 from app.logger import logger
 from app.services.promo_types import (  # noqa: F401 - re-exported
     PromoCodeRow,
@@ -387,13 +388,15 @@ class PromoEngine:
         except Exception as e:  # noqa: BLE001
             logger.error(f"promo {code}: grant failed tg={tg} ({type(e).__name__}), rolling back the record")
             await self.repo.rollback_builtin(code, tg)
-            await self._alert(f"❌ <b>{h(code.upper())}: выдача не удалась</b>", tg,
-                              "Запись использования откатили, пользователь может повторить.")
+            await self._alert(f"{h(code.upper())}: выдача не удалась", tg,
+                              "Запись использования откатили, пользователь может повторить.", emoji="❌")
             return PromoReward(code=code, outcome=PromoOutcome.ERROR)
         await self.repo.finish(rec.redemption_id, True, {"plan": promo.plan_code, "days": promo.days})
         await self._alert(
-            f"🎁 <b>Промокод {h(code.upper())} активирован</b>", tg,
-            f"📦 {h(promo.plan_code)} на {promo.days} дн.\n📅 До: {fmt_date_msk(new_state.expires_at)}",
+            f"Промокод {h(code.upper())} активирован", tg,
+            ui.field("Тариф", f"{promo.plan_code} на {promo.days} дн."),
+            ui.field("До", fmt_date_msk(new_state.expires_at)),
+            emoji="🎁",
         )
         return PromoReward(code=code, outcome=PromoOutcome.APPLIED, plan_code=promo.plan_code,
                            days=promo.days, expires_at=new_state.expires_at, redemption_id=rec.redemption_id)
@@ -500,15 +503,19 @@ class PromoEngine:
             return PromoReward(code=code, outcome=PromoOutcome.ERROR)
         await self.repo.finish(res.redemption_id, True, {"plan": plan, "days": row.days, "traffic_gb": row.traffic_gb,
                                                           "devices": row.devices, "source": source})
-        title = "🎁 <b>Подарок активирован</b>" if row.kind == KIND_GIFT else f"🎟 <b>Промокод {h(code)} активирован</b>"
-        await self._alert(title, tg, f"📦 {h(plan)} +{row.days} дн.\n📅 До: {fmt_date_msk(new_state.expires_at)}"
-                                     f"\nИспользований: {row.uses + 1}{'/' + str(row.max_uses) if row.max_uses else ''}")
+        title = "Подарок активирован" if row.kind == KIND_GIFT else f"Промокод {h(code)} активирован"
+        uses = f"{row.uses + 1}" + (f"/{row.max_uses}" if row.max_uses else "")
+        await self._alert(title, tg, ui.field("Тариф", f"{plan} +{row.days} дн."),
+                          ui.field("До", fmt_date_msk(new_state.expires_at)), ui.field("Использований", uses),
+                          emoji="🎁" if row.kind == KIND_GIFT else "🎟")
         return PromoReward(code=code, outcome=PromoOutcome.APPLIED, plan_code=plan, days=row.days,
                            months=int(gift_months) if gift_months else None,
                            expires_at=new_state.expires_at, redemption_id=res.redemption_id)
 
-    async def _alert(self, title_html: str, tg: int, body_html: str) -> None:
-        text = f"{title_html}\n\n🆔 <code>{int(tg)}</code>\n{body_html}"
+    async def _alert(self, title: str, tg: int, *lines: str, emoji: str = "🎉") -> None:
+        """Admin alert (screen kit ``ui.admin_alert``); ``lines`` are already HTML-safe."""
+        text = ui.admin_alert(title, emoji=emoji, who=ui.who_block(name=None, username=None, telegram_id=tg),
+                              lines=list(lines)).html()
         try:
             await self.notifier.notify_admins(AdminTopic.PROMO, text, html=True)
         except Exception as e:  # noqa: BLE001

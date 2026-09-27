@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import Adm
 from app.bot.middlewares.admin_guard import guard_router
 from app.bot.views import admin as V
-from app.bot.views import render
+from app.bot.views import kit, render
 from app.domain.plans import OBHOD_PACKAGE_CATALOG
 from app.domain.texts import admin as T
 from app.logger import logger
@@ -31,7 +31,7 @@ async def _card(event: Any, tg: int, *, answered: bool = False) -> None:
         info = await obhod.info(tg)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"admin obhod: info failed tg={tg} ({type(e).__name__})")
-        await render(event, f"Не получилось прочитать обход {tg}, панель или БД недоступны.", answer_callback=not answered)
+        await render(event, *kit.view(T.result_screen("error", "Обход", f"Не получилось прочитать обход {tg}, панель или БД недоступны.")), answer_callback=not answered)
         return
     await render(event, *V.obhod_card(info, PACKAGES), answer_callback=not answered)
 

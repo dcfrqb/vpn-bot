@@ -274,69 +274,67 @@ GIFT_PENDING = GIFT_PENDING_SCREEN.html()
 def admin_paid(*, full_name: str, username: str, telegram_id: int, plan_label: str, amount: Money,
                currency: str, payment_number: int, total_rub: Money, expires_at: Optional[datetime],
                external_id: str, method: str) -> str:
-    """HTML, built from h()-escaped values (Notifier html=True)."""
-    who = f"👤 <b>{h(full_name or 'Без имени')}</b>\n"
-    if username:
-        who += f"🔗 @{h(username)}\n"
+    """HTML, built through the screen kit (``ui.admin_alert``; Notifier html=True)."""
     count = ("🟢 Новый клиент · 1-я оплата" if payment_number <= 1
              else f"🔁 Постоянный клиент · {int(payment_number)}-я оплата")
     paid = f"{int(amount)} ⭐" if currency == "XTR" else fmt_rub(amount)
-    until = f"📅 Действует до: {fmt_date_msk(expires_at)}\n\n" if expires_at else ""
-    return (
-        f"💰 <b>Новая оплата VPN</b>\n\n{who}🆔 ID: <code>{int(telegram_id)}</code>\n\n"
-        f"<blockquote>Тариф: {h(plan_label)}\nСумма: {paid}\nСпособ: {h(method)}</blockquote>\n\n"
-        f"<blockquote>{count}\n📈 Всего с клиента: {fmt_rub(total_rub)}</blockquote>\n\n"
-        f"{until}Payment ID: <code>{h(external_id)}</code>"
-    )
+    lines = [ui.field("Тариф", plan_label), ui.field("Сумма", paid), ui.field("Способ", method)]
+    if expires_at:
+        lines.append(ui.field("Действует до", fmt_date_msk(expires_at)))
+    return ui.admin_alert(
+        "Новая оплата VPN", emoji="💰",
+        who=ui.who_block(name=full_name or "Без имени", username=username, telegram_id=telegram_id),
+        lines=lines,
+        sections=[ui.block(count, ui.field("Всего с клиента", fmt_rub(total_rub)))],
+        hint=f"Payment ID: {h(external_id)}",
+    ).html()
 
 
 def admin_held(*, payment_id: int, external_id: str, telegram_id: int, amount: Money, currency: str,
                reason: str) -> str:
-    return (
-        "🚨 <b>Платеж на ручной проверке</b>\n\n"
-        f"Payment: #{int(payment_id)} <code>{h(external_id)}</code>\n"
-        f"Telegram ID: <code>{int(telegram_id)}</code>\n"
-        f"Сумма: {h(amount)} {h(currency)}\n"
-        f"Причина: {h(reason)}\n\n"
-        "Доступ НЕ выдан. «Одобрить и выдать» проведет обычную выдачу, «Отклонить» оставит без доступа "
-        "(деньги возвращаются в кабинете ЮKassa)."
-    )
+    return ui.admin_alert(
+        "Платеж на ручной проверке", emoji="🚨",
+        who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+        lines=[ui.field("Payment", f"#{int(payment_id)} {external_id}"), ui.field("Сумма", f"{amount} {currency}"),
+              ui.field("Причина", reason)],
+        hint="«Одобрить и выдать» проведет обычную выдачу, «Отклонить» оставит без доступа "
+             "(деньги возвращаются в кабинете ЮKassa).",
+    ).html()
 
 
 def admin_not_provisioned(*, payment_id: int, telegram_id: int, error: str) -> str:
-    return (
-        "⚠️ <b>Оплата есть, доступ не выдан</b>\n\n"
-        f"Telegram ID: <code>{int(telegram_id)}</code>\n"
-        f"Payment row id: <code>{int(payment_id)}</code>\n"
-        f"Ошибка: <code>{h(error[:300])}</code>\n\n"
-        "Бот повторит выдачу сам (повтор вебхука, recovery, реконсилер). Если не пройдет, проверь "
-        "сквады и юзера в Remnawave."
-    )
+    return ui.admin_alert(
+        "Оплата есть, доступ не выдан", emoji="⚠️",
+        who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+        lines=[ui.field("Payment row id", payment_id), ui.field("Ошибка", ui.code(error[:300]))],
+        hint="Бот повторит выдачу сам (повтор вебхука, recovery, реконсилер). Если не пройдет, проверь "
+             "сквады и юзера в Remnawave.",
+    ).html()
 
 
 def admin_obhod_manual(*, telegram_id: int, package: str, external_id: str) -> str:
-    return (
-        "⚠️ <b>Пакет обхода оплачен, но НЕ применен</b>\n\n"
-        f"Telegram ID: <code>{int(telegram_id)}</code>\nПакет: {h(package)}\n"
-        f"Payment: <code>{h(external_id)}</code>\n\n"
-        "Скорее всего нет активного обхода (Pro истек). Примени кап вручную или оформи возврат."
-    )
+    return ui.admin_alert(
+        "Пакет обхода оплачен, но НЕ применен", emoji="⚠️",
+        who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+        lines=[ui.field("Пакет", package), ui.field("Payment", external_id)],
+        hint="Скорее всего нет активного обхода (Pro истек). Примени кап вручную или оформи возврат.",
+    ).html()
 
 
 def admin_gift_pending(*, telegram_id: int, payment_id: int) -> str:
-    return (
-        "⚠️ <b>Подарок оплачен, код не создан</b>\n\n"
-        f"Покупатель: <code>{int(telegram_id)}</code>\nPayment row id: <code>{int(payment_id)}</code>\n\n"
-        "Бот повторит создание кода сам. Если не выйдет, выдай код вручную."
-    )
+    return ui.admin_alert(
+        "Подарок оплачен, код не создан", emoji="⚠️",
+        lines=[ui.field("Покупатель", telegram_id), ui.field("Payment row id", payment_id)],
+        hint="Бот повторит создание кода сам. Если не выйдет, выдай код вручную.",
+    ).html()
 
 
 def admin_blocked_card(*, external_id: str, fingerprint: str, reason: str) -> str:
-    return (
-        "⚠️ <b>Оплата с карты из стоп-листа</b>\n"
-        f"Платеж: <code>{h(external_id)}</code>\nКарта: <code>{h(fingerprint)}</code>\n"
-        f"Причина: {h(reason or '-')}\n\nПодписка выдается штатно. Реши по возврату вручную."
-    )
+    return ui.admin_alert(
+        "Оплата с карты из стоп-листа", emoji="⚠️",
+        lines=[ui.field("Платеж", external_id), ui.field("Карта", fingerprint), ui.field("Причина", reason or "-")],
+        hint="Подписка выдается штатно. Реши по возврату вручную.",
+    ).html()
 
 
 # --- 24h refund ------------------------------------------------------------------------------
@@ -384,17 +382,15 @@ def refund_done_screen(until: Optional[datetime] = None, *, expired: bool) -> ui
 def admin_refund_request(*, request_id: int, full_name: str, username: str, telegram_id: int, payment_id: int,
                          external_id: str, plan_label: str, amount: Money, currency: str,
                          paid_at: Optional[datetime]) -> str:
-    who = h(full_name or "Без имени") + (f" @{h(username)}" if username else "")
     paid = f"{int(amount)} ⭐" if currency == "XTR" else fmt_rub(amount)
-    return (
-        f"↩️ <b>Запрос на возврат #{int(request_id)}</b> (24 часа)\n\n"
-        f"Клиент: {who} (<code>{int(telegram_id)}</code>)\n"
-        f"Платеж: #{int(payment_id)} <code>{h(external_id)}</code>\n"
-        f"Тариф: {h(plan_label)}\nСумма: {paid}\n"
-        f"Оплачен: {fmt_date_msk(paid_at, with_time=True)}\n"
-        "Причина: не смог подключиться\n\n"
-        "«Вернуть» вернет деньги и отключит доступ по этой оплате."
-    )
+    return ui.admin_alert(
+        f"Запрос на возврат #{int(request_id)} (24 часа)", emoji="↩️",
+        who=ui.who_block(name=full_name or "Без имени", username=username, telegram_id=telegram_id),
+        lines=[ui.field("Платеж", f"#{int(payment_id)} {external_id}"), ui.field("Тариф", plan_label),
+              ui.field("Сумма", paid), ui.field("Оплачен", fmt_date_msk(paid_at, with_time=True)),
+              ui.field("Причина", "не смог подключиться")],
+        hint="«Вернуть» вернет деньги и отключит доступ по этой оплате.",
+    ).html()
 
 
 ADMIN_REFUND_DONE = "✅ Возврат оформлен, доступ по оплате отключен."

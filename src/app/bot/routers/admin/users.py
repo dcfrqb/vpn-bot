@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import Adm, Nav
 from app.bot.middlewares.admin_guard import guard_router, is_admin_id
 from app.bot.views import admin as V
-from app.bot.views import render
+from app.bot.views import kit, render
 from app.domain.texts import admin as T
 from app.domain.texts import fmt_date_msk, h
 from app.logger import logger
@@ -99,11 +99,13 @@ async def _sync(message: Message, tg: int, container: Any) -> None:
     try:
         st = await container.status.get_state(tg, force=True)
     except Exception as e:  # noqa: BLE001
-        await render(message, f"❌ Синхронизация {tg} не удалась ({h(type(e).__name__)})")
+        await render(message, *kit.view(T.result_screen("error", "Синхронизация",
+                                                         f"Не удалась для {tg} ({h(type(e).__name__)})")))
         return
     status = "панель недоступна" if st.stale else ("✅ активна" if st.active else "❌ нет")
-    await render(message, (f"<b>Sync {tg}</b>\nПодписка: {status}\nТариф: {h(st.plan_code or '—')}\n"
-                           f"До: {fmt_date_msk(st.expires_at, with_time=True)}"))
+    await render(message, *kit.view(T.result_screen(
+        "ok", f"Sync {tg}", f"Подписка: {status}", f"Тариф: {h(st.plan_code or '—')}",
+        f"До: {fmt_date_msk(st.expires_at, with_time=True)}")))
 
 
 @router.message(Command("sync"))

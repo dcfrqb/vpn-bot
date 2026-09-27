@@ -14,7 +14,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import PromoAdm
 from app.bot.middlewares.admin_guard import guard_router
 from app.bot.views import admin as V
-from app.bot.views import render
+from app.bot.views import kit, render
 from app.domain.texts import admin as T
 from app.domain.texts import h
 from app.services.promo import KIND_DAYS, KIND_PLAN, PromoCodeSpec, get_promo, normalize_audience
@@ -82,10 +82,10 @@ async def cmd_promo_new(message: Message, command: CommandObject, container: Any
         spec = parse_promo_new(command.args)
         row = await get_promo(container).create_code(spec, created_by=message.from_user.id)
     except ValueError as e:
-        await render(message, f"Не создал: {h(str(e))}\n\n{T.USAGE_PROMO_NEW}")
+        await render(message, *kit.view(T.result_screen("warn", "Промокод", f"Не создал: {h(str(e))}", T.USAGE_PROMO_NEW)))
         return
     if row is None:
-        await render(message, "Такой код уже есть.")
+        await render(message, *kit.view(T.result_screen("info", "Промокод", "Такой код уже есть.")))
         return
     me = await message.bot.me()
     text, markup = V.promo_card(row, me.username)
