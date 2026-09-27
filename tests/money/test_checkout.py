@@ -1,6 +1,8 @@
 """CheckoutService: server prices, pending reuse 15 min, stale quotes, Stars, gifts, stop-list."""
 from dataclasses import replace
 
+import pytest
+
 from app.domain.models import PaymentKind
 from app.domain.plans import get_plan_price
 from app.services.checkout import parse_stars_payload, stars_payload
@@ -145,7 +147,8 @@ async def test_plan_and_period_options():
     plans = await m.checkout.plan_options(TG)
     assert [p[0] for p in plans] == ["lite", "standard", "pro"]
     deps.hooks.last_plans[TG] = "premium"
-    assert [p[0] for p in await m.checkout.plan_options(TG)][-1] == "premium"
+    # legacy plans are hidden from the list even for their owner (owner decision 27.09)
+    assert [p[0] for p in await m.checkout.plan_options(TG)] == ["lite", "standard", "pro"]
     assert "premium" not in [p[0] for p in await m.checkout.plan_options(TG, gift=True)]
     periods = await m.checkout.period_options(TG, "pro")
     assert [p[0] for p in periods] == [1, 3, 6, 12]
@@ -181,3 +184,39 @@ async def test_stoplisted_after_invoice_is_refused_at_precheck_and_held_if_paid(
     rec = await deps.store.get(res.intent.payment_id)
     assert rec.status == "succeeded" and rec.meta.get("needs_review")
     assert not deps.provisioning.by_payment
+
+
+@pytest.mark.parametrize("legacy", ["basic", "premium"])
+async def test_legacy_plan_hidden_from_list_but_renewable_by_owner(legacy):
+    """Legacy basic/premium never appear in the plan list (owner included), but the
+    owner's explicit renewal (reminder button -> Period(c=legacy, m)) still quotes."""
+    m, deps = make_money()
+    deps.hooks.last_plans[TG] = legacy
+    assert legacy not in [p[0] for p in await m.checkout.plan_options(TG)]
+    assert legacy not in [p[0] for p in await m.checkout.plan_options(TG + 1)]
+    q = await m.checkout.quote(TG, legacy, 1)
+    assert q is not None and q.is_legacy and q.amount_rub > 0
+    # the periods screen of an old button still works for the owner only
+    assert [p[0] for p in await m.checkout.period_options(TG, legacy)] == [1, 3, 6, 12]
+    assert await m.checkout.period_options(TG + 1, legacy) == []
+    assert await m.checkout.quote(TG + 1, legacy, 1) is None
+
+
+@pytest.mark.parametrize("legacy", ["basic", "premium"])
+async def test_reminder_renew_button_keeps_legacy_owner_on_their_plan(legacy):
+    """The explicit renewal entry point (reminder / grace «Продлить подписку») goes
+    straight to checkout of the owner's legacy plan; a non-owner gets the list."""
+    from types import SimpleNamespace
+
+    from app.bot.views.notify import renew_kb
+    from app.services.events_repo import ReminderInfo
+    from app.worker.panel_events import renew_target
+
+    m, deps = make_money()
+    deps.hooks.last_plans[TG] = legacy
+    container = SimpleNamespace(checkout=m.checkout)
+    info = ReminderInfo(TG, last_plan_code=legacy, last_months=3)
+    assert await renew_target(container, TG, info) == (legacy, 3)
+    assert renew_kb(legacy, 3).inline_keyboard[0][0].callback_data.split(":")[1] == legacy
+    other = ReminderInfo(TG + 1, last_plan_code=legacy, last_months=3)
+    assert await renew_target(container, TG + 1, other) == (None, None)

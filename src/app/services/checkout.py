@@ -4,7 +4,8 @@
 the legacy router still call it). The rule itself is domain.plans.quote_purchase.
 
 ``CheckoutServiceImpl``: app.services.ports.CheckoutService.
-  quote()  server price for this user (catalog only; legacy plan only for its owner),
+  quote()  server price for this user (catalog only; legacy plan only for its owner,
+           and only through explicit renewal entry points: plan_options never lists it),
            plus the Stars price when STARS_ENABLED and STARS_RATE > 0;
   start()  create a payment, or reuse the user's pending one for the same
            (plan, months, kind, method, autorenew) created in the last 15 minutes;
@@ -130,20 +131,19 @@ class CheckoutServiceImpl:
         return out
 
     async def plan_options(self, telegram_id: int, *, gift: bool = False) -> list[tuple[str, str, tuple, int]]:
-        """[(code, name, features, 1-month price)] the user may buy: menu plans, plus
-        their own legacy plan for a renewal (not for gifts)."""
+        """[(code, name, features, 1-month price)] of the plan list: menu plans only.
+
+        Legacy plans (basic, premium) are never listed, not even for their owners
+        (owner decision 27.09.2026: legacy users are asked to move to the new
+        plans). An owner can still renew a legacy plan through the explicit
+        renewal entry points only: the «Продлить подписку» button under
+        reminders / grace notices (worker.panel_events.renew_target ->
+        Period(c=<legacy>, m)) and old 2.x buttons that carry the plan code;
+        ``quote`` keeps selling it to the owner there."""
         from app.domain.plans import MENU_PLAN_CODES, get_plan_features, get_plan_name
 
-        codes = list(MENU_PLAN_CODES)
-        if not gift:
-            try:
-                last = await self.d.hooks.last_plan(int(telegram_id))
-            except Exception:  # noqa: BLE001
-                last = None
-            if last in LEGACY_PLAN_CODES:
-                codes.append(last)
         out = []
-        for code in codes:
+        for code in MENU_PLAN_CODES:
             periods = await self.period_options(telegram_id, code, gift=gift)
             if periods:
                 out.append((code, get_plan_name(code), tuple(get_plan_features(code)), min(p[1] for p in periods)))
