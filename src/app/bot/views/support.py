@@ -1,19 +1,21 @@
-"""Help / support screen view (release 3.0). Owner stream: D (User UI)."""
+"""Help / support screen view (release 3.0): ``article``. Owner stream: D (User UI)."""
 from __future__ import annotations
 
 from typing import Optional
 
-from aiogram.types import InlineKeyboardMarkup
-
-from app.bot.views import kb, url_btn
-from app.bot.views.common import back_to_main_row
-from app.domain.texts.common import BTN_OFFER, BTN_PRIVACY, BTN_SUPPORT, OFFER_URL, help_text, support_url
+from app.bot.views import kit
+from app.domain.texts.common import OFFER_URL, PRIVACY_URL, help_screen, support_url
+from app.domain.texts.ui import B
 
 
 def render(*, support_handle: Optional[str] = None, privacy_url: Optional[str] = None,
-           unlink_enabled: bool = False) -> tuple[str, InlineKeyboardMarkup]:
-    rows: list[list] = [[url_btn(BTN_SUPPORT, support_url(support_handle))], [url_btn(BTN_OFFER, OFFER_URL)]]
-    if privacy_url:
-        rows.append([url_btn(BTN_PRIVACY, privacy_url)])
-    rows.append(back_to_main_row())
-    return help_text(unlink_enabled), kb(rows)
+           offer_url: Optional[str] = None, unlink_enabled: bool = False) -> kit.View:
+    return kit.view(
+        help_screen(unlink_enabled),
+        links=[
+            kit.link(B.SUPPORT, support_url(support_handle)),
+            kit.link(B.OFFER, offer_url or OFFER_URL),
+            kit.link(B.PRIVACY, privacy_url or PRIVACY_URL),
+        ],
+        footer=kit.Footer.to_menu(),
+    )

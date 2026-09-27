@@ -23,6 +23,8 @@ from typing import Any, Dict, Optional
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.domain.texts.notify import reminder_text
+from app.domain.texts.ui import B
 from app.logger import logger
 
 # Notification windows: exact UTC calendar day counts
@@ -42,7 +44,7 @@ _SEND_DELAY = 0.1  # seconds
 
 def _build_notify_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Продлить подписку", callback_data="buy_subscription")]
+        [InlineKeyboardButton(text=B.RENEW, callback_data="buy_subscription")]
     ])
 
 
@@ -221,18 +223,11 @@ async def check_expiry_notifications(bot: Bot) -> Dict[str, Any]:
         if days_until == WINDOW_TODAY:
             notice_type = "0d"
             ttl = TTL_0D
-            text = (
-                "❌ <b>Ваша подписка VPN истекает сегодня.</b>\n\n"
-                "Продлите ее, чтобы сохранить доступ к VPN."
-            )
+            text = reminder_text("0d")  # 3.0 push screen (docs/SCREENS.md)
         elif days_until == WINDOW_SOON:
             notice_type = "3d"
             ttl = TTL_3D
-            text = (
-                f"⚠️ <b>Ваша подписка VPN истекает через 3 дня.</b>\n\n"
-                f"Дата окончания: {expire_date.strftime('%d.%m.%Y')}\n\n"
-                "Не забудьте продлить подписку, чтобы не потерять доступ."
-            )
+            text = reminder_text("3d", expire_dt)
         else:
             continue
 

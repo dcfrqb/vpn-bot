@@ -254,13 +254,10 @@ class ReferralService:
         await self.notifier.notify_admins(AdminTopic.PROMO, text, html=True)
         owner = _owner(self.settings)
         if owner and owner not in (getattr(self.settings, "ADMINS", None) or []):
-            await self.notifier.notify_user(
-                owner,
-                f"✅ <b>Тебе выдано бонусных месяцев: {int(months)}</b>\n\n"
-                + (f"📝 {h(note)}\n" if note else "")
-                + f"Осталось доступно: {avail_after} мес. Спасибо за приглашенных!",
-                html=True,
-            )
+            from app.domain.texts.promo import referral_payout_screen
+
+            await self.notifier.notify_user(owner, referral_payout_screen(months, note, avail_after).html(),
+                                            html=True)
         return avail_before, avail_after
 
 

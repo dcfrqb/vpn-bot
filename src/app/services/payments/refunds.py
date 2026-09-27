@@ -207,11 +207,9 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                     "(панель переведет в EXPIRED), подписка и обход погашены. "
                     "Повторная оплата или выдача снова включит доступ."
                 )
-                user_text = (
-                    "↩️ <b>Возврат оформлен</b>\n\n"
-                    "Деньги по платежу возвращены, доступ по этой оплате закончился. "
-                    "Если захочешь вернуться, оформи подписку в меню."
-                )
+                from app.domain.texts.checkout import refund_done_screen
+
+                user_text = refund_done_screen(expired=True).html()
             elif result.action == "shortened":
                 new_expire_for_notices = new_dt
                 action = "shortened"
@@ -219,11 +217,9 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                     f"Срок откатан на {period_months} мес. от текущей даты окончания "
                     f"(подписка одна на юзера): до {naive:%d.%m.%Y}." if naive else ""
                 )
-                user_text = (
-                    "↩️ <b>Возврат оформлен</b>\n\n"
-                    "Деньги по платежу возвращены, оплаченный период снят. "
-                    + (f"Подписка действует до {naive:%d.%m.%Y}." if naive else "")
-                )
+                from app.domain.texts.checkout import refund_done_screen
+
+                user_text = refund_done_screen(naive, expired=False).html()
             else:
                 action = result.action
                 action_note = (

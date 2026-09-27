@@ -33,7 +33,7 @@ app/
     dispatcher.py      build_dispatcher (no I/O)
     middlewares/       di, errors, maintenance
     routers/           one module per area, ordered by routers/__init__.py
-    views/             btn, url_btn, kb, render
+    views/             btn, url_btn, kb, render; kit.py = screen kit (docs/SCREENS.md)
   worker/
     scheduler.py       one loop, leader lock, JOBS registry (build_jobs)
     jobs/              one module per job (legacy.py: 2.x expiry notifier + reconciler)

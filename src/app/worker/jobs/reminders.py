@@ -112,7 +112,7 @@ async def send_reminders(container: Any, repo: Any = None, now: Optional[datetim
             continue
         plan, months = await renew_target(container, tg, info)
         sent = await container.notifier.notify_user(
-            tg, T.reminder_text(kind, expire_at), reply_markup=renew_kb(plan, months),
+            tg, T.reminder_text(kind, expire_at), html=True, reply_markup=renew_kb(plan, months),
         )
         if sent:
             stats["sent"] += 1

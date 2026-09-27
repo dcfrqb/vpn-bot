@@ -11,39 +11,39 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Optional, Sequence, Union
 
-from app.domain.texts import fmt_date_msk, fmt_rub, h, months_ru
+from app.domain.texts import fmt_date_msk, fmt_rub, h, months_ru, ui
 from app.domain.texts import common as _c
+from app.domain.texts.ui import B, E
 
 Money = Union[int, float, Decimal]
 
 # --- buttons -------------------------------------------------------------------------------
 
-# Shared vocabulary (review UX M4): BTN_BACK goes to the parent screen,
-# BTN_BACK_MAIN to the main menu.
-BTN_BACK = _c.BTN_BACK
-BTN_BACK_MAIN = _c.BTN_BACK_MAIN
-BTN_CHECK = _c.BTN_CHECK_PAYMENT
-BTN_CONNECT = _c.BTN_CONNECT
-BTN_PLANS = _c.BTN_SUBSCRIPTION
-BTN_SUPPORT = _c.BTN_SUPPORT
-BTN_AUTOPAY_ON = "Включить автопродление"
-BTN_AUTOPAY_OFF = "Без автопродления"
-BTN_AUTOPAY_STOP = "Отключить автопродление"
-BTN_RENEW = "💳 Продлить подписку"
-BTN_REFUND = "Не смог подключиться"
+# Shared vocabulary: app.domain.texts.ui.B (docs/SCREENS.md, «Словарь»).
+BTN_BACK = B.BACK
+BTN_BACK_MAIN = B.MENU
+BTN_CHECK = B.CHECK_PAYMENT
+BTN_CONNECT = B.CONNECT
+BTN_PLANS = B.SUBSCRIPTION
+BTN_SUPPORT = B.SUPPORT
+BTN_AUTOPAY_ON = B.AUTOPAY_ON
+BTN_AUTOPAY_OFF = B.AUTOPAY_OFF
+BTN_AUTOPAY_STOP = B.AUTOPAY_STOP
+BTN_RENEW = B.RENEW
+BTN_REFUND = B.REFUND
 BTN_REFUND_OK = "Вернуть"
 BTN_REFUND_NO = "Отклонить"
 BTN_REVIEW_OK = "Одобрить и выдать"
 BTN_REVIEW_NO = "Отклонить"
-BTN_GIFT = "Подарить подписку"
+BTN_GIFT = B.GIFT
 
 
 def btn_pay(amount: Money) -> str:
-    return f"{_c.BTN_PAY_PREFIX} {fmt_rub(amount)}"
+    return f"{B.PAY_PREFIX} {fmt_rub(amount)}"
 
 
 def btn_pay_stars(stars: int) -> str:
-    return f"Оплатить звездами ({int(stars)} ⭐)"
+    return B.PAY_STARS.format(stars=int(stars))
 
 
 def btn_period(months: int, amount: Money, saving_percent: int = 0) -> str:
@@ -55,127 +55,217 @@ def btn_plan(name: str, from_amount: Optional[Money]) -> str:
     return f"{name} · от {fmt_rub(from_amount)}/мес" if from_amount else name
 
 
-# --- plans and periods ----------------------------------------------------------------------
+def btn_obhod_package(name: str, price: Money) -> str:
+    return f"{name} · {fmt_rub(price)}"
 
 
-def plans_screen(plans: Sequence[tuple[str, Sequence[str]]], *, gift: bool = False) -> str:
-    """plans: [(display name, features)] in menu order."""
-    head = ("<b>Подарок другу</b>\n\nВыбери тариф, который подаришь. После оплаты пришлем ссылку, "
-            "ее нужно отправить другу.") if gift else "<b>Тарифы CRS VPN</b>\n\nВыбери тариф:"
-    blocks = []
-    for name, features in plans:
-        lines = "\n".join(f"· {h(f)}" for f in features)
-        blocks.append(f"<b>{h(name)}</b>\n{lines}" if lines else f"<b>{h(name)}</b>")
-    return head + ("\n\n" + "\n\n".join(blocks) if blocks else "")
+# --- plans and periods (type: choice) --------------------------------------------------------
+
+PLAN_EMOJI = {"lite": "🟢", "standard": "🔵", "pro": "💎", "premium": "👑"}
+DEFAULT_PLAN_EMOJI = "🔹"
 
 
-def periods_screen(name: str, features: Iterable[str], *, gift: bool = False) -> str:
-    lines = "\n".join(f"· {h(f)}" for f in features)
-    lead = "Подарок: " if gift else ""
-    body = f"<b>{lead}{h(name)}</b>"
-    if lines:
-        body += f"\n\n{lines}"
-    return body + "\n\nВыбери срок:"
+def plan_emoji(code: Optional[str]) -> str:
+    return PLAN_EMOJI.get((code or "").lower(), DEFAULT_PLAN_EMOJI)
+
+
+def _features(features: Iterable[str]) -> list[str]:
+    return [f"· {h(f)}" for f in features]
+
+
+def plans_screen_of(plans: Sequence[tuple], *, gift: bool = False) -> ui.Screen:
+    """plans: [(display name, features)] or [(display name, features, code)] in menu order."""
+    options = [ui.block(*_features(p[1]), title=h(p[0]), emoji=plan_emoji(p[2] if len(p) > 2 else None))
+               for p in plans]
+    if gift:
+        return ui.choice("Подарок другу", emoji=E.GIFT, options=options,
+                         intro=["Выбери тариф, который подаришь. После оплаты пришлем ссылку, "
+                                "ее нужно отправить другу."],
+                         hint="Выбери тариф кнопкой ниже.")
+    return ui.choice("Тарифы CRS VPN", emoji=E.SUBSCRIPTION, options=options, hint="Выбери тариф кнопкой ниже.")
+
+
+def plans_screen(plans: Sequence[tuple], *, gift: bool = False) -> str:
+    return plans_screen_of(plans, gift=gift).html()
+
+
+def periods_screen_of(name: str, features: Iterable[str], *, gift: bool = False,
+                      code: Optional[str] = None) -> ui.Screen:
+    title = f"Подарок: {h(name)}" if gift else h(name)
+    feats = _features(features)
+    return ui.choice(title, emoji=E.GIFT if gift else plan_emoji(code),
+                     options=[ui.block(*feats, title="Что входит", emoji="📋") if feats else None],
+                     hint="Выбери срок кнопкой ниже.")
+
+
+def periods_screen(name: str, features: Iterable[str], *, gift: bool = False, code: Optional[str] = None) -> str:
+    return periods_screen_of(name, features, gift=gift, code=code).html()
+
+
+def obhod_packages_screen_of(base_gb: int, packages: Sequence[tuple[str, Money]]) -> ui.Screen:
+    """packages: [(display, price)] on sale."""
+    intro = [f"В тарифе Pro обход включен с лимитом {int(base_gb)} ГБ в месяц. Если нужно больше, "
+             "возьми пакет: месячный лимит обхода поднимется на твоей ссылке обхода."]
+    if not packages:
+        return ui.choice("Больше трафика обхода", emoji=E.OBHOD, intro=intro, hint="Пакеты скоро появятся.")
+    lines = [f"· <b>{h(name)}</b>: {fmt_rub(price)}" for name, price in packages]
+    return ui.choice("Больше трафика обхода", emoji=E.OBHOD, intro=intro,
+                     options=[ui.block(*lines, title="Пакеты", emoji="📦")],
+                     hint="Выбери пакет кнопкой ниже.")
 
 
 def obhod_packages_screen(base_gb: int, packages: Sequence[tuple[str, Money]]) -> str:
-    """packages: [(display, price)] on sale."""
-    head = ("<b>Обход блокировок: больше трафика</b>\n\n"
-            f"В тарифе Pro обход включен с лимитом {int(base_gb)} ГБ в месяц. Если нужно больше, "
-            "возьми пакет: месячный лимит обхода поднимется на твоей ссылке обхода.")
-    if not packages:
-        return head + "\n\nПакеты скоро появятся."
-    return head + "\n\n" + "\n".join(f"· <b>{h(name)}</b>: {fmt_rub(price)}" for name, price in packages)
+    return obhod_packages_screen_of(base_gb, packages).html()
 
 
-def btn_obhod_package(name: str, price: Money) -> str:
-    return f"{name}: {fmt_rub(price)}"
+# --- checkout (type: checkout) ----------------------------------------------------------------
 
+
+def checkout_screen_of(name: str, months: int, amount: Money, *, autorenew: Optional[bool],
+                       gift: bool = False, stars: Optional[int] = None,
+                       offer_url: str = _c.OFFER_URL, privacy_url: str = _c.PRIVACY_URL) -> ui.Screen:
+    """autorenew=None: the autorenew line is hidden (AUTOPAY_ENABLED off, gifts)."""
+    price = f"<b>{fmt_rub(amount)}</b>" + (f" или {int(stars)} ⭐" if stars else "")
+    fields = [
+        ui.field("Подарок" if gift else "Тариф", name),
+        ui.field("Срок", months_ru(months)),
+        f"К оплате: {price}",
+    ]
+    if autorenew is True:
+        fields.append("Автопродление: включено")
+        fields.append(f"Карта сохранится, за день до конца срока спишем {fmt_rub(amount)}. "
+                      "Отключить можно в любой момент.")
+    elif autorenew is False:
+        fields.append("Автопродление: выключено")
+    after = ("ссылку для друга пришлем в этот чат." if gift
+             else "доступ включится сам, обычно за минуту.")
+    return ui.checkout(
+        "Оплата подарка" if gift else "Оплата", fields,
+        hint=f"Нажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: {after}",
+        legal=_c.legal_line(offer_url, privacy_url),
+    )
+
+
+def checkout_screen(name: str, months: int, amount: Money, *, autorenew: Optional[bool],
+                    gift: bool = False, stars: Optional[int] = None) -> str:
+    return checkout_screen_of(name, months, amount, autorenew=autorenew, gift=gift, stars=stars).html()
+
+
+# --- errors on the way to a payment -----------------------------------------------------------
+# Plain strings are toasts and Stars pre-checkout errors; *_SCREEN are result screens.
 
 OBHOD_NEEDS_PRO = ("Пакеты обхода доступны только при активном тарифе Pro. Оформи или продли Pro, "
                    "потом возьми пакет.")
 PLAN_UNAVAILABLE = "Этот тариф сейчас недоступен для покупки. Выбери тариф из списка."
 PAYMENT_BLOCKED = "Оплата для этого аккаунта недоступна. Если это ошибка, напиши в поддержку."
 PAYMENT_CREATE_FAILED = "Не получилось создать платеж. Попробуй еще раз через минуту."
-PAYMENT_BUSY = "Платеж уже создается, подожди пару секунд."
-STARS_UNAVAILABLE = "Оплата звездами сейчас недоступна."
-GIFTS_UNAVAILABLE = "Подарки сейчас недоступны."
+PAYMENT_BUSY = ui.toast("⏳ Платеж уже создается, подожди пару секунд.")
+STARS_UNAVAILABLE = ui.toast("Оплата звездами сейчас недоступна.")
+GIFTS_UNAVAILABLE = ui.toast("Подарки сейчас недоступны.")
+
+OBHOD_NEEDS_PRO_SCREEN = ui.result("warn", "Нужен тариф Pro",
+                                   "Пакеты обхода доступны только при активном тарифе Pro.",
+                                   hint="Оформи или продли Pro, потом возьми пакет.")
+PLAN_UNAVAILABLE_SCREEN = ui.result("warn", "Тариф недоступен", "Этот тариф сейчас нельзя купить.",
+                                    hint="Выбери тариф из списка.")
+PAYMENT_BLOCKED_SCREEN = ui.result("error", "Оплата недоступна", "Оплата для этого аккаунта недоступна.",
+                                   hint="Если это ошибка, напиши в поддержку.")
+PAYMENT_CREATE_FAILED_SCREEN = ui.result("error", "Не получилось создать платеж",
+                                         hint="Попробуй еще раз через минуту.")
+STARS_UNAVAILABLE_SCREEN = ui.result("warn", "Оплата звездами недоступна", hint="Оплати картой или попробуй позже.")
 
 
-def checkout_screen(name: str, months: int, amount: Money, *, autorenew: Optional[bool],
-                    gift: bool = False, stars: Optional[int] = None) -> str:
-    """autorenew=None: the autorenew line is hidden (AUTOPAY_ENABLED off, gifts)."""
-    title = f"Подарок: {h(name)}" if gift else h(name)
-    text = f"<b>{title}, {months_ru(months)}</b>\nК оплате: <b>{fmt_rub(amount)}</b>"
-    if stars:
-        text += f" или {int(stars)} ⭐"
-    if autorenew is True:
-        text += (f"\n\nАвтопродление: включено. Карта сохранится, за день до конца срока "
-                 f"спишем {fmt_rub(amount)}. Отключить можно в любой момент.")
-    elif autorenew is False:
-        text += "\n\nАвтопродление: выключено."
-    if gift:
-        text += ("\n\nНажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: "
-                 "ссылку для друга пришлем в этот чат.")
-    else:
-        text += ("\n\nНажми «Оплатить», откроется страница ЮKassa. После оплаты вернись сюда: "
-                 "доступ включится сам, обычно за минуту.")
-    return text
+# --- payment check (type: result) ------------------------------------------------------------
 
+CHECK_PENDING_SCREEN = ui.result("wait", "Оплата пока не пришла", "Если ты уже оплатил, подожди минуту.",
+                                 hint="Потом нажми «Проверить оплату» еще раз.")
+CHECK_PAID_SCREEN = ui.result("ok", "Оплата прошла, подписка активна",
+                              hint="Жми «Подключиться», если еще не настроил VPN.")
+CHECK_GIFT_PAID_SCREEN = ui.result("ok", "Подарок оплачен", "Ссылку для друга мы прислали отдельным сообщением.")
+CHECK_PROVISIONING_SCREEN = ui.result("wait", "Оплата получена, включаем доступ",
+                                      "Это может занять несколько минут.",
+                                      hint="Пришлем сообщение, когда все будет готово.")
+CHECK_HELD_SCREEN = ui.result("wait", "Оплата на проверке", "Платеж на ручной проверке у администратора.",
+                              hint="Он скоро разберется и напишет тебе.")
+CHECK_REJECTED_SCREEN = ui.result("error", "Платеж не подтвержден", "Администратор не подтвердил этот платеж.",
+                                  hint="Напиши в поддержку, разберемся с возвратом.")
+CHECK_CANCELED_SCREEN = ui.result("info", "Платеж отменен", "Деньги не списаны.", hint="Можно создать новый.")
+CHECK_REFUNDED_SCREEN = ui.result("info", "Деньги вернули", "Доступ по этому платежу не действует.")
+CHECK_NOT_FOUND_SCREEN = ui.result("warn", "Платеж не найден", hint="Создай новый в разделе «Подписка».")
+CHECK_ERROR_SCREEN = ui.result("error", "Не удалось проверить оплату", hint="Попробуй через минуту.")
 
-# --- payment check ---------------------------------------------------------------------------
-
-CHECK_PENDING = ("Оплата пока не пришла. Если ты уже оплатил, подожди минуту и нажми "
-                 "«Проверить оплату» еще раз.")
-CHECK_PAID = "Оплата прошла, подписка активна. Жми «Подключиться», если еще не настроил VPN."
-CHECK_GIFT_PAID = "Оплата прошла, ссылку для друга мы прислали отдельным сообщением."
-CHECK_PROVISIONING = ("Оплата получена, включаем доступ. Это может занять несколько минут, "
-                      "пришлем сообщение, когда все будет готово.")
-CHECK_HELD = ("Оплата получена, платеж на ручной проверке у администратора. Он скоро разберется "
-              "и напишет тебе.")
-CHECK_REJECTED = "Администратор не подтвердил этот платеж. Напиши в поддержку, разберемся с возвратом."
-CHECK_CANCELED = "Платеж отменен, деньги не списаны. Можно создать новый."
-CHECK_REFUNDED = "Деньги по этому платежу вернули, доступ по нему не действует."
-CHECK_NOT_FOUND = "Платеж не найден. Создай новый в разделе «Тарифы»."
-CHECK_ERROR = "Не удалось проверить оплату. Попробуй через минуту."
+CHECK_PENDING = CHECK_PENDING_SCREEN.html()
+CHECK_PAID = CHECK_PAID_SCREEN.html()
+CHECK_GIFT_PAID = CHECK_GIFT_PAID_SCREEN.html()
+CHECK_PROVISIONING = CHECK_PROVISIONING_SCREEN.html()
+CHECK_HELD = CHECK_HELD_SCREEN.html()
+CHECK_REJECTED = CHECK_REJECTED_SCREEN.html()
+CHECK_CANCELED = CHECK_CANCELED_SCREEN.html()
+CHECK_REFUNDED = CHECK_REFUNDED_SCREEN.html()
+CHECK_NOT_FOUND = CHECK_NOT_FOUND_SCREEN.html()
+CHECK_ERROR = CHECK_ERROR_SCREEN.html()
 
 
 def check_rate_limited(seconds: int) -> str:
-    return f"Подожди {int(seconds)} сек. перед следующей проверкой."
+    return ui.toast(f"Подожди {int(seconds)} сек. перед следующей проверкой.")
 
 
-# --- after payment ----------------------------------------------------------------------------
+# --- after payment (type: push) ---------------------------------------------------------------
+
+
+def paid_user_screen(name: str, months: int, expires_at: Optional[datetime]) -> ui.Screen:
+    return ui.push("ok", "Оплата прошла, спасибо!",
+                   ui.field("Тариф", f"{name}, {months_ru(months)}"),
+                   ui.field("Доступ до", fmt_date_msk(expires_at)) if expires_at else None,
+                   hint="Если еще не подключался, жми «Подключиться».")
 
 
 def paid_user(name: str, months: int, expires_at: Optional[datetime]) -> str:
-    until = f"\nДоступ до: {fmt_date_msk(expires_at)}" if expires_at else ""
-    return (f"<b>Оплата прошла, спасибо!</b>\n\nТариф: {h(name)}, {months_ru(months)}{until}\n\n"
-            "Если еще не подключался, жми «Подключиться».")
+    return paid_user_screen(name, months, expires_at).html()
+
+
+def autorenew_paid_screen(name: str, amount: Money, expires_at: Optional[datetime]) -> ui.Screen:
+    return ui.push(E.AUTOPAY, "Подписка продлена",
+                   f"Автопродление: списали {fmt_rub(amount)}.",
+                   ui.field("Тариф", name),
+                   ui.field("Доступ до", fmt_date_msk(expires_at)) if expires_at else None)
 
 
 def autorenew_paid_user(name: str, amount: Money, expires_at: Optional[datetime]) -> str:
-    until = f" до {fmt_date_msk(expires_at)}" if expires_at else ""
-    return f"Автопродление: списали {fmt_rub(amount)}, подписка {h(name)} продлена{until}."
+    return autorenew_paid_screen(name, amount, expires_at).html()
+
+
+OBHOD_PACKAGE_PAID_SCREEN = ui.push("ok", "Пакет обхода подключен", "Лимит обхода поднят.",
+                                    hint="Ссылка обхода на экране «Подключиться».")
 
 
 def obhod_package_paid() -> str:
-    return "<b>Пакет обхода подключен</b>\n\nЛимит обхода поднят. Ссылка обхода на экране «Подключиться»."
+    return OBHOD_PACKAGE_PAID_SCREEN.html()
 
 
-OBHOD_PACKAGE_MANUAL = ("<b>Оплата пакета обхода получена</b>\n\nАвтоматически применить пакет не получилось. "
-                        "Администратор применит его вручную и напишет тебе.")
+OBHOD_PACKAGE_MANUAL_SCREEN = ui.push("wait", "Оплата пакета обхода получена",
+                                      "Автоматически применить пакет не получилось.",
+                                      hint="Администратор применит его вручную и напишет тебе.")
+OBHOD_PACKAGE_MANUAL = OBHOD_PACKAGE_MANUAL_SCREEN.html()
 
-HELD_USER = ("<b>Оплата получена</b>\n\nПлатеж передан на ручную проверку, администратор скоро разберется. "
-             "Если есть вопросы, напиши в поддержку.")
+HELD_USER_SCREEN = ui.push("wait", "Оплата получена", "Платеж передан на ручную проверку, администратор скоро "
+                           "разберется.", hint="Если есть вопросы, напиши в поддержку.")
+HELD_USER = HELD_USER_SCREEN.html()
+
+
+def gift_paid_buyer_screen(name: str, months: int, link: str) -> ui.Screen:
+    return ui.push(E.GIFT, "Подарок оплачен!",
+                   f"Отправь другу ссылку ниже, по ней он активирует {h(name)} на {months_ru(months)}.",
+                   extra=[ui.plain(h(link))], hint="Ссылка сработает один раз.")
 
 
 def gift_paid_buyer(name: str, months: int, link: str) -> str:
-    return (f"<b>Подарок оплачен!</b>\n\nОтправь другу эту ссылку, по ней он активирует "
-            f"{h(name)} на {months_ru(months)}:\n{h(link)}\n\nСсылка сработает один раз.")
+    return gift_paid_buyer_screen(name, months, link).html()
 
 
-GIFT_PENDING = ("<b>Подарок оплачен</b>\n\nСсылку для друга готовим, пришлем ее сюда. Если долго нет, "
-                "напиши в поддержку.")
+GIFT_PENDING_SCREEN = ui.push("wait", "Подарок оплачен", "Ссылку для друга готовим, пришлем ее сюда.",
+                              hint="Если долго нет, напиши в поддержку.")
+GIFT_PENDING = GIFT_PENDING_SCREEN.html()
 
 
 # --- admin ---------------------------------------------------------------------------------
@@ -251,19 +341,44 @@ def admin_blocked_card(*, external_id: str, fingerprint: str, reason: str) -> st
 
 # --- 24h refund ------------------------------------------------------------------------------
 
-REFUND_REQUESTED = ("Запрос на возврат принят. Обычно рассматриваем в течение суток, напишем сюда "
-                    "о решении.")
-REFUND_ALREADY = "Запрос по этому платежу уже есть, ответим сюда."
-REFUND_NOT_ELIGIBLE = ("Вернуть деньги через бота можно в течение 24 часов после оплаты. "
-                       "Напиши в поддержку, разберемся.")
-REFUND_APPROVED_CARD = ("Возврат одобрен, деньги вернутся на карту в течение нескольких дней (сроки "
-                        "зависят от банка). Доступ к VPN по этой оплате отключен.")
-REFUND_APPROVED_STARS = "Возврат одобрен, звезды вернулись на твой баланс в Telegram. Доступ к VPN по этой оплате отключен."
+REFUND_REQUESTED_SCREEN = ui.result("ok", "Запрос на возврат принят", "Обычно рассматриваем в течение суток.",
+                                    hint="Напишем сюда о решении.")
+REFUND_ALREADY_SCREEN = ui.result("info", "Запрос уже есть", "Запрос по этому платежу уже отправлен.",
+                                  hint="Ответим сюда.")
+REFUND_NOT_ELIGIBLE_SCREEN = ui.result("warn", "Вернуть через бота нельзя",
+                                       "Вернуть деньги через бота можно в течение 24 часов после оплаты.",
+                                       hint="Напиши в поддержку, разберемся.")
+REFUND_REQUESTED = REFUND_REQUESTED_SCREEN.html()
+REFUND_ALREADY = REFUND_ALREADY_SCREEN.html()
+REFUND_NOT_ELIGIBLE = REFUND_NOT_ELIGIBLE_SCREEN.html()
+
+REFUND_APPROVED_CARD_SCREEN = ui.push(E.REFUND, "Возврат одобрен",
+                                      "Деньги вернутся на карту в течение нескольких дней, сроки зависят от банка.",
+                                      "Доступ к VPN по этой оплате отключен.")
+REFUND_APPROVED_STARS_SCREEN = ui.push(E.REFUND, "Возврат одобрен",
+                                       "Звезды вернулись на твой баланс в Telegram.",
+                                       "Доступ к VPN по этой оплате отключен.")
+REFUND_APPROVED_CARD = REFUND_APPROVED_CARD_SCREEN.html()
+REFUND_APPROVED_STARS = REFUND_APPROVED_STARS_SCREEN.html()
+
+
+def refund_rejected_screen(support: str) -> ui.Screen:
+    return ui.push("error", "Возврат не одобрен", "По этому платежу возврат не одобрен.",
+                   hint=f"Если не согласен или есть вопросы, напиши {h(support)}, разберем отдельно.")
 
 
 def refund_rejected(support: str) -> str:
-    return (f"По этому платежу возврат не одобрен. Если не согласен или есть вопросы, напиши {h(support)}, "
-            "разберем отдельно.")
+    return refund_rejected_screen(support).html()
+
+
+def refund_done_screen(until: Optional[datetime] = None, *, expired: bool) -> ui.Screen:
+    """Refund made in the YooKassa dashboard (refund webhook)."""
+    if expired:
+        return ui.push(E.REFUND, "Возврат оформлен",
+                       "Деньги по платежу возвращены, доступ по этой оплате закончился.",
+                       hint="Если захочешь вернуться, оформи подписку в меню.")
+    return ui.push(E.REFUND, "Возврат оформлен", "Деньги по платежу возвращены, оплаченный период снят.",
+                   ui.field("Подписка действует до", fmt_date_msk(until)) if until else None)
 
 
 def admin_refund_request(*, request_id: int, full_name: str, username: str, telegram_id: int, payment_id: int,
@@ -300,31 +415,52 @@ def admin_refund_already(status: str) -> str:
 
 # --- autopay -------------------------------------------------------------------------------
 
-AUTOPAY_INFO = ("<b>Автопродление</b>\n\nКарта сохраняется в ЮKassa при оплате. За день до конца срока "
-                "спишем цену того же тарифа и срока. За 3 дня пришлем напоминание с кнопкой отключения. "
-                "Если списание не пройдет два раза, автопродление выключится само.")
-AUTOPAY_UNAVAILABLE = "Автопродление сейчас недоступно."
+AUTOPAY_INFO_SCREEN = ui.result(
+    "info", "Автопродление",
+    "Карта сохраняется в ЮKassa при оплате. За день до конца срока спишем цену того же тарифа и срока.",
+    "За 3 дня пришлем напоминание с кнопкой отключения.",
+    hint="Если списание не пройдет два раза, автопродление выключится само.",
+)
+AUTOPAY_INFO = AUTOPAY_INFO_SCREEN.html()
+AUTOPAY_UNAVAILABLE = ui.toast("Автопродление сейчас недоступно.")
+
+
+def autopay_notice_screen(name: str, months: int, amount: Money, charge_on: Optional[datetime] = None) -> ui.Screen:
+    """``charge_on``: the day of the charge (a day before the end), review UX M6."""
+    return ui.push(E.AUTOPAY, "Скоро автопродление",
+                   ui.field("Дата списания", fmt_date_msk(charge_on) if charge_on is not None
+                            else "за день до конца срока"),
+                   ui.field("Сумма", fmt_rub(amount)),
+                   ui.field("Тариф", f"{name}, {months_ru(months)}"),
+                   "Карта уже сохранена.",
+                   hint="Если продление не нужно, отключи автопродление.")
 
 
 def autopay_notice(name: str, months: int, amount: Money, charge_on: Optional[datetime] = None) -> str:
-    """``charge_on``: the day of the charge (a day before the end), review UX M6."""
-    when = fmt_date_msk(charge_on) if charge_on is not None else "За день до конца срока"
-    return (f"{when} спишем {fmt_rub(amount)} за продление подписки {h(name)} на {months_ru(months)}, "
-            "карта уже сохранена. Если не нужно, отключи автопродление.")
+    return autopay_notice_screen(name, months, amount, charge_on).html()
 
 
-AUTOPAY_FAILED = ("Не получилось списать оплату за автопродление, карта могла не пройти платеж. Подписка "
-                  "пока активна, но скоро закончится. Продли вручную или попробуем еще раз завтра.")
-AUTOPAY_TURNED_OFF_FAILS = ("Автопродление выключено: два раза не получилось списать оплату. Продли "
-                            "подписку вручную, это займет минуту.")
+AUTOPAY_FAILED_SCREEN = ui.push("warn", "Не получилось списать оплату",
+                                "Карта могла не пройти платеж. Подписка пока активна, но скоро закончится.",
+                                hint="Продли вручную или попробуем еще раз завтра.")
+AUTOPAY_TURNED_OFF_FAILS_SCREEN = ui.push("warn", "Автопродление выключено",
+                                          "Два раза не получилось списать оплату.",
+                                          hint="Продли подписку вручную, это займет минуту.")
+AUTOPAY_FAILED = AUTOPAY_FAILED_SCREEN.html()
+AUTOPAY_TURNED_OFF_FAILS = AUTOPAY_TURNED_OFF_FAILS_SCREEN.html()
+
+
+def autopay_stopped_screen(expires_at: Optional[datetime]) -> ui.Screen:
+    return ui.result("ok", "Автопродление выключено",
+                     ui.field("Подписка действует до", fmt_date_msk(expires_at)) if expires_at else None)
 
 
 def autopay_stopped(expires_at: Optional[datetime]) -> str:
-    until = f" Подписка действует до {fmt_date_msk(expires_at)}." if expires_at else ""
-    return f"Автопродление выключено.{until}"
+    return autopay_stopped_screen(expires_at).html()
 
 
-AUTOPAY_NOTHING_TO_STOP = "Автопродление и так выключено."
+AUTOPAY_NOTHING_TO_STOP_SCREEN = ui.result("info", "Автопродление и так выключено")
+AUTOPAY_NOTHING_TO_STOP = AUTOPAY_NOTHING_TO_STOP_SCREEN.html()
 
 
 # --- Stars ---------------------------------------------------------------------------------
@@ -339,7 +475,7 @@ def stars_invoice_description(name: str, months: int, gift: bool = False) -> str
     return f"{lead}{name}, {months_ru(months)}. Доступ включится сразу после оплаты."
 
 
-STARS_INVOICE_SENT = "Счет в звездах отправлен ниже."
+STARS_INVOICE_SENT = ui.toast("Счет в звездах отправлен ниже.")
 PRECHECK_PRICE_CHANGED = "Цена изменилась. Открой оплату заново."
 PRECHECK_STALE = "Этот счет уже не действует. Открой оплату заново."
 

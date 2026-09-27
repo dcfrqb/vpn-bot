@@ -131,7 +131,7 @@ class MaintenanceMiddleware(BaseMiddleware):
         if kind == CHECKOUT:
             if user is not None and self._should_notice(user.id):
                 try:
-                    await event.bot.send_message(user.id, MAINTENANCE_CHECKOUT_NOTICE, parse_mode=None)
+                    await event.bot.send_message(user.id, MAINTENANCE_CHECKOUT_NOTICE, parse_mode="HTML")
                 except Exception as e:  # noqa: BLE001
                     logger.debug(f"maintenance checkout notice failed ({type(e).__name__})")
             return await handler(event, data)

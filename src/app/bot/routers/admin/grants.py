@@ -56,7 +56,8 @@ async def cb_request(callback: CallbackQuery, callback_data: Adm, container: Any
         support = (getattr(container.settings, "SUPPORT_HANDLE", None)
                    or getattr(container.settings, "ADMIN_SUPPORT_USERNAME", None) or "dcfrq")
         await container.notifier.notify_user(
-            uid, TP.ACCESS_REJECTED, reply_markup=kb([[url_btn("✍️ Написать", f"https://t.me/{support.lstrip('@')}")]]))
+            uid, TP.ACCESS_REJECTED, html=True,
+            reply_markup=kb([[url_btn(TP.BTN_WRITE_ADMIN, f"https://t.me/{support.lstrip('@')}")]]))
         await callback.answer("Запрос отклонен")
         await _mark_processed(callback, "❌ Запрос отклонен.")
         return
@@ -75,7 +76,7 @@ async def cb_request(callback: CallbackQuery, callback_data: Adm, container: Any
         await callback.answer(T.GRANT_FAILED, show_alert=True)
         return
     await container.notifier.notify_user(
-        uid, TP.ACCESS_GRANTED.format(what=h(res.label)), html=True,
+        uid, TP.access_granted(h(res.label)), html=True,
         reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
     await callback.answer(f"✅ {res.label}: выдано")
     await _mark_processed(callback, f"⭐ {h(res.label)}: выдано администратором.")
@@ -110,7 +111,7 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
         # The days are credited: the user notice goes first, so a failed admin
         # reply can not hide it (review round 2, N-2).
         await container.notifier.notify_user(
-            tg, TP.ACCESS_GRANTED.format(what=f"Подписка продлена на {days_ru(int(days))}"), html=True,
+            tg, TP.access_granted(f"Подписка продлена на {days_ru(int(days))}"), html=True,
             reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
         until = getattr(res.state, "expires_at", None)
         await render(message, f"✅ <code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(until)}")

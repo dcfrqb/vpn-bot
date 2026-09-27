@@ -228,6 +228,7 @@ class PanelEventProcessor:
             tg,
             T.grace_started(int(getattr(self.settings, "GRACE_DAYS", 3) or 3), until,
                             int(getattr(self.settings, "GRACE_DAILY_GB", 5) or 5)),
+            html=True,
             reply_markup=renew_kb(*await self._renew_target(tg, info)),
             dedup_key=f"grace_start:{tg}:{until.date().isoformat()}",
             dedup_ttl=4 * 24 * 3600,
@@ -252,6 +253,7 @@ class PanelEventProcessor:
         sent = await self.c.notifier.notify_user(
             int(user.telegram_id),
             T.NOT_CONNECTED,
+            html=True,
             reply_markup=connect_kb(getattr(self.settings, "CONNECT_ARTICLE_URL", None)),
             dedup_key=f"rw:not_connected:{user.telegram_id}:{hours}",
             dedup_ttl=NOT_CONNECTED_DEDUP_TTL,
@@ -280,6 +282,7 @@ class PanelEventProcessor:
         sent = await self.c.notifier.notify_user(
             int(user.telegram_id),
             T.device_added(str(model) if model else None, used, user.device_limit, self._support()),
+            html=True,
             reply_markup=devices_kb(),
             dedup_key=f"rw:hwid_added:{user.id}:{digest}",
             dedup_ttl=DEVICE_DEDUP_TTL,
@@ -303,6 +306,7 @@ class PanelEventProcessor:
         sent = await self.c.notifier.notify_user(
             tg,
             T.obhod_limited(user.traffic_limit_bytes, can_buy),
+            html=True,
             reply_markup=obhod_packages_kb() if can_buy else None,
             dedup_key=f"rw:obhod_limited:{tg}:{month}",
             dedup_ttl=OBHOD_LIMIT_DEDUP_TTL,

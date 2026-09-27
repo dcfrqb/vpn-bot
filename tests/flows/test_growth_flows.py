@@ -302,11 +302,11 @@ async def test_commands_are_not_taken_as_a_promo_code(g):
 
 
 async def test_trial_command_answers_when_trial_is_off(g, monkeypatch):
-    from app.domain.texts.connect import TRIAL_UNAVAILABLE
+    from app.domain.texts.connect import TRIAL_UNAVAILABLE_SCREEN
 
     monkeypatch.setattr("app.config.settings.PROMO_TRIAL_ENABLED", False)
     await g.send("/trial")
-    assert _texts(g)[-1] == TRIAL_UNAVAILABLE
+    assert _texts(g)[-1] == TRIAL_UNAVAILABLE_SCREEN.html()
     assert not g.prov.calls
 
 

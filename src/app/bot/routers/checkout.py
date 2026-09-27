@@ -75,7 +75,7 @@ async def _show_periods(cb: CallbackQuery, container: Any, plan: str, *, gift: b
     options = [PeriodOption(months=mm, amount_rub=a, saving_percent=s)
                for mm, a, s in await m.checkout.period_options(cb.from_user.id, plan, gift=gift)]
     if not options:
-        text, markup = message_view(T.PLAN_UNAVAILABLE)
+        text, markup = message_view(T.PLAN_UNAVAILABLE_SCREEN)
         await render(cb, text, markup)
         return
     text, markup = periods_view(plan, get_plan_name(plan), get_plan_features(plan), options, gift=gift)
@@ -135,6 +135,7 @@ async def on_plan(cb: CallbackQuery, callback_data: Plan, container: Any) -> Non
 
 # --- checkout ------------------------------------------------------------------------------
 
+# Toasts (Stars button) and result screens (the checkout screen) for start_checkout errors.
 _START_ERRORS = {
     "unavailable": T.PLAN_UNAVAILABLE,
     "blocked": T.PAYMENT_BLOCKED,
@@ -142,6 +143,13 @@ _START_ERRORS = {
     "create_failed": T.PAYMENT_CREATE_FAILED,
     "stars_disabled": T.STARS_UNAVAILABLE,
     "obhod_inactive": T.OBHOD_NEEDS_PRO,
+}
+_START_ERROR_SCREENS = {
+    "unavailable": T.PLAN_UNAVAILABLE_SCREEN,
+    "blocked": T.PAYMENT_BLOCKED_SCREEN,
+    "create_failed": T.PAYMENT_CREATE_FAILED_SCREEN,
+    "stars_disabled": T.STARS_UNAVAILABLE_SCREEN,
+    "obhod_inactive": T.OBHOD_NEEDS_PRO_SCREEN,
 }
 
 
@@ -156,7 +164,7 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
     else:
         quote = await m.checkout.quote(tg, plan, months, gift=gift)
     if quote is None:
-        text, markup = message_view(T.PLAN_UNAVAILABLE)
+        text, markup = message_view(T.PLAN_UNAVAILABLE_SCREEN)
         await render(cb, text, markup)
         return
     res = await m.checkout.start_checkout(tg, quote, autorenew=autorenew, kind=kind, user=_user(cb))
@@ -164,7 +172,7 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         if res.error == "busy":
             await cb.answer(T.PAYMENT_BUSY)
             return
-        text, markup = message_view(_START_ERRORS.get(res.error or "", T.PAYMENT_CREATE_FAILED),
+        text, markup = message_view(_START_ERROR_SCREENS.get(res.error or "", T.PAYMENT_CREATE_FAILED_SCREEN),
                                     support=support_url(container.settings))
         await render(cb, text, markup)
         return
@@ -175,6 +183,8 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         payment_id=res.intent.payment_id, url=res.intent.confirmation_url, autorenew=autopay_line,
         stars=None if package else quote.stars, gift=gift,
         back=Nav(s="plans", p="obhod") if package else None,
+        offer_url=getattr(container.settings, "OFFER_URL", None),
+        privacy_url=getattr(container.settings, "PRIVACY_URL", None),
     )
     await render(cb, text, markup)
 
@@ -200,14 +210,14 @@ async def on_autopay_toggle(cb: CallbackQuery, callback_data: AutoPay, container
 @router.callback_query(AutoPay.filter(F.a == "stop"))
 async def on_autopay_stop(cb: CallbackQuery, container: Any) -> None:
     was_on, until = await money(container).autopay.stop(cb.from_user.id)
-    text = T.autopay_stopped(until) if was_on else T.AUTOPAY_NOTHING_TO_STOP
+    text = T.autopay_stopped(until) if was_on else T.AUTOPAY_NOTHING_TO_STOP  # result, new message
     await cb.answer()
     await cb.message.answer(text)
 
 
 @router.callback_query(AutoPay.filter(F.a == "info"))
 async def on_autopay_info(cb: CallbackQuery) -> None:
-    text, markup = message_view(T.AUTOPAY_INFO)
+    text, markup = message_view(T.AUTOPAY_INFO_SCREEN)
     await render(cb, text, markup)
 
 
@@ -231,26 +241,26 @@ async def on_pay_check(cb: CallbackQuery, callback_data: PayCheck, container: An
     support = support_url(container.settings)
     o = result.outcome
     if o in (Outcome.FULFILLED, Outcome.ALREADY):
-        text = T.CHECK_GIFT_PAID if rec is not None and rec.kind == "gift" else T.CHECK_PAID
+        text = T.CHECK_GIFT_PAID_SCREEN if rec is not None and rec.kind == "gift" else T.CHECK_PAID_SCREEN
         view = message_view(text, back_to_plans=False, connect=rec is None or rec.kind != "gift")
     elif o is Outcome.PENDING:
-        view = message_view(T.CHECK_PENDING, pay_url=rec.confirmation_url if rec else None,
+        view = message_view(T.CHECK_PENDING_SCREEN, pay_url=rec.confirmation_url if rec else None,
                             amount_rub=int(rec.amount) if rec and rec.currency == "RUB" else None,
                             check_pid=rec.id if rec else None)
     elif o is Outcome.HELD:
-        view = message_view(T.CHECK_HELD, back_to_plans=False, support=support)
+        view = message_view(T.CHECK_HELD_SCREEN, back_to_plans=False, support=support)
     elif o is Outcome.REJECTED:
-        view = message_view(T.CHECK_REJECTED, back_to_plans=False, support=support)
+        view = message_view(T.CHECK_REJECTED_SCREEN, back_to_plans=False, support=support)
     elif o is Outcome.CANCELED:
-        view = message_view(T.CHECK_CANCELED)
+        view = message_view(T.CHECK_CANCELED_SCREEN)
     elif o is Outcome.REFUNDED:
-        view = message_view(T.CHECK_REFUNDED, support=support)
+        view = message_view(T.CHECK_REFUNDED_SCREEN, support=support)
     elif o is Outcome.NOT_FOUND:
-        view = message_view(T.CHECK_NOT_FOUND)
+        view = message_view(T.CHECK_NOT_FOUND_SCREEN)
     elif rec is not None and rec.status == "succeeded":  # BUSY / RETRY after the money arrived
-        view = message_view(T.CHECK_PROVISIONING, back_to_plans=False, support=support)
+        view = message_view(T.CHECK_PROVISIONING_SCREEN, back_to_plans=False, support=support)
     else:
-        view = message_view(T.CHECK_ERROR, check_pid=rec.id if rec else None)
+        view = message_view(T.CHECK_ERROR_SCREEN, check_pid=rec.id if rec else None)
     logger.info(f"pay check: tg_id={tg} payment={rec.id if rec else key} outcome={o.value}")
     await render(cb, *view)
 

@@ -106,7 +106,7 @@ async def test_stars_refund_uses_refund_star_payment():
     assert await m.refunds.decide(rid, 111, approve=True) == "done"
     assert deps.stars.refunds == [(TG, "ch-1")] and not deps.payments.refunds
     assert (await deps.store.get(rec.id)).status == "refunded"
-    assert any("звезды вернулись" in s.text for s in deps.notifier.sent if s.kind == "user")
+    assert any("Звезды вернулись" in s.text for s in deps.notifier.sent if s.kind == "user")
 
 
 async def test_gift_and_autorenew_payments_are_not_eligible():

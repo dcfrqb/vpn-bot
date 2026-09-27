@@ -26,7 +26,7 @@ async def close_due(container: Any, repo: Any = None) -> list[int]:
         info = await repo.reminder_info(tg)
         plan, months = await renew_target(container, tg, info)
         await container.notifier.notify_user(
-            tg, T.GRACE_ENDED, reply_markup=renew_kb(plan, months),
+            tg, T.GRACE_ENDED, html=True, reply_markup=renew_kb(plan, months),
             dedup_key=f"grace_end:{tg}", dedup_ttl=3 * 24 * 3600,
         )
     return ended

@@ -27,7 +27,7 @@ from sqlalchemy import select, func
 
 from app.config import settings
 from app.db.models import Payment, ReferralPayout, TelegramUser
-from app.domain.texts import h, months_ru, plural_ru
+from app.domain.texts import h, plural_ru
 from app.logger import logger
 
 
@@ -186,15 +186,10 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
 
         # === OWNER B (если задан и не совпадает с админом) ===
         if owner_id and owner_id not in _admin_ids():
-            owner_b = (
-                f"💰 <b>Новая оплата приглашенного!</b>\n\n"
-                f"Один из приглашенных тобой пользователей оплатил Pro на "
-                f"<b>{months_ru(int(period_months or 0))}</b>.\n\n"
-                f"📊 <b>Твой прогресс:</b>\n"
-                f"  • Заработано Pro-месяцев: <b>{earned_after}</b>\n"
-                f"  • Бонусных месяцев: <b>{bonus_after:.2f}</b>\n"
-                f"  • <b>Доступно к выдаче: {available_after} мес</b>"
-            )
+            from app.domain.texts.promo import referral_new_payment_screen
+
+            owner_b = referral_new_payment_screen(int(period_months or 0), earned_after, bonus_after,
+                                                  available_after).html()
             await _send_to(bot, [owner_id], owner_b)
 
         # === ALERT C: преодолели целый порог / 5 ===
@@ -213,13 +208,9 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
             )
             await _send_to(bot, _admin_ids(), admin_c)
             if owner_id and owner_id not in _admin_ids():
-                owner_c = (
-                    f"🎁 <b>Поздравляем!</b>\n\n"
-                    f"Ты заработал еще {delta} {plural_ru(delta, 'бонусный месяц', 'бонусных месяца', 'бонусных месяцев')} подписки.\n\n"
-                    f"📊 <b>Всего заработано бонусов:</b> {full_after} мес\n"
-                    f"✅ <b>Доступно к выдаче:</b> {available_after} мес\n\n"
-                    f"Напиши админу, чтобы получить."
-                )
+                from app.domain.texts.promo import referral_bonus_screen
+
+                owner_c = referral_bonus_screen(delta, full_after, available_after).html()
                 await _send_to(bot, [owner_id], owner_c)
 
     except Exception as e:
@@ -275,14 +266,9 @@ async def notify_payout(bot, session, payout: ReferralPayout) -> None:
 
     owner_id = _owner_id()
     if owner_id and owner_id not in _admin_ids():
-        word = plural_ru(months, "бонусный месяц", "бонусных месяца", "бонусных месяцев")
-        owner_text = (
-            f"✅ <b>Тебе выдано {months} {word}!</b>\n\n"
-            f"Админ продлил твою подписку.\n"
-            + (f"📝 Комментарий: {h(note)}\n\n" if note else "\n")
-            + f"📊 <b>Осталось доступно:</b> {available} мес\n"
-            f"Спасибо за приглашенных!"
-        )
+        from app.domain.texts.promo import referral_payout_screen
+
+        owner_text = referral_payout_screen(months, note, available).html()
         await _send_to(bot, [owner_id], owner_text)
 
 

@@ -4,111 +4,121 @@ Owner stream: C (Panel events).
 Plain module-level constants or small pure functions returning str.
 Use helpers from app.domain.texts (h, plural_ru, fmt_date_msk, fmt_rub).
 No letter U+0451 (yo) in prose. Drafts: ТЕКСТЫ_3.0.md section 4.
-All user texts are plain text (sent with html=False, the Notifier escapes).
+User texts are push screens (HTML, values escaped here); admin texts are plain text.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from app.domain.texts import days_ru, devices_ru, fmt_date_msk, fmt_gb
-from app.domain.texts import common as _c
+from app.domain.texts import days_ru, devices_ru, fmt_date_msk, fmt_gb, h, ui
+from app.domain.texts.ui import B, E
 
 # --------------------------------------------------------------- buttons
 
-BTN_RENEW = "💳 Продлить подписку"
-BTN_OBHOD_PACKAGES = "➕ Докупить трафик обхода"
-# Shared vocabulary (review UX M4)
-BTN_CONNECT = _c.BTN_CONNECT
-BTN_DEVICES = _c.BTN_DEVICES
-BTN_ARTICLE = _c.BTN_ARTICLE
+BTN_RENEW = B.RENEW
+BTN_OBHOD_PACKAGES = B.OBHOD_MORE
+BTN_CONNECT = B.CONNECT
+BTN_DEVICES = B.DEVICES
+BTN_ARTICLE = B.ARTICLE
 
-# --------------------------------------------------------------- reminders
+# --------------------------------------------------------------- reminders (type: push)
 
-REMIND_3D = (
-    "Подписка CRS VPN закончится через 3 дня ({date}). Чтобы не остаться без VPN, "
-    "продли сейчас, это займет минуту."
-)
-REMIND_1D = "Подписка заканчивается завтра. Продли сейчас, чтобы доступ не прервался."
-REMIND_0D = (
-    "Сегодня последний день подписки CRS VPN. Потом доступ отключится. "
-    "Продли, если хочешь остаться на связи."
-)
-REMIND_AFTER_1D = (
-    "Подписка закончилась вчера, доступ отключен. Продлить можно в любой момент, "
-    "старые настройки в приложении менять не придется."
-)
+_RENEW_HINT = "Продлить можно в любой момент, настройки в приложении менять не придется."
+
+
+def reminder_screen(window: str, expires_at=None) -> ui.Screen:
+    """window: "3d" | "1d" | "0d" | "a1d" (day after expiry)."""
+    if window == "3d":
+        return ui.push("warn", "Подписка закончится через 3 дня",
+                       ui.field("Дата окончания", fmt_date_msk(expires_at)),
+                       hint="Продли сейчас, чтобы не остаться без VPN. Это займет минуту.")
+    if window == "1d":
+        return ui.push("warn", "Подписка заканчивается завтра",
+                       hint="Продли сейчас, чтобы доступ не прервался.")
+    if window == "0d":
+        return ui.push("warn", "Сегодня последний день подписки", "Потом доступ отключится.",
+                       hint="Продли, если хочешь остаться на связи.")
+    return ui.push("error", "Подписка закончилась вчера", "Доступ отключен.", hint=_RENEW_HINT)
 
 
 def reminder_text(window: str, expires_at=None) -> str:
-    """window: "3d" | "1d" | "0d" | "a1d" (day after expiry)."""
-    if window == "3d":
-        return REMIND_3D.format(date=fmt_date_msk(expires_at))
-    if window == "1d":
-        return REMIND_1D
-    if window == "0d":
-        return REMIND_0D
-    return REMIND_AFTER_1D
+    return reminder_screen(window, expires_at).html()
 
+
+REMIND_1D = reminder_text("1d")
+REMIND_0D = reminder_text("0d")
+REMIND_AFTER_1D = reminder_text("a1d")
 
 # --------------------------------------------------------------- grace
 
+
+def grace_started_screen(days: int, until, daily_gb: int) -> ui.Screen:
+    return ui.push(E.GRACE, "Льготный период",
+                   f"Подписка закончилась, но мы оставили доступ еще на {days_ru(days)}, чтобы ты успел продлить.",
+                   ui.field("Доступ до", fmt_date_msk(until, with_time=True)) + " (МСК)",
+                   f"Работает часть серверов и до {int(daily_gb)} ГБ трафика в сутки.",
+                   hint="Продли, чтобы VPN не отключился.")
+
+
 def grace_started(days: int, until, daily_gb: int) -> str:
-    return (
-        f"Подписка закончилась, но мы оставили доступ еще на {days_ru(days)} "
-        f"(до {fmt_date_msk(until, with_time=True)} по Москве), чтобы ты успел продлить. "
-        f"В эти дни работает часть серверов и до {daily_gb} ГБ трафика в сутки. "
-        "После этого VPN отключится."
-    )
+    return grace_started_screen(days, until, daily_gb).html()
 
 
-GRACE_ENDED = (
-    "Льготный период закончился, доступ к VPN отключен. Продлить можно в любой момент, "
-    "настройки в приложении менять не придется."
-)
+GRACE_ENDED_SCREEN = ui.push("error", "Льготный период закончился", "Доступ к VPN отключен.", hint=_RENEW_HINT)
+GRACE_ENDED = GRACE_ENDED_SCREEN.html()
 
 # --------------------------------------------------------------- panel events
 
-def device_added(model: Optional[str], used: Optional[int], limit: Optional[int], support: Optional[str]) -> str:
-    what = f": {model}" if model else ""
-    lines = [f"К твоей подписке подключилось новое устройство{what}."]
+
+def device_added_screen(model: Optional[str], used: Optional[int], limit: Optional[int],
+                        support: Optional[str]) -> ui.Screen:
     if used is not None and limit:
-        lines.append(f"Занято {used} из {limit} мест под устройства.")
+        places = f"Занято {h(used)} из {h(limit)} мест под устройства."
     elif limit:
-        lines.append(f"Лимит на твоем тарифе: {devices_ru(limit)}.")
-    if support:
-        lines.append(f"Если это не ты: напиши {support}, разберемся.")
+        places = f"Лимит на твоем тарифе: {devices_ru(limit)}."
     else:
-        lines.append("Если это не ты: напиши в поддержку, разберемся.")
-    return "\n".join(lines)
+        places = None
+    who = h(support) if support else "в поддержку"
+    return ui.push(E.DEVICES, "Новое устройство",
+                   ui.field("Устройство", model) if model else "К подписке подключилось новое устройство.",
+                   places,
+                   hint=f"Если это не ты, напиши {who}, разберемся.")
 
 
-NOT_CONNECTED = (
-    "Похоже, VPN еще ни разу не подключался. Это делается за пару минут: "
-    "поставь приложение и добавь в него свою ссылку. Нажми кнопку ниже, там ссылка и шаги."
-)
+def device_added(model: Optional[str], used: Optional[int], limit: Optional[int], support: Optional[str]) -> str:
+    return device_added_screen(model, used, limit, support).html()
+
+
+NOT_CONNECTED_SCREEN = ui.push(E.CONNECT, "VPN еще не подключен",
+                               "Это делается за пару минут: поставь приложение и добавь в него свою ссылку.",
+                               hint="Нажми кнопку ниже, там ссылка и шаги.")
+NOT_CONNECTED = NOT_CONNECTED_SCREEN.html()
+
+
+def obhod_limited_screen(limit_bytes: Optional[int], can_buy: bool) -> ui.Screen:
+    return ui.push(E.OBHOD, "Трафик обхода закончился",
+                   ui.field("Лимит на месяц", fmt_gb(limit_bytes)) if limit_bytes else None,
+                   "Основная ссылка работает как обычно.",
+                   hint=("Если обход нужен сейчас, можно докупить пакет трафика." if can_buy
+                         else "Лимит обновится в начале следующего месяца."))
 
 
 def obhod_limited(limit_bytes: Optional[int], can_buy: bool) -> str:
-    cap = f" ({fmt_gb(limit_bytes)})" if limit_bytes else ""
-    text = f"Трафик ссылки «обход» на этот месяц закончился{cap}. Основная ссылка работает как обычно."
-    if can_buy:
-        text += " Если обход нужен сейчас, можно докупить пакет трафика."
-    else:
-        text += " Лимит обновится в начале следующего месяца."
-    return text
+    return obhod_limited_screen(limit_bytes, can_buy).html()
 
 
 # --------------------------------------------------------------- maintenance
 
-# Alert text (callback alerts are limited to 200 characters).
-MAINTENANCE_SCREEN = (
+# Toast (callback alerts are limited to 200 characters).
+MAINTENANCE_SCREEN = ui.toast(
     "Идут технические работы, эта функция временно недоступна. "
     "VPN у тебя продолжает работать. Попробуй через 10-15 минут."
 )
-MAINTENANCE_CHECKOUT_NOTICE = (
-    "Сейчас идут технические работы. Оплата работает: если доступ не появится сразу, "
-    "бот выдаст его сам, как только работы закончатся."
+MAINTENANCE_CHECKOUT_SCREEN = ui.push(
+    "info", "Идут технические работы",
+    "Оплата работает: если доступ не появится сразу, бот выдаст его сам, как только работы закончатся.",
 )
+MAINTENANCE_CHECKOUT_NOTICE = MAINTENANCE_CHECKOUT_SCREEN.html()
 
 # --------------------------------------------------------------- admins (plain text)
 

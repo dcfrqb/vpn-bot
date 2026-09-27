@@ -335,7 +335,7 @@ async def test_o3_legacy_select_period_opens_checkout_not_plans(money_flow):
     datas = [b["data"] for b in _buttons(screen)]
     assert not any((d or "").startswith("pe:") for d in datas)  # not the periods list either
     assert [b for b in _buttons(screen) if b["url"]]  # the pay button is there
-    assert "Pro, 3" in screen.text
+    assert "Тариф: Pro" in screen.text and "Срок: 3\xa0месяца" in screen.text
 
 
 async def test_o3_legacy_select_period_bad_payload_falls_back_to_plans(money_flow):

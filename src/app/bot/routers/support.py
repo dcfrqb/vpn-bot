@@ -20,7 +20,7 @@ _HELP_SCREENS = ("help",)
 
 async def show_help_screen(event, *, answer_callback: bool = True, **data) -> None:
     text, markup = support_view.render(
-        support_handle=support_handle(settings), privacy_url=settings.PRIVACY_URL,
+        support_handle=support_handle(settings), privacy_url=settings.PRIVACY_URL, offer_url=settings.OFFER_URL,
         unlink_enabled=bool(settings.DEVICES_UNLINK_ENABLED),
     )
     await render(event, text, markup, answer_callback=answer_callback)

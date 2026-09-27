@@ -69,6 +69,6 @@ class ErrorsMiddleware(BaseMiddleware):
             if isinstance(event, CallbackQuery):
                 await event.answer(GENERIC_ERROR_ALERT, show_alert=True)
             elif isinstance(event, Message):
-                await event.answer(GENERIC_ERROR, parse_mode=None)
+                await event.answer(GENERIC_ERROR, parse_mode="HTML")
         except Exception as e:  # noqa: BLE001
             logger.debug(f"errors middleware: cannot answer user ({type(e).__name__})")

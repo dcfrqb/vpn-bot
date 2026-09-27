@@ -112,7 +112,7 @@ async def test_devices_list_and_back_to_main(flow):
     ]
     await flow.press(Dev(a="list").pack())
     text = _last_text(flow)
-    assert "Твои устройства" in text and "iPhone" in text
+    assert "Мои устройства" in text and "iPhone" in text
 
     await flow.press(Dev(a="back").pack())
     assert "Профиль" in _last_text(flow)
@@ -151,7 +151,7 @@ async def test_promo_command_is_owned_by_the_promo_engine(flow):
 
     await flow.send("/promo")
     sent = flow.session.calls_of("SendMessage")
-    assert sent[-1].text in (T.ENTER_CODE, T.CODES_DISABLED)
+    assert sent[-1].text in (T.ENTER_CODE, T.CODES_DISABLED_SCREEN.html())
 
 
 async def test_start_clears_broadcast_opt_out(flow, monkeypatch):

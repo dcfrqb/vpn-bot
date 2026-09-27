@@ -1,17 +1,17 @@
-"""«Мои устройства» view (release 3.0). Owner stream: D over B's DevicesService."""
+"""«Мои устройства» view (release 3.0): ``items``, ``confirm``, ``result``.
+
+Owner stream: D over B's DevicesService. Layout rules: docs/SCREENS.md.
+"""
 from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from aiogram.types import InlineKeyboardMarkup
-
-from app.bot.callbacks import Dev
-from app.bot.views import btn, kb
-from app.bot.callbacks import Nav
-from app.bot.views.common import back_to_main_row, support_row
+from app.bot.callbacks import Dev, Nav
+from app.bot.views import kit
 from app.domain.models import DeviceInfo
 from app.domain.texts import devices as t
-from app.domain.texts.common import BTN_SUBSCRIPTION
+from app.domain.texts.common import support_url
+from app.domain.texts.ui import B
 
 
 def list_screen(
@@ -21,31 +21,32 @@ def list_screen(
     unlink_enabled: bool,
     support_handle: Optional[str] = None,
     active: bool = True,
-) -> tuple[str, InlineKeyboardMarkup]:
+) -> kit.View:
     """Always shows the list (N of M); the unlink button per device is
     behind DEVICES_UNLINK_ENABLED, otherwise the support button (review UX M3).
     No subscription: a way to the plans (m8)."""
-    text = t.list_text(devices, len(devices), device_limit, unlink_enabled=unlink_enabled)
-    rows: list[list] = []
+    screen = t.list_screen(devices, len(devices), device_limit, unlink_enabled=unlink_enabled)
+    options = []
     if unlink_enabled:
         for dev in devices:
             name = (dev.device_model or dev.platform or dev.short_id)[:24]
-            rows.append([btn(f"❌ Отвязать: {name}", Dev(a="ask", id=dev.short_id))])
-    elif devices:
-        rows.append(support_row(support_handle))
-    if not active:
-        rows.append([btn(BTN_SUBSCRIPTION, Nav(s="plans"))])
-    rows.append(back_to_main_row())
-    return text, kb(rows)
+            options.append(kit.action(B.UNLINK.format(name=name), Dev(a="ask", id=dev.short_id)))
+    return kit.view(
+        screen,
+        options=options,
+        secondary=[kit.action(B.SUBSCRIPTION, Nav(s="plans")) if not active else None],
+        links=[kit.link(B.SUPPORT, support_url(support_handle)) if devices and not unlink_enabled else None],
+        footer=kit.Footer.to_menu(),
+    )
 
 
-def ask_unlink(dev: DeviceInfo) -> tuple[str, InlineKeyboardMarkup]:
-    rows = [
-        [btn("Да, отвязать", Dev(a="unlink", id=dev.short_id))],
-        [btn("Отмена", Dev(a="list"))],
-    ]
-    return t.ask_unlink(dev), kb(rows)
+def ask_unlink(dev: DeviceInfo) -> kit.View:
+    return kit.view(
+        t.ask_unlink_screen(dev),
+        primary=[kit.pair(kit.action(f"{B.YES_PREFIX}, отвязать", Dev(a="unlink", id=dev.short_id)),
+                          kit.action(B.CANCEL, Dev(a="list")))],
+    )
 
 
-def not_found() -> tuple[str, InlineKeyboardMarkup]:
-    return t.UNLINK_NOT_FOUND, kb([[btn("К списку", Dev(a="list"))]])
+def not_found() -> kit.View:
+    return kit.view(t.NOT_FOUND_SCREEN, footer=kit.Footer.back_menu(Dev(a="list")))

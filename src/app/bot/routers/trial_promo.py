@@ -19,7 +19,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import Gift, Nav, PromoAct
 from app.bot.middlewares.admin_guard import is_admin_id
-from app.bot.views import kb, render
+from app.bot.views import kit, render
 from app.bot.views import admin as admin_views
 from app.domain.models import AdminTopic, PromoReward
 from app.domain.plans import get_plan_name
@@ -41,11 +41,17 @@ def _support(container: Any) -> Any:
     return getattr(s, "SUPPORT_HANDLE", None) or getattr(s, "ADMIN_SUPPORT_USERNAME", None)
 
 
-def result_view(code: str, reward: PromoReward, container: Any):
+def result_view(code: str, reward: PromoReward, container: Any) -> kit.View:
+    """Type ``result`` (docs/SCREENS.md)."""
     if reward.applied:
-        text = T.applied_text(code, reward, plan_title=get_plan_name(reward.plan_code), support=_support(container))
-        return text, kb([[(T.BTN_CONNECT, Nav(s="connect"))], [(T.BTN_MENU, Nav(s="main"))]])
-    return T.outcome_text(code, reward, support=_support(container)), kb([[(T.BTN_MENU, Nav(s="main"))]])
+        screen = T.applied_screen(code, reward, plan_title=get_plan_name(reward.plan_code),
+                                  support=_support(container))
+        return kit.view(screen, primary=[kit.action(T.BTN_CONNECT, Nav(s="connect"))], footer=kit.Footer.to_menu())
+    return kit.view(T.outcome_screen(code, reward, support=_support(container)), footer=kit.Footer.to_menu())
+
+
+def _result(screen) -> kit.View:
+    return kit.view(screen, footer=kit.Footer.to_menu())
 
 
 async def redeem_and_reply(event: Any, code: str, container: Any, *, source: str) -> PromoReward:
@@ -61,9 +67,9 @@ async def redeem_and_reply(event: Any, code: str, container: Any, *, source: str
 @router.message(Command("trial"))
 async def cmd_trial(message: Message, container: Any) -> None:
     if not getattr(container.settings, "PROMO_TRIAL_ENABLED", True):
-        from app.domain.texts.connect import TRIAL_UNAVAILABLE
+        from app.domain.texts.connect import TRIAL_UNAVAILABLE_SCREEN
 
-        await render(message, TRIAL_UNAVAILABLE)  # review UX m12: never a silent command
+        await render(message, *_result(TRIAL_UNAVAILABLE_SCREEN))  # review UX m12: never a silent command
         return
     await redeem_and_reply(message, "trial", container, source="trial")
 
@@ -96,10 +102,10 @@ async def cmd_promo(message: Message, command: CommandObject, state: FSMContext,
         await redeem_and_reply(message, command.args.split()[0], container, source="command")
         return
     if not _codes_enabled(container):
-        await render(message, T.CODES_DISABLED)
+        await render(message, *_result(T.CODES_DISABLED_SCREEN))
         return
     await state.set_state(PromoInput.code)
-    await render(message, T.ENTER_CODE)
+    await render(message, *_result(T.ENTER_CODE_SCREEN))
 
 
 @router.callback_query(PromoAct.filter(F.a == "enter"))
@@ -108,13 +114,13 @@ async def cb_enter(callback: CallbackQuery, state: FSMContext, container: Any) -
         await callback.answer(T.CODES_DISABLED, show_alert=True)
         return
     await state.set_state(PromoInput.code)
-    await render(callback, T.ENTER_CODE, kb([[(T.BTN_MENU, Nav(s="main"))]]))
+    await render(callback, *_result(T.ENTER_CODE_SCREEN))
 
 
 @router.message(StateFilter(PromoInput.code), Command("cancel"))
 async def cancel_input(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await render(message, T.ENTER_CANCELLED, kb([[(T.BTN_MENU, Nav(s="main"))]]))
+    await render(message, *_result(T.ENTER_CANCELLED_SCREEN))
 
 
 # Commands are never taken as a code (review UX M7): /start, /help etc. go to
@@ -158,13 +164,13 @@ async def _access_request(message: Message, container: Any, *, section: str, tit
         st = await container.status.get_state(uid, force=True)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"access request {section}: status failed tg={uid} ({type(e).__name__})")
-        await render(message, T.REQUEST_CHECK_FAILED)
+        await render(message, *_result(T.REQUEST_CHECK_FAILED_SCREEN))
         return
     if st.stale:
-        await render(message, T.REQUEST_CHECK_FAILED)
+        await render(message, *_result(T.REQUEST_CHECK_FAILED_SCREEN))
         return
     if st.active:
-        await render(message, T.REQUEST_ALREADY_ACTIVE)
+        await render(message, *_result(T.REQUEST_ALREADY_ACTIVE_SCREEN))
         return
     arg = f"{uid}.{int(time.time())}"
     sent = await container.notifier.notify_admins(
@@ -172,7 +178,7 @@ async def _access_request(message: Message, container: Any, *, section: str, tit
         reply_markup=admin_views.request_keyboard(section, arg, uid),
         dedup_key=f"access_req:{section}:{uid}", dedup_ttl=600,
     )
-    await render(message, T.REQUEST_SENT if sent else T.REQUEST_DUPLICATE)
+    await render(message, *_result(T.REQUEST_SENT_SCREEN if sent else T.REQUEST_DUPLICATE_SCREEN))
 
 
 @router.message(Command("friend"))
@@ -183,7 +189,7 @@ async def cmd_friend(message: Message, container: Any) -> None:
 @router.message(Command("admin"), lambda m: not is_admin_id(m.from_user.id))
 async def cmd_admin_as_promo(message: Message, container: Any) -> None:
     if not getattr(container.settings, "PROMO_ADMIN_ENABLED", True):
-        await render(message, "❌ У тебя нет прав администратора")
+        await render(message, *_result(T.NO_ADMIN_RIGHTS_SCREEN))
         return
     await _access_request(message, container, section="promo_req", title=TA.REQUEST_TITLE_ADMIN)
 

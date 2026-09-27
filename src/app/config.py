@@ -73,6 +73,7 @@ _EMPTY_IS_UNSET_FIELDS = (
     "GRACE_SQUAD",
     "CONNECT_ARTICLE_URL",
     "PRIVACY_URL",
+    "OFFER_URL",
     "SUPPORT_HANDLE",
 )
 
@@ -223,7 +224,8 @@ class Settings(BaseSettings):
 
     # --- 3.0 Stream D: User UI (меню, подключение, помощь) ---
     CONNECT_ARTICLE_URL: Union[str, None] = None
-    PRIVACY_URL: Union[str, None] = None
+    PRIVACY_URL: Union[str, None] = None  # пусто = политика из 2.1.1 (texts/common.py)
+    OFFER_URL: Union[str, None] = None  # пусто = оферта из 2.1.1 (texts/common.py)
     SUPPORT_HANDLE: Union[str, None] = None  # @username поддержки; пусто = ADMIN_SUPPORT_USERNAME
 
     # --- 3.0 Stream E: Growth & admin (промокоды, подарки, рассылки) ---

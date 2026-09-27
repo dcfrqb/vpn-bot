@@ -461,7 +461,9 @@ class PromoEngine:
         buyer = (row.meta or {}).get("buyer")
         if reward.applied and buyer and int(buyer) != tg:
             try:
-                await self.notifier.notify_user(int(buyer), "🎁 Твой подарок активирован. Спасибо!",
+                from app.domain.texts.promo import GIFT_USED_BUYER
+
+                await self.notifier.notify_user(int(buyer), GIFT_USED_BUYER, html=True,
                                                 dedup_key=f"gift_used:{row.id}")
             except Exception:  # noqa: BLE001
                 pass
