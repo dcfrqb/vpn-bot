@@ -6,9 +6,18 @@ the per-user provisioning lock; lifetime and manual-squad users are never cut.
 CreditsMixin: add_days / add_traffic / add_devices for EXISTING panel
 accounts. Never create an account, never lower anything, idempotent per
 trace_id (Redis marker).
+
+add_days marker ``credit:<trace>`` (review N-3): ``1`` = applied; a JSON
+``{"s": "pending", "target", "base"}`` = the PATCH was sent but its outcome is
+not known yet. A retry with a pending marker re-reads the panel: the expiry at
+or past the recorded target means the days landed (nothing is written again),
+otherwise it credits. A PATCH error re-reads the panel before the marker is
+dropped, so a timed-out PATCH that landed is reported as applied.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,6 +32,7 @@ from app.services.provisioning_rules import (
     CREDIT_MARKER_TTL_S,
     MAX_GRANT_RECORDS,
     REVOKE_GRACE,
+    CreditOutcomeUnknown,
     VERIFY_TOLERANCE,
     compute_target,
 )
@@ -162,11 +172,31 @@ class RevokeMixin:
         return RollbackResult(action, target)
 
 
+def _credit_key(trace_id: str) -> str:
+    return f"credit:{trace_id}"
+
+
+def _pending_marker(target: datetime, base: Optional[datetime]) -> str:
+    return json.dumps({"s": "pending", "target": target.isoformat(), "base": _iso_or_none(base)})
+
+
+def pending_credit(value: Optional[str]) -> Optional[dict]:
+    """The pending record of a ``credit:<trace>`` marker value, None for an
+    applied (``1``) or missing marker."""
+    if not value or not value.startswith("{"):
+        return None
+    try:
+        rec = json.loads(value)
+    except ValueError:
+        return None
+    return rec if isinstance(rec, dict) and rec.get("s") == "pending" else None
+
+
 class CreditsMixin:
     async def _credit_once(self, trace_id: str) -> bool:
         from app.infra.redis.flags import set_once
 
-        got = await set_once(f"credit:{trace_id}", "1", ttl=CREDIT_MARKER_TTL_S)
+        got = await set_once(_credit_key(trace_id), "1", ttl=CREDIT_MARKER_TTL_S)
         if got is False:
             logger.info(f"[{trace_id}] provisioning: credit already applied")
             return False
@@ -176,7 +206,11 @@ class CreditsMixin:
         """Extend an EXISTING main account by ``days`` from max(now, expiry).
         Returns the new expiry; None when there is no account, a lifetime one
         or a DISABLED one (nothing credited). Runs under the per-user
-        provisioning lock; a failed PATCH releases the idempotency marker. Squads and limits are not touched."""
+        provisioning lock. Idempotent per ``trace_id`` also when the PATCH
+        response is lost: the panel is re-read before a failure is declared
+        (raises ProvisioningError-compatible errors: the original one when the
+        days did not land, CreditOutcomeUnknown when the panel can not tell).
+        Squads and limits are not touched."""
         if int(days) <= 0:
             raise ValueError("days must be positive")
         tg = int(telegram_id)
@@ -186,7 +220,36 @@ class CreditsMixin:
         finally:
             await self._unlock(lock)
 
+    async def _days_landed(self, panel_id: int, target: datetime) -> Optional[bool]:
+        """Re-read the panel after a failed PATCH: True when the expiry reached
+        ``target`` (within VERIFY_TOLERANCE), False when it did not, None when
+        the panel can not be read."""
+        delay = getattr(self, "late_patch_delay_s", 0) or 0
+        if delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            probe = await self.remna.get_user(panel_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if probe is None:
+            return None
+        exp = probe.expire_at
+        return bool(exp is not None and exp >= target - VERIFY_TOLERANCE)
+
+    async def _finish_credit(self, tg: int, trace_id: str, new_expiry: datetime) -> datetime:
+        from app.infra.redis.flags import set_value
+
+        await set_value(_credit_key(trace_id), "1", ttl=CREDIT_MARKER_TTL_S)
+        row = await self.repo.get_subscription(tg, SubKind.MAIN)
+        if row is not None and row.active:
+            await self.repo.save_subscription(replace(row, valid_until=new_expiry,
+                                                      remnawave_expected_expire_at=new_expiry))
+        await self._invalidate(tg)
+        return new_expiry
+
     async def _add_days_locked(self, tg: int, days: int, *, trace_id: str, reason: str) -> Optional[datetime]:
+        from app.infra.redis.flags import delete_key, get_value, set_once, set_value
+
         user = await self.accounts.find_main(tg)
         if user is None:
             return None
@@ -194,27 +257,43 @@ class CreditsMixin:
             return None  # lifetime: nothing to add (callers count it as skipped)
         if (user.status or "").upper() == "DISABLED":
             return None
-        if not await self._credit_once(trace_id):
-            return user.expire_at
         now = self.clock()
         current = user.expire_at if (user.expire_at and user.expire_at.year >= 2020) else None
         target = compute_target(Entitlement(plan_code="-", source=EntitlementSource.ADMIN, days=int(days)),
                                 current, now)
+        key = _credit_key(trace_id)
+        got = await set_once(key, _pending_marker(target, current), ttl=CREDIT_MARKER_TTL_S)
+        if got is False:
+            rec = pending_credit(await get_value(key))
+            if rec is None:
+                logger.info(f"[{trace_id}] provisioning: credit already applied")
+                return user.expire_at
+            recorded = _parse_dt(rec.get("target"))
+            if recorded is not None and current is not None and current >= recorded - VERIFY_TOLERANCE:
+                # An earlier attempt of this trace timed out but its PATCH landed.
+                logger.warning(f"[{trace_id}] provisioning: +{days}d tg={tg} found landed on retry, no write")
+                return await self._finish_credit(tg, trace_id, current)
+            await set_value(key, _pending_marker(target, current), ttl=CREDIT_MARKER_TTL_S)
         try:
             updated = await self.remna.update_user(user.id, expire_at=target, current=user)
-        except Exception:
-            # Not applied: drop the marker so a retry of the same trace_id credits.
-            from app.infra.redis.flags import delete_key
-
-            await delete_key(f"credit:{trace_id}")
-            raise
-        row = await self.repo.get_subscription(tg, SubKind.MAIN)
-        if row is not None and row.active:
-            await self.repo.save_subscription(replace(row, valid_until=updated.expire_at or target,
-                                                      remnawave_expected_expire_at=updated.expire_at or target))
-        await self._invalidate(tg)
+        except Exception as e:
+            landed = await self._days_landed(user.id, target)
+            if landed is None:
+                # Unknown: keep the pending marker, a retry of this trace re-reads the panel.
+                logger.error(f"[{trace_id}] provisioning: +{days}d tg={tg} outcome unknown "
+                             f"({type(e).__name__}, panel re-read failed)")
+                raise CreditOutcomeUnknown(f"add_days outcome unknown: {type(e).__name__}") from e
+            if not landed:
+                # Not applied: drop the marker so a retry of the same trace_id credits.
+                await delete_key(key)
+                raise
+            logger.warning(f"[{trace_id}] provisioning: +{days}d tg={tg} landed despite {type(e).__name__}")
+            new_expiry = target
+        else:
+            new_expiry = updated.expire_at or target
+        await self._finish_credit(tg, trace_id, new_expiry)
         logger.info(f"[{trace_id}] provisioning: +{days}d tg={tg} reason={reason[:80]!r}")
-        return updated.expire_at or target
+        return new_expiry
 
     async def add_traffic(self, telegram_id: int, extra_bytes: int, *, trace_id: str,
                           sub_kind: SubKind = SubKind.OBHOD) -> Optional[int]:

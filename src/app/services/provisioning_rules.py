@@ -33,6 +33,13 @@ class ProvisioningBusy(ProvisioningError):
     """Another grant for this user holds the lock longer than LOCK_WAIT_S."""
 
 
+class CreditOutcomeUnknown(ProvisioningError):
+    """add_days: the PATCH raised and the panel could not be re-read, so it is
+    unknown whether the days landed. The ``credit:<trace>`` marker stays
+    pending: a retry with the same trace_id re-reads the panel first and
+    credits only when the days are not there (review N-3)."""
+
+
 class GrantRefused(Exception):
     """Expected refusal: nothing was written. ``reason``: disabled | bad_plan."""
 

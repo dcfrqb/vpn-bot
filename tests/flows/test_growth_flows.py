@@ -189,6 +189,20 @@ async def test_grant_command(g):
     assert any("Продлевать нечего" in t for t in _texts(g))
 
 
+async def test_grant_command_unknown_outcome_tells_admin_to_check_the_panel(g, monkeypatch):
+    """N-3: a lost PATCH response with an unreadable panel is not reported as a failure."""
+    from app.services.grants import GrantResult, GrantsService
+
+    async def unknown(self, *a, **kw):
+        return GrantResult("unknown", "+7 дн.")
+
+    monkeypatch.setattr(GrantsService, "grant_days", unknown)
+    await g.send("/grant 555 7", u=user(ADMIN))
+    texts = _texts(g)
+    assert any("выдача могла пройти" in t for t in texts)
+    assert not any("Выдача не удалась" in t for t in texts)
+
+
 # ----------------------------------------------------------------- broadcast user buttons
 
 

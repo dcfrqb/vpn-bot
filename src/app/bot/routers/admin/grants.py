@@ -120,5 +120,7 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
         await render(message, T.IN_PROGRESS)
     elif res.status == "dup":
         await render(message, T.ALREADY_DONE)
+    elif res.status == "unknown":
+        await render(message, T.GRANT_UNKNOWN)
     else:
         await render(message, T.GRANT_FAILED)

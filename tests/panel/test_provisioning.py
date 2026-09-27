@@ -768,3 +768,124 @@ async def test_rollback_retry_after_a_new_grant_does_not_erase_it(svc, fake, rep
     res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2")
     assert res.action == "shortened"
     assert fake.users[501]["expireAt"] == iso(until)  # 01.02 - 1 month, the new payment survives
+
+
+# ------------------------------------------------------------------ debug Run 4, N-3: PATCH landed, response lost
+
+def _land_then_timeout(fake, *, blind_reread: bool = False, land: bool = True, times: int = 1):
+    """The next ``times`` PATCHes land (unless ``land`` is False) and then raise a
+    timeout; ``blind_reread`` also makes the follow-up panel re-read fail."""
+    real = fake.update_user
+    state = {"left": times}
+
+    async def flaky(user_id, **kw):
+        if state["left"]:
+            state["left"] -= 1
+            if land:
+                await real(user_id, **kw)
+            if blind_reread:
+                fake.fail_get_user = True
+            raise httpx.ReadTimeout("response lost")
+        return await real(user_id, **kw)
+
+    fake.update_user = flaky
+
+
+async def test_add_days_timeout_but_landed_is_applied_once(svc, fake, redis):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake)
+    assert await svc.add_days(7, 1, trace_id="admin:cmd:1:400") == NOW + timedelta(days=2)
+    assert (await redis.get("credit:admin:cmd:1:400")) in (b"1", "1")
+    assert await svc.add_days(7, 1, trace_id="admin:cmd:1:400") == NOW + timedelta(days=2)
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=2))
+
+
+async def test_add_days_unknown_outcome_keeps_marker_and_retry_does_not_double(svc, fake):
+    from app.services.provisioning_rules import CreditOutcomeUnknown
+
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake, blind_reread=True)
+    with pytest.raises(CreditOutcomeUnknown):
+        await svc.add_days(7, 1, trace_id="bc:3:7")
+    fake.fail_get_user = False
+    patches = len(fake.patches)
+    assert await svc.add_days(7, 1, trace_id="bc:3:7") == NOW + timedelta(days=2)  # found landed, no write
+    assert len(fake.patches) == patches
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=2))
+
+
+async def test_add_days_unknown_outcome_not_landed_credits_on_retry(svc, fake):
+    from app.services.provisioning_rules import CreditOutcomeUnknown
+
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake, blind_reread=True, land=False)
+    with pytest.raises(CreditOutcomeUnknown):
+        await svc.add_days(7, 1, trace_id="bc:4:7")
+    fake.fail_get_user = False
+    assert await svc.add_days(7, 1, trace_id="bc:4:7") == NOW + timedelta(days=2)
+    assert await svc.add_days(7, 1, trace_id="bc:4:7") == NOW + timedelta(days=2)
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=2))
+
+
+async def test_admin_grant_days_timeout_but_landed_reports_ok(svc, fake, notifier):
+    """N2.4: the PATCH lands, the response is lost. The admin sees success (not
+    «Выдача не удалась»), and the same command again credits nothing."""
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake)
+    grants = _grants_service(svc, notifier)
+    res = await grants.grant_days(1, 7, 1, request_key="cmd:1:500")
+    assert res.status == "ok" and res.state.expires_at == NOW + timedelta(days=2)
+    assert grants.ledger.rows[("adm:cmd:1:500", 7)]["status"] == "applied"
+    assert (await grants.grant_days(1, 7, 1, request_key="cmd:1:500")).status == "dup"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=2))
+
+
+@pytest.mark.parametrize("landed", [True, False])
+async def test_admin_grant_days_unknown_then_repeat_credits_once(svc, fake, notifier, landed):
+    """Panel unreadable after the timeout: the admin gets «unknown»; the repeat of
+    the same /grant (a NEW message) re-runs the first invocation, so the user gets
+    exactly +1 day in total whether or not the first PATCH landed."""
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake, blind_reread=True, land=landed)
+    grants = _grants_service(svc, notifier)
+    assert (await grants.grant_days(1, 7, 1, request_key="cmd:1:600")).status == "unknown"
+    fake.fail_get_user = False
+    res = await grants.grant_days(1, 7, 1, request_key="cmd:1:601")
+    assert res.status == "ok" and res.state.expires_at == NOW + timedelta(days=2)
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=2))
+    assert grants.ledger.rows[("adm:cmd:1:600", 7)]["status"] == "applied"
+    assert ("adm:cmd:1:601", 7) not in grants.ledger.rows
+    # resolved: a later /grant is a new invocation and credits normally
+    res = await grants.grant_days(1, 7, 1, request_key="cmd:1:602")
+    assert res.status == "ok" and fake.users[501]["expireAt"] == iso(NOW + timedelta(days=3))
+
+
+async def test_admin_grant_days_unknown_other_days_is_a_new_invocation(svc, fake, notifier):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake, blind_reread=True, land=False)
+    grants = _grants_service(svc, notifier)
+    assert (await grants.grant_days(1, 7, 1, request_key="cmd:1:700")).status == "unknown"
+    fake.fail_get_user = False
+    res = await grants.grant_days(1, 7, 5, request_key="cmd:1:701")
+    assert res.status == "ok" and fake.users[501]["expireAt"] == iso(NOW + timedelta(days=6))
+
+
+async def test_broadcast_credit_unknown_then_sweep_credits_once(svc, fake):
+    """Broadcast credit_days: the deterministic trace bc:<id>:<user> plus the
+    pending marker make the final sweep safe after a lost response."""
+    from app.services.broadcast import credit_one
+    from app.services.grants import add_days
+    from tests.growth.fakes import FakeStatus, MemoryLedger
+
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=1)))
+    _land_then_timeout(fake, blind_reread=True)
+    ledger, status = MemoryLedger(), FakeStatus()
+
+    async def add(uid, days, *, trace_id):
+        return await add_days(svc, status, uid, days, trace_id=trace_id)
+
+    assert await credit_one(ledger, add, 9, 7, 3) == "failed"
+    fake.fail_get_user = False
+    assert await credit_one(ledger, add, 9, 7, 3) == "applied"
+    assert await credit_one(ledger, add, 9, 7, 3) == "dup"
+    assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))

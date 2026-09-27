@@ -24,6 +24,7 @@ from typing import Any, Optional, Protocol
 from app.domain.models import AdminTopic, Entitlement, EntitlementSource, SubKind, SubscriptionState
 from app.domain.texts import fmt_date_msk, h
 from app.logger import logger
+from app.services.provisioning_rules import CreditOutcomeUnknown
 
 # key -> (plan, days or None for lifetime, label). The top plan (Pro) is the
 # "friend" grant since the lite/standard/pro grid (2.x _FRIEND_GRANT_MAP).
@@ -33,6 +34,10 @@ GRANT_KEYS: dict[str, tuple[str, Optional[int], str]] = {
     "forever": ("pro", None, "Pro навсегда"),
 }
 REQUEST_MARKER_TTL = 7 * 24 * 3600
+# N-3: a /grant whose outcome is unknown (PATCH timed out, panel unreadable)
+# is remembered per user; the admin's repeat of the same command re-runs that
+# invocation (same ledger code and trace_id) instead of starting a new one.
+UNRESOLVED_GRANT_TTL = 24 * 3600
 LEGACY_MARKER_TTL = 300  # 2.x buttons carry only the user id
 
 
@@ -105,8 +110,10 @@ async def credit_landed(trace_id: str) -> bool:
     marker, i.e. the PATCH went through (a failed PATCH deletes it). Redis
     down -> False."""
     from app.infra.redis.flags import get_value
+    from app.services.credits import pending_credit
 
-    return await get_value(f"credit:{trace_id}") is not None
+    value = await get_value(f"credit:{trace_id}")
+    return value is not None and pending_credit(value) is None  # a pending marker is not a landed credit
 
 
 # --------------------------------------------------------------------------- ledger
@@ -198,9 +205,37 @@ async def _ensure_user(telegram_id: int) -> None:
 # --------------------------------------------------------------------------- admin grants
 
 
+async def _get_unresolved(tg: int) -> Optional[dict]:
+    import json
+
+    from app.infra.redis.flags import get_value
+
+    raw = await get_value(f"grant_unresolved:{int(tg)}")
+    try:
+        rec = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    return rec if isinstance(rec, dict) and rec.get("request_key") else None
+
+
+async def _set_unresolved(tg: int, request_key: str, days: int) -> None:
+    import json
+
+    from app.infra.redis.flags import set_value
+
+    await set_value(f"grant_unresolved:{int(tg)}", json.dumps({"request_key": request_key, "days": int(days)}),
+                    ttl=UNRESOLVED_GRANT_TTL)
+
+
+async def _clear_unresolved(tg: int) -> None:
+    from app.infra.redis.flags import delete_key
+
+    await delete_key(f"grant_unresolved:{int(tg)}")
+
+
 @dataclass(frozen=True)
 class GrantResult:
-    status: str  # ok | dup | busy | skipped | error
+    status: str  # ok | dup | busy | skipped | error | unknown (panel did not tell, see N-3)
     label: str = ""
     state: Optional[SubscriptionState] = None
 
@@ -249,13 +284,29 @@ class GrantsService:
 
     async def grant_days(self, admin_id: int, telegram_id: int, days: int, *, plan: Optional[str] = None,
                          request_key: str) -> GrantResult:
-        """/grant <id> <days> [plan]: +days to the current plan (or to ``plan``)."""
+        """/grant <id> <days> [plan]: +days to the current plan (or to ``plan``).
+
+        Idempotent per invocation: ledger code and trace_id come from the
+        command message. When the panel could not tell whether the days landed
+        (status ``unknown``), the next /grant of the same days to the same user
+        re-runs that first invocation: the provisioning marker re-reads the
+        panel and credits only if the days are not there (review N-3)."""
+        tg = int(telegram_id)
         if not await self.take_request(request_key):
             return GrantResult("dup")
+        run_key = request_key
+        prev = await _get_unresolved(tg) if plan is None else None
+        if prev and int(prev.get("days") or 0) == int(days):
+            run_key = str(prev["request_key"])
+            logger.warning(f"grants: /grant tg={tg} +{days}d repeats unresolved {run_key}, re-running it")
         label = f"+{int(days)} дн." + (f" ({plan})" if plan else "")
-        res = await self._grant(admin_id, int(telegram_id), plan=plan, days=int(days), label=label,
-                                code=f"adm:{request_key}"[:64], trace_id=f"admin:{request_key}", extend=True)
-        if res.status in ("error", "busy"):
+        res = await self._grant(admin_id, tg, plan=plan, days=int(days), label=label,
+                                code=f"adm:{run_key}"[:64], trace_id=f"admin:{run_key}", extend=True)
+        if res.status == "unknown" and plan is None:
+            await _set_unresolved(tg, run_key, int(days))
+        elif prev and run_key != request_key and res.status in ("ok", "dup", "skipped"):
+            await _clear_unresolved(tg)
+        if res.status in ("error", "busy", "unknown"):
             await self.release_request(request_key)
         return res
 
@@ -280,6 +331,8 @@ class GrantsService:
                     try:
                         state = await add_days(self.provisioning, self.status, tg, int(days or 0),
                                                trace_id=trace_id, plan_code=plan)
+                    except CreditOutcomeUnknown:
+                        raise
                     except Exception as e:
                         # Review round 2, N-2: an error after the PATCH (DB save,
                         # cache) must not read as "not granted": the request would
@@ -299,6 +352,10 @@ class GrantsService:
                         await self.status.invalidate(tg)
                     except Exception:  # noqa: BLE001
                         pass
+            except CreditOutcomeUnknown:
+                logger.error(f"grants: +{days}d tg={tg} outcome unknown, the repeat re-checks the panel")
+                await self.ledger.close(code, tg, "failed")
+                return GrantResult("unknown", label)
             except Exception as e:  # noqa: BLE001
                 logger.error(f"grants: grant failed tg={tg} ({type(e).__name__})")
                 await self.ledger.close(code, tg, "failed")
