@@ -92,14 +92,17 @@ class B:
     REFRESH = "🔄 Обновить"
     HELP = "ℹ️ Помощь"
     ADMIN_PANEL = "👑 Админ-панель"
-    UNLINK = "❌ Отвязать: {name}"
+    UNLINK = "❌ Отвязать: {name}"  # 2.x/early 3.0 label, kept for old keyboards in chats
+    UNLINK_N = "❌ {n}"  # numbered unlink button under device cards
     YES_PREFIX = "✅ Да"
     CANCEL = "✖️ Отмена"
     TO_LIST = "⬅️ К списку"
     # footer
     BACK = "⬅️ Назад"
     MENU = "🏠 В меню"
-    BACK_ADMIN = "⬅️ В админку"
+    BACK_ADMIN = "👑 В админку"
+    # admin wizards (broadcast)
+    BC_ABORT = "✖️ Отменить рассылку"
     # admin decisions
     APPROVE = "✅ {label}"
     REJECT = "❌ {label}"
@@ -267,10 +270,22 @@ def article(title: str, *, emoji: str, sections: Sequence[Optional[Block]], hint
     return Screen("article", title, emoji, _blocks(sections), hint)
 
 
-def items(title: str, *, emoji: str, lines: Sequence[Line], empty: str = "", hint: str = "") -> Screen:
-    """6. List of items, one line each; ``empty`` replaces the list when there is nothing."""
+def items(title: str, *, emoji: str, lines: Sequence[Line] = (), cards: Sequence[Optional[Block]] = (),
+          empty: str = "", hint: str = "") -> Screen:
+    """6. List of items: one line each (``lines``) or one quote card each (``cards``, see ``card``);
+    ``empty`` replaces the list when there is nothing."""
+    cs = _blocks(cards)
+    if cs:
+        return Screen("items", title, emoji, cs, hint)
     ls = _lines(lines) or ((empty,) if empty else ())
     return Screen("items", title, emoji, _blocks([block(*ls)]), hint)
+
+
+def card(n: int, name: str, *lines: Line, emoji: str = "") -> Optional[Block]:
+    """One numbered card of an ``items`` list: ``{emoji} <b>{n}. {name}</b>`` and its detail
+    lines, all inside one blockquote. The number matches the item's ``❌ {n}`` button."""
+    head = f"<b>{int(n)}. {name}</b>"
+    return block(f"{emoji} {head}" if emoji else head, *lines)
 
 
 def confirm(question: str, *lines: Line) -> Screen:
@@ -319,7 +334,7 @@ def admin_alert(title: str, *, emoji: str, who: Optional[Block] = None, lines: S
 
 __all__ = [
     "B", "E", "KIND_EMOJI", "TYPES", "TYPE_TITLES", "TOAST_MAX", "Block", "Screen",
-    "admin_alert", "admin_screen", "article", "block", "bold", "checkout", "choice", "code", "confirm",
+    "admin_alert", "admin_screen", "article", "block", "bold", "card", "checkout", "choice", "code", "confirm",
     "field", "items", "link", "plain", "prompt", "push", "render", "result", "status", "title_line",
     "toast", "who_block",
 ]
