@@ -15,7 +15,8 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import Adm, Nav
 from app.bot.middlewares.admin_guard import guard_router
-from app.bot.views import kb, kit, render, url_btn
+from app.bot.views import admin as V
+from app.bot.views import kb, render, url_btn
 from app.domain.texts import admin as T
 from app.domain.texts import days_ru, h
 from app.domain.texts import promo as TP
@@ -93,7 +94,7 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
     """/grant <telegram_id> <days> [plan]: +days to the current plan (or the given plan)."""
     parts = (command.args or "").split()
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit() or not 0 < int(parts[1]) <= 3650:
-        await render(message, *kit.view(T.result_screen("info", "/grant", T.USAGE_GRANT)))
+        await render(message, *V.note(T.result_screen("info", "/grant", T.USAGE_GRANT)))
         return
     tg, days = int(parts[0]), int(parts[1])
     plan = parts[2].lower() if len(parts) > 2 else None
@@ -101,7 +102,7 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
         from app.domain.plans import is_valid_plan_code
 
         if not is_valid_plan_code(plan):
-            await render(message, *kit.view(T.result_screen("warn", "/grant", f"Неизвестный тариф: {h(plan)}")))
+            await render(message, *V.note(T.result_screen("warn", "/grant", f"Неизвестный тариф: {h(plan)}")))
             return
     res = await _service(container).grant_days(message.from_user.id, tg, days, plan=plan,
                                                request_key=f"cmd:{message.chat.id}:{message.message_id}")
@@ -114,14 +115,14 @@ async def cmd_grant(message: Message, command: CommandObject, container: Any) ->
             tg, TP.access_granted(f"Подписка продлена на {days_ru(int(days))}"), html=True,
             reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
         until = getattr(res.state, "expires_at", None)
-        await render(message, *kit.view(T.result_screen("ok", "/grant", f"<code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(until)}")))
+        await render(message, *V.note(T.result_screen("ok", "/grant", f"<code>{tg}</code>: {h(res.label)}, до {fmt_date_msk(until)}")))
     elif res.status == "skipped":
-        await render(message, *kit.view(T.result_screen("warn", "/grant", T.NOTHING_TO_EXTEND)))
+        await render(message, *V.note(T.result_screen("warn", "/grant", T.NOTHING_TO_EXTEND)))
     elif res.status == "busy":
-        await render(message, *kit.view(T.result_screen("wait", "/grant", T.IN_PROGRESS)))
+        await render(message, *V.note(T.result_screen("wait", "/grant", T.IN_PROGRESS)))
     elif res.status == "dup":
-        await render(message, *kit.view(T.result_screen("info", "/grant", T.ALREADY_DONE)))
+        await render(message, *V.note(T.result_screen("info", "/grant", T.ALREADY_DONE)))
     elif res.status == "unknown":
-        await render(message, *kit.view(T.result_screen("warn", "/grant", T.GRANT_UNKNOWN)))
+        await render(message, *V.note(T.result_screen("warn", "/grant", T.GRANT_UNKNOWN)))
     else:
-        await render(message, *kit.view(T.result_screen("error", "/grant", T.GRANT_FAILED)))
+        await render(message, *V.note(T.result_screen("error", "/grant", T.GRANT_FAILED)))

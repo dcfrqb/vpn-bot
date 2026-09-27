@@ -27,7 +27,7 @@ BTN_BLOCKLIST = "⛔ Стоп-лист"
 BTN_REFERRAL = "🤝 Рефералка"
 BTN_MAINT = "🛠 Техработы"
 BTN_BACK = "⬅️ Назад"
-BTN_PANEL = "⬅️ В админку"
+BTN_PANEL = "👑 В админку"
 BTN_PREV = "⬅️"
 BTN_NEXT = "➡️"
 BTN_REFRESH = "🔄 Обновить"
@@ -94,7 +94,7 @@ USAGE_STOPLIST = (
 
 BC_STEP_TEXT = (
     "📢 <b>Новая рассылка, шаг 1/6: текст</b>\n\n"
-    "Пришли текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;). Отмена: /cancel"
+    "Пришли текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;)."
 )
 BC_STEP_PHOTO = "📷 <b>Шаг 2/6: фото</b>\n\nПришли фото или нажми «Без фото»."
 BC_STEP_BUTTONS = (
@@ -113,7 +113,7 @@ BC_STEP_SOUND = "🔔 <b>Шаг 6/6: звук</b>"
 BC_CANCELLED = "Создание рассылки отменено."
 BC_EMPTY_TEXT = "Пустой текст, пришли непустое сообщение."
 BC_TOO_LONG = "Слишком длинный текст ({n} симв.), лимит Telegram около 4096."
-BC_BAD_BUTTONS = "Не получилось прочитать кнопки: {err}. Попробуй еще раз или /cancel."
+BC_BAD_BUTTONS = "Не получилось прочитать кнопки: {err}. Пришли еще раз или нажми «Без кнопок»."
 BC_BAD_NUMBER = "Нужно целое число от 0 до {max}."
 BC_BAD_IDS = "Не нашел ни одного ID. Пришли числа через пробел."
 BC_NOT_FOUND = "Рассылка не найдена."
@@ -353,7 +353,6 @@ def bc_note(text: str, *, kind: str = "info") -> ui.Screen:
 BC_STEP_TEXT_SCREEN = broadcast_step_screen(
     "Новая рассылка, шаг 1/6: текст",
     "Пришли текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;).",
-    hint="Отмена: /cancel",
 )
 BC_STEP_PHOTO_SCREEN = broadcast_step_screen("Шаг 2/6: фото", "Пришли фото или нажми «Без фото».")
 BC_STEP_BUTTONS_SCREEN = broadcast_step_screen(

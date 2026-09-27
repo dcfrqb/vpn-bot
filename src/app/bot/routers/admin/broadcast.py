@@ -92,53 +92,112 @@ class BcWizard(StatesGroup):
 
 
 WIZARD = StateFilter(BcWizard)
+_STEP_STATE = {V.STEP_TEXT: BcWizard.text, V.STEP_PHOTO: BcWizard.photo, V.STEP_BUTTONS: BcWizard.buttons,
+               V.STEP_SEGMENT: BcWizard.segment, V.STEP_SUBKIND: BcWizard.segment, V.STEP_DAYS: BcWizard.days,
+               V.STEP_IDS: BcWizard.ids, V.STEP_CREDIT: BcWizard.credit, V.STEP_SOUND: BcWizard.sound}
+
+
+def _days_back(data: dict) -> str:
+    """«Назад» from the days step: the sub-kind question when the segment has one."""
+    return V.STEP_SUBKIND if data.get("kind") in (svc.SEGMENT_ACTIVE, svc.SEGMENT_EXPIRED) else V.STEP_SEGMENT
+
+
+def _credit_back(data: dict) -> str:
+    """«Назад» from the gift step: the last question the chosen segment asked."""
+    kind = data.get("kind")
+    if kind == svc.SEGMENT_IDS:
+        return V.STEP_IDS
+    if kind in (svc.SEGMENT_ACTIVE, svc.SEGMENT_EXPIRED, svc.SEGMENT_TRIAL_NC):
+        return V.STEP_DAYS
+    return V.STEP_SEGMENT
+
+
+def _step_view(step: str, data: dict) -> tuple[str, Any]:
+    """Screen and keyboard of a wizard step (with «⬅️ Назад», «✖️ Отменить», «👑 В админку»)."""
+    if step == V.STEP_TEXT:
+        return T.BC_STEP_TEXT_SCREEN.html(), V.text_kb()
+    if step == V.STEP_PHOTO:
+        return T.BC_STEP_PHOTO_SCREEN.html(), V.skip_kb("photo")
+    if step == V.STEP_BUTTONS:
+        return T.BC_STEP_BUTTONS_SCREEN.html(), V.skip_kb("buttons")
+    if step == V.STEP_SUBKIND:
+        return T.BC_STEP_SUBKIND_SCREEN.html(), V.subkind_kb()
+    if step == V.STEP_DAYS:
+        return T.BC_STEP_DAYS_SCREEN.html(), V.days_kb(_days_back(data))
+    if step == V.STEP_IDS:
+        return T.BC_STEP_IDS_SCREEN.html(), V.ids_kb()
+    if step == V.STEP_CREDIT:
+        return T.BC_STEP_CREDIT_SCREEN.html(), V.credit_kb(_credit_back(data))
+    if step == V.STEP_SOUND:
+        return T.BC_STEP_SOUND_SCREEN.html(), V.sound_kb()
+    return T.BC_STEP_SEGMENT_SCREEN.html(), V.segment_kb()
+
+
+async def _go(event: Any, state: FSMContext, step: str) -> None:
+    await state.set_state(_STEP_STATE[step])
+    await render(event, *_step_view(step, await state.get_data()))
+
+
+async def _warn(message: Message, state: FSMContext, text: str, step: str) -> None:
+    """A wizard input error: the note plus the same step's buttons (the step is still waiting)."""
+    await render(message, T.bc_note(text, kind="warn").html(), _step_view(step, await state.get_data())[1])
+
+
+async def _cancelled(event: Any, state: FSMContext) -> None:
+    await state.clear()
+    await render(event, T.bc_note(T.BC_CANCELLED).html(), V.exit_kb())
 
 
 @admin_router.message(Command("bc_new"))
 async def cmd_new(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await state.set_state(BcWizard.text)
-    await render(message, T.BC_STEP_TEXT_SCREEN.html())
+    await _go(message, state, V.STEP_TEXT)
 
 
 @admin_router.callback_query(BcAdm.filter(F.a == "new"))
 async def cb_new(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await state.set_state(BcWizard.text)
-    await render(callback, T.BC_STEP_TEXT_SCREEN.html())
+    await _go(callback, state, V.STEP_TEXT)
 
 
 @admin_router.message(WIZARD, Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await render(message, T.bc_note(T.BC_CANCELLED).html())
+    """/cancel stays as an alias of «✖️ Отменить рассылку»."""
+    await _cancelled(message, state)
 
 
 @admin_router.callback_query(BcAdm.filter(F.a == "abort"))
 async def cb_abort(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await render(callback, T.bc_note(T.BC_CANCELLED).html())
+    await _cancelled(callback, state)
+
+
+@admin_router.callback_query(BcAdm.filter(F.a == "back"))
+async def cb_back(callback: CallbackQuery, callback_data: BcAdm, state: FSMContext) -> None:
+    """«⬅️ Назад» inside the wizard: re-ask the previous step (the answers so far are kept
+    and overwritten when answered again). A button from a closed wizard opens the list."""
+    if await state.get_state() is None or callback_data.arg not in _STEP_STATE:
+        await _list(callback)
+        return
+    await _go(callback, state, callback_data.arg)
 
 
 @admin_router.message(StateFilter(BcWizard.text), F.text)
 async def step_text(message: Message, state: FSMContext) -> None:
     text = message.html_text or message.text or ""
     if not text.strip():
-        await render(message, T.bc_note(T.BC_EMPTY_TEXT, kind="warn").html())
+        await _warn(message, state, T.BC_EMPTY_TEXT, V.STEP_TEXT)
         return
     if len(text) > 4000:
-        await render(message, T.bc_note(T.BC_TOO_LONG.format(n=len(text)), kind="warn").html())
+        await _warn(message, state, T.BC_TOO_LONG.format(n=len(text)), V.STEP_TEXT)
         return
     await state.update_data(text_html=text)
-    await state.set_state(BcWizard.photo)
-    await render(message, T.BC_STEP_PHOTO_SCREEN.html(), V.skip_kb("photo"))
+    await _go(message, state, V.STEP_PHOTO)
 
 
 @admin_router.message(StateFilter(BcWizard.photo), F.photo)
 async def step_photo(message: Message, state: FSMContext) -> None:
     await state.update_data(photo=message.photo[-1].file_id)
-    await state.set_state(BcWizard.buttons)
-    await render(message, T.BC_STEP_BUTTONS_SCREEN.html(), V.skip_kb("buttons"))
+    await _go(message, state, V.STEP_BUTTONS)
 
 
 def parse_buttons(raw: str) -> list[dict]:
@@ -160,23 +219,20 @@ async def step_buttons(message: Message, state: FSMContext) -> None:
     try:
         buttons = parse_buttons(message.text)
     except (ValueError, TypeError) as err:
-        await render(message, T.bc_note(T.BC_BAD_BUTTONS.format(err=h(str(err))), kind="warn").html(), V.skip_kb("buttons"))
+        await _warn(message, state, T.BC_BAD_BUTTONS.format(err=h(str(err))), V.STEP_BUTTONS)
         return
     await state.update_data(buttons=buttons)
-    await state.set_state(BcWizard.segment)
-    await render(message, T.BC_STEP_SEGMENT_SCREEN.html(), V.segment_kb())
+    await _go(message, state, V.STEP_SEGMENT)
 
 
 @admin_router.callback_query(StateFilter(BcWizard.photo, BcWizard.buttons), BcAdm.filter(F.a == "skip"))
 async def cb_skip(callback: CallbackQuery, callback_data: BcAdm, state: FSMContext) -> None:
     if callback_data.arg == "photo":
         await state.update_data(photo=None)
-        await state.set_state(BcWizard.buttons)
-        await render(callback, T.BC_STEP_BUTTONS_SCREEN.html(), V.skip_kb("buttons"))
+        await _go(callback, state, V.STEP_BUTTONS)
     else:
         await state.update_data(buttons=None)
-        await state.set_state(BcWizard.segment)
-        await render(callback, T.BC_STEP_SEGMENT_SCREEN.html(), V.segment_kb())
+        await _go(callback, state, V.STEP_SEGMENT)
 
 
 @admin_router.callback_query(StateFilter(BcWizard.segment), BcAdm.filter(F.a == "seg"))
@@ -187,32 +243,29 @@ async def cb_segment(callback: CallbackQuery, callback_data: BcAdm, state: FSMCo
         return
     await state.update_data(kind=kind, sub_kind="main", days=None, ids=[])
     if kind in (svc.SEGMENT_ACTIVE, svc.SEGMENT_EXPIRED):
-        await render(callback, T.BC_STEP_SUBKIND_SCREEN.html(), V.subkind_kb())
+        await _go(callback, state, V.STEP_SUBKIND)
     elif kind == svc.SEGMENT_TRIAL_NC:
-        await state.set_state(BcWizard.days)
-        await render(callback, T.BC_STEP_DAYS_SCREEN.html())
+        await _go(callback, state, V.STEP_DAYS)
     elif kind == svc.SEGMENT_IDS:
-        await state.set_state(BcWizard.ids)
-        await render(callback, T.BC_STEP_IDS_SCREEN.html())
+        await _go(callback, state, V.STEP_IDS)
     else:
-        await _ask_credit(callback, state)
+        await _go(callback, state, V.STEP_CREDIT)
 
 
 @admin_router.callback_query(StateFilter(BcWizard.segment), BcAdm.filter(F.a == "sk"))
 async def cb_subkind(callback: CallbackQuery, callback_data: BcAdm, state: FSMContext) -> None:
     await state.update_data(sub_kind=callback_data.arg if callback_data.arg in svc.SUB_KINDS else "main")
-    await state.set_state(BcWizard.days)
-    await render(callback, T.BC_STEP_DAYS_SCREEN.html())
+    await _go(callback, state, V.STEP_DAYS)
 
 
 @admin_router.message(StateFilter(BcWizard.days), F.text)
 async def step_days(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
     if not raw.isdigit() or int(raw) > 3650:
-        await render(message, T.bc_note(T.BC_BAD_NUMBER.format(max=3650), kind="warn").html())
+        await _warn(message, state, T.BC_BAD_NUMBER.format(max=3650), V.STEP_DAYS)
         return
     await state.update_data(days=int(raw) or None)
-    await _ask_credit(message, state)
+    await _go(message, state, V.STEP_CREDIT)
 
 
 def parse_ids(raw: str) -> list[int]:
@@ -224,23 +277,17 @@ def parse_ids(raw: str) -> list[int]:
 async def step_ids(message: Message, state: FSMContext) -> None:
     ids = parse_ids(message.text)
     if not ids:
-        await render(message, T.bc_note(T.BC_BAD_IDS, kind="warn").html())
+        await _warn(message, state, T.BC_BAD_IDS, V.STEP_IDS)
         return
     await state.update_data(ids=ids)
-    await _ask_credit(message, state)
-
-
-async def _ask_credit(event: Any, state: FSMContext) -> None:
-    await state.set_state(BcWizard.credit)
-    await render(event, T.BC_STEP_CREDIT_SCREEN.html(), V.credit_kb())
+    await _go(message, state, V.STEP_CREDIT)
 
 
 @admin_router.callback_query(StateFilter(BcWizard.credit), BcAdm.filter(F.a == "credit"))
 async def cb_credit(callback: CallbackQuery, callback_data: BcAdm, state: FSMContext) -> None:
     days = int(callback_data.arg) if callback_data.arg.isdigit() else 0
     await state.update_data(credit=min(days, 365))
-    await state.set_state(BcWizard.sound)
-    await render(callback, T.BC_STEP_SOUND_SCREEN.html(), V.sound_kb())
+    await _go(callback, state, V.STEP_SOUND)
 
 
 @admin_router.callback_query(StateFilter(BcWizard.sound), BcAdm.filter(F.a == "sound"))
@@ -256,7 +303,7 @@ async def cb_sound(callback: CallbackQuery, callback_data: BcAdm, state: FSMCont
                                      credit_days=int(data.get("credit") or 0), created_by=callback.from_user.id)
     except (KeyError, ValueError) as err:
         logger.warning(f"broadcast draft: bad wizard data ({type(err).__name__})")
-        await render(callback, T.bc_note(T.BC_CANCELLED).html())
+        await _cancelled(callback, state)
         return
     await _show(callback, bid)
 
@@ -269,7 +316,7 @@ async def cb_sound(callback: CallbackQuery, callback_data: BcAdm, state: FSMCont
 async def _show(event: Any, bid: int) -> None:
     info = await svc.get_broadcast(bid)
     if info is None:
-        await render(event, T.bc_note(T.BC_NOT_FOUND, kind="warn").html())
+        await render(event, *V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")))
         return
     if info.state == "draft":
         await render(event, *V.draft(info, await svc.count_segment(info.segment)))
@@ -311,11 +358,11 @@ async def cb_show(callback: CallbackQuery, callback_data: BcAdm) -> None:
 async def _preview(event: Any, bid: int, chat_id: int) -> None:
     info = await svc.get_broadcast(bid)
     if info is None:
-        await render(event, T.bc_note(T.BC_NOT_FOUND, kind="warn").html())
+        await render(event, *V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")))
         return
     res = await AiogramBroadcastSender(event.bot).preview(chat_id, info)
     if res.status != "sent":
-        await render(event, T.bc_note(T.BC_PREVIEW_FAILED.format(err=h(res.error or res.status)), kind="warn").html())
+        await render(event, *V.note(T.bc_note(T.BC_PREVIEW_FAILED.format(err=h(res.error or res.status)), kind="warn")))
     elif isinstance(event, CallbackQuery):
         await event.answer("Превью отправлено")
 
@@ -328,9 +375,9 @@ async def cb_preview(callback: CallbackQuery, callback_data: BcAdm) -> None:
 async def _confirm(event: Any, bid: int) -> None:
     info = await svc.get_broadcast(bid)
     if info is None:
-        await render(event, T.bc_note(T.BC_NOT_FOUND, kind="warn").html())
+        await render(event, *V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")))
     elif info.state != "draft":
-        await render(event, T.bc_note(T.BC_ALREADY_DONE if info.state == "done" else T.BC_ALREADY_RUNNING).html())
+        await render(event, *V.note(T.bc_note(T.BC_ALREADY_DONE if info.state == "done" else T.BC_ALREADY_RUNNING)))
     else:
         await render(event, *V.confirm_start(info, await svc.count_segment(info.segment)))
 
@@ -344,20 +391,21 @@ async def cb_go(callback: CallbackQuery, callback_data: BcAdm) -> None:
 async def cb_go_confirmed(callback: CallbackQuery, callback_data: BcAdm, container: Any) -> None:
     info = await svc.get_broadcast(callback_data.id)
     if info is None:
-        await render(callback, T.bc_note(T.BC_NOT_FOUND, kind="warn").html())
+        await render(callback, *V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")))
         return
     if info.state != "draft":
         await callback.answer(T.BC_ALREADY_RUNNING, show_alert=True)
         return
     started = await svc.start_broadcast(callback.bot, info.id, credit=svc.credits_from_container(container))
-    await render(callback, T.bc_note(T.BC_STARTED if started else T.BC_ALREADY_RUNNING, kind="ok").html())
+    await render(callback, T.bc_note(T.BC_STARTED if started else T.BC_ALREADY_RUNNING, kind="ok").html(),
+                 V.started_kb(info.id))
 
 
 @admin_router.callback_query(BcAdm.filter(F.a == "stats"))
 async def cb_stats(callback: CallbackQuery, callback_data: BcAdm) -> None:
     info = await svc.get_broadcast(callback_data.id)
     if info is None:
-        await render(callback, T.bc_note(T.BC_NOT_FOUND, kind="warn").html())
+        await render(callback, *V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")))
         return
     await _progress(callback, info)
 
@@ -388,7 +436,7 @@ def _int_args(command: CommandObject) -> list[int]:
 async def cmd_preview(message: Message, command: CommandObject) -> None:
     ids = _int_args(command)
     if not ids:
-        await render(message, "Использование: /bc_preview &lt;id&gt;")
+        await render(message, "Использование: /bc_preview &lt;id&gt;", V.exit_kb())
         return
     await _preview(message, ids[0], message.from_user.id)
 
@@ -397,17 +445,17 @@ async def cmd_preview(message: Message, command: CommandObject) -> None:
 async def cmd_send_to(message: Message, command: CommandObject) -> None:
     ids = _int_args(command)
     if len(ids) < 2:
-        await render(message, "Использование: <code>/bc_send_to &lt;broadcast_id&gt; &lt;telegram_id&gt;</code>")
+        await render(message, "Использование: <code>/bc_send_to &lt;broadcast_id&gt; &lt;telegram_id&gt;</code>", V.exit_kb())
         return
     await _preview(message, ids[0], ids[1])
-    await render(message, f"Отправлено в чат <code>{ids[1]}</code> (без записи в получателей).")
+    await render(message, f"Отправлено в чат <code>{ids[1]}</code> (без записи в получателей).", V.exit_kb())
 
 
 @admin_router.message(Command("bc_send"))
 async def cmd_send(message: Message, command: CommandObject) -> None:
     ids = _int_args(command)
     if not ids:
-        await render(message, "Использование: /bc_send &lt;id&gt;")
+        await render(message, "Использование: /bc_send &lt;id&gt;", V.exit_kb())
         return
     await _confirm(message, ids[0])
 
@@ -417,7 +465,8 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
     ids = _int_args(command)
     info = await svc.get_broadcast(ids[0]) if ids else None
     if info is None:
-        await render(message, T.bc_note(T.BC_NOT_FOUND, kind="warn").html() if ids else "Использование: /bc_stats &lt;id&gt;")
+        await render(message, *(V.note(T.bc_note(T.BC_NOT_FOUND, kind="warn")) if ids
+                                else ("Использование: /bc_stats &lt;id&gt;", V.exit_kb())))
         return
     await _progress(message, info)
 
@@ -426,6 +475,6 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
 async def cmd_bc_cancel(message: Message, command: CommandObject) -> None:
     ids = _int_args(command)
     if not ids:
-        await render(message, "Использование: /bc_cancel &lt;id&gt;")
+        await render(message, "Использование: /bc_cancel &lt;id&gt;", V.exit_kb())
         return
-    await render(message, T.bc_note(T.BC_CANCEL_SENT if await svc.cancel_broadcast(ids[0]) else T.BC_NOT_RUNNING).html())
+    await render(message, *V.note(T.bc_note(T.BC_CANCEL_SENT if await svc.cancel_broadcast(ids[0]) else T.BC_NOT_RUNNING)))

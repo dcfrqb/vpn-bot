@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import Adm, Nav
 from app.bot.middlewares.admin_guard import guard_router, is_admin_id
 from app.bot.views import admin as V
-from app.bot.views import kit, render
+from app.bot.views import render
 from app.domain.texts import admin as T
 from app.domain.texts import fmt_date_msk, h
 from app.logger import logger
@@ -83,7 +83,7 @@ def _target(command: CommandObject) -> Any:
 async def cmd_whois(message: Message, command: CommandObject, container: Any) -> None:
     tg = _target(command)
     if tg is None:
-        await render(message, T.USAGE_ID.format(cmd="whois"))
+        await render(message, *V.plain(T.USAGE_ID.format(cmd="whois")))
         return
     try:
         state = await container.status.get_state(tg, force=True)
@@ -91,7 +91,7 @@ async def cmd_whois(message: Message, command: CommandObject, container: Any) ->
         logger.warning(f"whois: status failed tg={tg} ({type(e).__name__})")
         state = None
     card = await user_card(tg)
-    await render(message, V.whois(card, state, bot_blocked=BlocklistAdmin.bot_blocked(tg), is_admin=is_admin_id(tg)))
+    await render(message, *V.whois(card, state, bot_blocked=BlocklistAdmin.bot_blocked(tg), is_admin=is_admin_id(tg)))
 
 
 async def _sync(message: Message, tg: int, container: Any) -> None:
@@ -99,11 +99,11 @@ async def _sync(message: Message, tg: int, container: Any) -> None:
     try:
         st = await container.status.get_state(tg, force=True)
     except Exception as e:  # noqa: BLE001
-        await render(message, *kit.view(T.result_screen("error", "Синхронизация",
+        await render(message, *V.note(T.result_screen("error", "Синхронизация",
                                                          f"Не удалась для {tg} ({h(type(e).__name__)})")))
         return
     status = "панель недоступна" if st.stale else ("✅ активна" if st.active else "❌ нет")
-    await render(message, *kit.view(T.result_screen(
+    await render(message, *V.note(T.result_screen(
         "ok", f"Sync {tg}", f"Подписка: {status}", f"Тариф: {h(st.plan_code or '—')}",
         f"До: {fmt_date_msk(st.expires_at, with_time=True)}")))
 
@@ -112,7 +112,7 @@ async def _sync(message: Message, tg: int, container: Any) -> None:
 async def cmd_sync(message: Message, command: CommandObject, container: Any) -> None:
     tg = _target(command)
     if tg is None:
-        await render(message, T.USAGE_ID.format(cmd="sync"))
+        await render(message, *V.plain(T.USAGE_ID.format(cmd="sync")))
         return
     await _sync(message, tg, container)
 

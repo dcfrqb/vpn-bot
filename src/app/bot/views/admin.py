@@ -28,6 +28,7 @@ def home(stats: Any) -> View:
             kit.pair(kit.action(T.BTN_BLOCKLIST, Adm(s="block", a="open")), kit.action(T.BTN_REFERRAL, Adm(s="ref", a="open"))),
             kit.action(T.BTN_MAINT, Adm(s="maint", a="show")),  # stream C: bot/routers/admin/panel.py
         ],
+        footer=kit.Footer.to_menu(),
     )
 
 
@@ -116,6 +117,16 @@ def obhod_card(info: Any, packages: Sequence[tuple[str, str]]) -> View:
     )
 
 
+def note(screen: Any) -> View:
+    """An admin result/notice (command reply, error) with the way back: [👑 В админку]."""
+    return kit.view(screen, footer=BACK_TO_PANEL)
+
+
+def plain(text: str) -> View:
+    """A hand-written admin text (usage help, 2.x logs) with [👑 В админку]."""
+    return kit.View(text, kit.keyboard(footer=BACK_TO_PANEL))
+
+
 def confirm(question: str, yes: Any, no: Any) -> View:
     return kit.view(
         T.confirm_screen(question),
@@ -139,10 +150,10 @@ def promo_card(r: Any, bot_username: Optional[str] = None) -> View:
     toggle = (kit.action("⚪️ Выключить", PromoAdm(a="off", id=r.id)) if r.is_active
               else kit.action("🟢 Включить", PromoAdm(a="on", id=r.id)))
     return kit.view(T.promo_card_screen(r, bot_username), primary=[toggle],
-                     footer=kit.Footer.back_only(PromoAdm(a="list"), label=B.BACK))
+                     footer=kit.Footer.back_admin(PromoAdm(a="list"), label=B.TO_LIST))
 
 
 __all__ = [
-    "BACK_TO_PANEL", "PAYMENT_FILTERS", "View", "blocklist", "confirm", "home", "obhod_card", "obhod_overview",
+    "BACK_TO_PANEL", "PAYMENT_FILTERS", "View", "blocklist", "confirm", "home", "note", "plain", "obhod_card", "obhod_overview",
     "payments", "promo_card", "promo_list", "referral", "request_keyboard", "stats", "users", "whois",
 ]

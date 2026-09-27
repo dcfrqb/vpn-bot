@@ -235,7 +235,7 @@ ADMIN_CALLBACKS = [
     cb.PromoAdm(a="list"), cb.PromoAdm(a="show", id=1), cb.PromoAdm(a="on", id=1), cb.PromoAdm(a="off", id=1),
     cb.BcAdm(a="new"), cb.BcAdm(a="abort"), cb.BcAdm(a="list"), cb.BcAdm(a="show", id=1), cb.BcAdm(a="prev", id=1),
     cb.BcAdm(a="go", id=1), cb.BcAdm(a="go2", id=1), cb.BcAdm(a="stats", id=1), cb.BcAdm(a="cancel", id=1),
-    cb.BcAdm(a="del", id=1),
+    cb.BcAdm(a="del", id=1), cb.BcAdm(a="back", arg="photo"),
 ]
 LEGACY_ADMIN_STRINGS = ["admin_panel", "admin_back", "admin_stats", "admin_users", "admin_payments",
                         "admin_users_page_2", "admin_payments_all", f"friend_grant_1m_{USER}",
@@ -288,6 +288,72 @@ async def test_admin_panel_opens_for_admin(g):
     assert sum("Админ-панель" in t for t in _texts(g)) == 2
 
 
+# ----------------------------------------------------------------- broadcast wizard navigation
+
+
+def _last_kb(flow) -> list[str]:
+    calls = [c for c in flow.session.calls if c.method in ("SendMessage", "EditMessageText")]
+    return [b["text"] for row in (calls[-1].keyboard or []) for b in row]
+
+
+NAV = ["✖️ Отменить рассылку", "👑 В админку"]
+
+
+async def test_broadcast_wizard_every_step_has_cancel_admin_and_back(g):
+    a = user(ADMIN)
+    await g.send("/bc_new", u=a)
+    assert _last_kb(g) == NAV  # step 1: nothing to go back to
+    assert "/cancel" not in _texts(g)[-1]
+    await g.send("Привет", u=a)
+    assert "Шаг 2/6" in _texts(g)[-1] and _last_kb(g) == ["Без фото", "⬅️ Назад", *NAV]
+    await g.press(cb.BcAdm(a="skip", arg="photo").pack(), u=a)
+    assert "Шаг 3/6" in _texts(g)[-1] and _last_kb(g)[-3:] == ["⬅️ Назад", *NAV]
+    await g.press(cb.BcAdm(a="back", arg="photo").pack(), u=a)
+    assert "Шаг 2/6" in _texts(g)[-1]
+    await g.press(cb.BcAdm(a="skip", arg="photo").pack(), u=a)
+    await g.press(cb.BcAdm(a="skip", arg="buttons").pack(), u=a)
+    assert "Шаг 4/6" in _texts(g)[-1] and _last_kb(g)[-3:] == ["⬅️ Назад", *NAV]
+    await g.press(cb.BcAdm(a="seg", arg="active").pack(), u=a)
+    assert "Какая подписка" in _texts(g)[-1] and _last_kb(g)[-3:] == ["⬅️ Назад", *NAV]
+    await g.press(cb.BcAdm(a="sk", arg="main").pack(), u=a)
+    await g.send("abc", u=a)  # a bad number keeps the step and its buttons
+    assert "целое число" in _texts(g)[-1] and _last_kb(g) == ["⬅️ Назад", *NAV]
+    await g.send("7", u=a)
+    assert "Шаг 5/6" in _texts(g)[-1]
+    kb = g.session.calls_of("SendMessage")[-1].keyboard
+    assert kb[-2][0]["data"] == cb.BcAdm(a="back", arg="days").pack()
+    await g.press(cb.BcAdm(a="credit", arg="0").pack(), u=a)
+    assert "Шаг 6/6" in _texts(g)[-1] and _last_kb(g)[-3:] == ["⬅️ Назад", *NAV]
+    await g.press(cb.BcAdm(a="abort").pack(), u=a)
+    assert "отменено" in _texts(g)[-1] and _last_kb(g) == ["⬅️ К рассылкам", "👑 В админку"]
+    assert await g.dp.fsm.get_context(g.bot, ADMIN, ADMIN).get_state() is None
+
+
+async def test_broadcast_wizard_cancel_command_is_an_alias(g):
+    a = user(ADMIN)
+    await g.send("/bc_new", u=a)
+    await g.send("/cancel", u=a)
+    assert "отменено" in _texts(g)[-1] and _last_kb(g) == ["⬅️ К рассылкам", "👑 В админку"]
+    assert await g.dp.fsm.get_context(g.bot, ADMIN, ADMIN).get_state() is None
+
+
+async def test_admin_button_from_the_wizard_drops_the_draft(g):
+    a = user(ADMIN)
+    await g.send("/bc_new", u=a)
+    await g.press(cb.Adm(s="panel", a="open").pack(), u=a)
+    assert "Админ-панель" in _texts(g)[-1] and _last_kb(g)[-1] == "🏠 В меню"
+    assert await g.dp.fsm.get_context(g.bot, ADMIN, ADMIN).get_state() is None
+
+
+async def test_back_from_a_closed_wizard_opens_the_list(g, monkeypatch):
+    async def _no_broadcasts(limit):
+        return []
+
+    monkeypatch.setattr("app.services.broadcast.list_broadcasts", _no_broadcasts)
+    await g.press(cb.BcAdm(a="back", arg="photo").pack(), u=user(ADMIN))
+    assert "Рассылки" in _texts(g)[-1] and _last_kb(g)[-1] == "👑 В админку"
+
+
 # ----------------------------------------------------------------- review UX M7 / m12
 
 
@@ -319,3 +385,11 @@ def test_command_menu_follows_the_flags():
     assert "trial" not in names and "promo" not in names and "start" in names
     names = [c.command for c in commands_for(SimpleNamespace(PROMO_TRIAL_ENABLED=True, PROMO_CODES_ENABLED=True))]
     assert "trial" in names and "promo" in names
+
+
+async def test_whois_renders_the_card_with_the_way_back(g):
+    """The handler passed the View tuple as text (review 3.0 UX): now it is unpacked."""
+    await g.send(f"/whois {USER}", u=user(ADMIN))
+    sent = g.session.calls_of("SendMessage")[-1]
+    assert isinstance(sent.text, str) and str(USER) in sent.text
+    assert [b["text"] for row in sent.keyboard for b in row] == ["👑 В админку"]
