@@ -28,7 +28,8 @@ ENTER_CODE_SCREEN = ui.prompt("Пришли промокод", "Одним со�
 ENTER_CODE = ENTER_CODE_SCREEN.html()
 ENTER_CANCELLED_SCREEN = ui.result("info", "Ввод промокода отменен")
 ENTER_CANCELLED = ENTER_CANCELLED_SCREEN.html()
-FRIEND_REQUEST_CANCELLED = "Запрос отменен"
+FRIEND_REQUEST_CANCELLED_SCREEN = ui.result("info", "Запрос отменен")
+FRIEND_REQUEST_CANCELLED = FRIEND_REQUEST_CANCELLED_SCREEN.html()
 FRIEND_USE_COMMAND = ui.toast("Используй команду /friend")
 CODES_DISABLED = ui.toast("Промокоды сейчас не принимаются.")
 CODES_DISABLED_SCREEN = ui.result("info", "Промокоды сейчас не принимаются")
@@ -154,10 +155,6 @@ def outcome_text(code: str, reward: PromoReward, *, support: Optional[str] = Non
 
 # ----------------------------------------------------------------- gifts and referral (type: push)
 
-def gift_link_text(period_title: str, link: str) -> str:
-    return f"Тебе подарили подписку CRS VPN на {h(period_title)}! Открой ссылку в боте, чтобы активировать: {h(link)}"
-
-
 GIFT_USED_BUYER_SCREEN = ui.push(E.GIFT, "Твой подарок активирован", "Друг уже пользуется подпиской. Спасибо!")
 GIFT_USED_BUYER = GIFT_USED_BUYER_SCREEN.html()
 
@@ -193,6 +190,6 @@ __all__ = [
     "BTN_CONNECT", "BTN_MENU", "BTN_ENTER_CODE", "BTN_TRIAL", "BTN_WRITE_USER", "BTN_WRITE_ADMIN",
     "ENTER_CODE", "ENTER_CANCELLED", "CODES_DISABLED", "FRIEND_REQUEST_CANCELLED", "FRIEND_USE_COMMAND", "GIFTS_DISABLED",
     "REQUEST_SENT", "REQUEST_ALREADY_ACTIVE", "REQUEST_CHECK_FAILED", "REQUEST_DUPLICATE",
-    "ACCESS_REJECTED", "access_granted", "applied_text", "outcome_text", "gift_link_text",
+    "ACCESS_REJECTED", "access_granted", "applied_text", "outcome_text",
     "applied_screen", "outcome_screen", "access_granted_screen",
 ]

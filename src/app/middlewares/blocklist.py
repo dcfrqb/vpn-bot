@@ -75,7 +75,9 @@ class BlocklistMiddleware(BaseMiddleware):
         if user_id and user_id in _runtime_blocked and user_id not in (settings.ADMINS or []):
             logger.info(f"blocklist: blocked user {user_id} — request dropped")
             if isinstance(event, Message):
-                await event.answer("⛔ Доступ ограничен.")
+                from app.domain.texts import ui
+
+                await event.answer(ui.result("error", "Доступ ограничен").html(), parse_mode="HTML")
             elif isinstance(event, CallbackQuery):
                 await event.answer("⛔ Доступ ограничен.", show_alert=True)
             return

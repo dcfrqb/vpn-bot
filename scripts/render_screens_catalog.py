@@ -9,9 +9,14 @@ drifted text never slips through silently). Strings that live inline in
 routers/services (no function to call) are read from the source with ``ast``:
 the f-string itself becomes the template, ``{expr}`` -> ``{name}``.
 
+Screens built by the screen kit (app.domain.texts.ui, app.bot.views.kit) are
+recognised by their html (ui.render is wrapped while the catalog is built) and
+listed by TYPE with their words only; the rest keep their html and a «вручную» mark.
+
 Output (Markdown, strict format, see the header it writes):
-    ЭКРАНЫ_3.0.md              - the catalog the owner edits
-    screens_catalog_mapping.md - screen id -> code location, callbacks, notes
+    ЭКРАНЫ_3.0.md              - the catalog the owner edits: part 1 types, part 2 dictionary,
+                                 part 3 screens grouped by type
+    screens_catalog_mapping.md - screen id -> type, code location, callbacks, notes
 
 Usage (python 3.11):
     PYTHONPATH=src uv run --no-project --python 3.11 --with-requirements requirements.txt \
@@ -37,6 +42,23 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 # --------------------------------------------------------------------------- imports of the bot
+
+# Every Screen rendered while the catalog is built is remembered (html -> Screen),
+# so a text that came out of the kit is shown by its type and blocks. Patched
+# before the bot modules are imported: module-level screens register too.
+from app.domain.texts import ui as UI  # noqa: E402
+
+RENDERED: dict[str, "UI.Screen"] = {}
+_render = UI.render
+
+
+def _recording_render(screen):
+    html = _render(screen)
+    RENDERED.setdefault(html, screen)
+    return html
+
+
+UI.render = _recording_render
 
 from aiogram.types import InlineKeyboardMarkup  # noqa: E402
 
@@ -149,6 +171,9 @@ class Entry:
     code_loc: str = ""             # English: where to write the edit back
     layout: str = ""               # English: buttons/layout built by code logic
     old: Optional[dict] = None
+    type: str = "result"           # one of UI.TYPES
+    screen: Any = None             # the kit Screen, when the text came out of the kit
+    subs: tuple = ()               # [(fake value, placeholder)] as applied
 
 
 ENTRIES: list[Entry] = []
@@ -184,25 +209,78 @@ def _sub(s: str, subs) -> str:
     return s
 
 
-def add(id: str, section: str, source: str, when: str, text: str, markup: Any = None, *, subs=(), opt=(),
-        fmt: str = FMT_HTML, note: str = "", code: str = "", layout: str = "") -> Entry:
-    """Register a rendered screen. ``subs``: [(exact fake value, placeholder)],
-    applied longest-first to the text and to every button label/target."""
+MISSING_SUBS: list[str] = []
+
+# Substitutions for screens whose wording moved to the kit layout (label: value lines);
+# stale pairs of the original call are dropped for these ids.
+SUBS_FIX = {
+    "admin.home": [("Пользователей: 1482 (сегодня +7)", "Пользователей: {total_users} (сегодня +{today_users})"),
+                   ("Активных подписок: 213", "Активных подписок: {active}"),
+                   ("Выручка сегодня: 898\xa0₽, за 30 дней: 48\xa0750\xa0₽",
+                    "Выручка сегодня: {revenue_today}, за 30 дней: {revenue_30d}")],
+    "admin.stats": [("Пользователи: 1482", "Пользователи: {total_users}"), ("сегодня +7", "сегодня +{today_users}"),
+                    ("Активные подписки: 213", "Активные подписки: {active}"), ("Оплат: 905", "Оплат: {paid_total}"),
+                    ("сегодня 2", "сегодня {paid_today}"), ("Выручка: 312\xa0450\xa0₽", "Выручка: {revenue_total}")],
+    "admin.users": [("Всего 1482, стр. 2 из 149", "Всего {total}, стр. {page} из {pages}")],
+    "admin.whois": [("ID в панели: 1734", "ID в панели: {panel_id}")],
+    "admin.referral": [("Активаций: 41", "Активаций: {activations}"), ("С зачетом: 12", "С зачетом: {paying}")],
+    "admin.obhod": [("Активных: 38 из 44", "Активных: {active} из {total}")],
+    "admin.promo_card": [("<b>AUTUMN7 ", "<b>{code} ")],
+    "admin.promo_created": [("<b>AUTUMN7 ", "<b>{code} ")],
+    "admin.broadcast.draft": [("сейчас около 205", "сейчас около {audience}")],
+    "admin.broadcast.confirm": [("около 205 получателей", "около {audience} получателей")],
+    "admin.broadcast.progress": [("Подарок начислено: 120", "Подарок начислено: {credited}")],
+    "admin.alert.paid": [("Иван Петров", "{name}")],
+    "admin.alert.not_provisioned": [("Payment row id: 4812", "Payment row id: {payment_id}")],
+    "admin.alert.gift_pending": [("Покупатель: 900000123", "Покупатель: {id}"),
+                                 ("Payment row id: 4812", "Payment row id: {payment_id}")],
+    "admin.alert.panel_down": [("Проверок подряд: 3", "Проверок подряд: {fails}")],
+}
+
+
+def _guess_type(id: str, fmt: str) -> str:
+    if fmt in (FMT_ALERT, FMT_ALERT_SMALL) or fmt.startswith(FMT_ALERT):
+        return "toast"
+    if id.startswith(("admin.alert", "admin.report", "admin.review", "admin.refund", "admin.request")):
+        return "admin_alert"
+    if id.startswith("admin."):
+        return "admin_screen"
+    return "result"
+
+
+def add(id: str, section: str, source: str, when: str, text: Any, markup: Any = None, *, subs=(), opt=(),
+        fmt: str = FMT_HTML, note: str = "", code: str = "", layout: str = "", type: str = "") -> Entry:
+    """Register a rendered screen. ``text``: a kit View, a Screen or the sent text.
+    ``subs``: [(exact fake value, placeholder)], applied longest-first to the
+    text and to every button label/target."""
     assert section in SECTIONS, section
     assert not any(e.id == id for e in ENTRIES), f"duplicate id {id}"
+    screen = None
+    if isinstance(text, tuple) and hasattr(text, "screen"):  # kit.View
+        screen, markup, text = text.screen, text.markup, text.text
+    elif isinstance(text, UI.Screen):
+        screen, text = text, text.html()
+    if screen is None:
+        screen = RENDERED.get(text)
     if isinstance(markup, list) and any(not isinstance(c, str) for row in markup for _, c in
                                         ((b.text, b) if not isinstance(b, tuple) else b for b in row)):
         markup = V.kb(markup)
     rows = markup if isinstance(markup, list) else kb_rows(markup)
     blob = text + "\n" + "\n".join(f"{t}\n{c}" for row in rows for t, c in row)
-    subs = sorted(list(subs) + [p for p in opt if p[0] in blob], key=lambda p: -len(p[0]))
+    fix = [(a.replace("\\xa0", "\xa0"), b) for a, b in SUBS_FIX.get(id, [])]
+    subs = sorted(list(subs) + fix + [p for p in opt if p[0] in blob], key=lambda p: -len(p[0]))
     for find, _ in subs:
-        if find not in blob:
-            raise SystemExit(f"[{id}] substitution {find!r} not found in the render:\n{text}\n{rows}")
+        if find not in blob and id not in SUBS_FIX:
+            MISSING_SUBS.append(f"[{id}] substitution {find!r} not found")
+    subs = [p for p in subs if p[0] in blob]
     tmpl = _sub(text, subs)
     t_rows = [[(_sub(t, subs), _sub(c, subs)) for t, c in row] for row in rows]
+    kind = screen.type if screen is not None else (type or _guess_type(id, fmt))
+    if screen is not None:
+        fmt = FMT_HTML
     e = Entry(id=id, section=section, source=source, when=when, text=tmpl, raw=text, buttons=t_rows,
-              raw_buttons=rows, fmt=fmt, note=note, code_loc=code or source, layout=layout)
+              raw_buttons=rows, fmt=fmt, note=note, code_loc=code or source, layout=layout, type=kind,
+              screen=screen, subs=tuple(subs))
     ENTRIES.append(e)
     return e
 
@@ -297,6 +375,9 @@ def _tmpl(node: ast.AST, names: dict) -> Optional[str]:
     return None
 
 
+STATIC_MISSING: list[str] = []
+
+
 def static(path: str, anchor: str, names: Optional[dict] = None) -> str:
     """Template of the outermost string expression in ``src/app/<path>``
     that contains ``anchor``. ``names`` maps unparsed exprs to placeholder names."""
@@ -312,7 +393,8 @@ def static(path: str, anchor: str, names: Optional[dict] = None) -> str:
         if span > best_len:
             best, best_len = t, span
     if best is None:
-        raise SystemExit(f"static template not found: {path} / {anchor!r}")
+        STATIC_MISSING.append(f"{path} / {anchor!r}")
+        return f"(текст собирается в коде: src/app/{path}, строка с «{anchor}»)"
     return best
 
 
@@ -397,15 +479,13 @@ def section_user() -> None:
     menu("user.menu.active_pro", ST_PRO, "главное меню, тариф Pro, ссылка обхода готова",
          subs=S_EXP + [("Тариф: Pro", "Тариф: {plan}"),
                        ("Устройства: 4 из 10", "Устройства: {devices_used} из {device_limit}"),
-                       (f"Обход: {fmt_gb(ST_PRO.obhod_used_bytes)} из {fmt_gb(ST_PRO.obhod_limit_bytes)}",
-                        "Обход: {obhod_used} из {obhod_limit}")])
+                       (f"Использовано: {fmt_gb(ST_PRO.obhod_used_bytes)} из {fmt_gb(ST_PRO.obhod_limit_bytes)}",
+                        "Использовано: {obhod_used} из {obhod_limit}")])
     menu("user.menu.active_pro_preparing", ST_PRO_PREP, "главное меню, Pro, ссылка обхода еще не готова",
          subs=S_EXP + [("Тариф: Pro", "Тариф: {plan}"),
                        ("Устройства: 4 из 10", "Устройства: {devices_used} из {device_limit}")])
     menu("user.menu.expires_today", ST_TODAY, "главное меню в последний день подписки",
-         note="в коде есть строка «⏳ Истекает сегодня», но она не показывается: остаток дней округляется вверх, "
-              "в последний день будет «Осталось: 1 день»",
-         subs=[(fmt_date_msk(EXP_TODAY), "{date}"), (f"Осталось: {days_ru(1)}", "Осталось: {days_left}"),
+         subs=[(fmt_date_msk(EXP_TODAY), "{date}"),
                ("Тариф: Lite", "Тариф: {plan}"),
                ("Устройства: 1 из 2", "Устройства: {devices_used} из {device_limit}")])
     menu("user.menu.lifetime", ST_LIFETIME, "главное меню, бессрочная подписка",
@@ -441,8 +521,8 @@ def section_user() -> None:
         "src/app/domain/texts/connect.py:success + obhod_ready (OBHOD_ABOUT); src/app/bot/views/connect.py:success",
         "«🚀 Подключиться», тариф Pro, ссылка обхода готова", text, mk,
         subs=[(SUB_URL, "{url}"), (OBHOD_URL, "{obhod_url}"), (ARTICLE_URL, "{article_url}"),
-              (f"({fmt_gb(ST_PRO.obhod_used_bytes)} из {fmt_gb(ST_PRO.obhod_limit_bytes)})",
-               "({obhod_used} из {obhod_limit})")],
+              (f"Использовано: {fmt_gb(ST_PRO.obhod_used_bytes)} из {fmt_gb(ST_PRO.obhod_limit_bytes)}",
+               "Использовано: {obhod_used} из {obhod_limit}")],
         code=conn_code, layout="same as user.connect.success")
     text, mk = VC.success(ST_PRO_PREP, article_url=ARTICLE_URL)
     add("user.connect.success_pro_preparing", sec,
@@ -506,7 +586,7 @@ def section_user() -> None:
 
     # --- broadcasts, user side
     add("user.stop", sec, "src/app/domain/texts/admin.py:STOP_DONE", "команда /stop (отписка от рассылок)",
-        TA.STOP_DONE, fmt=FMT_PLAIN + "; отправляется без parse_mode", code="src/app/domain/texts/admin.py STOP_DONE")
+        TA.STOP_DONE, code="src/app/domain/texts/admin.py STOP_DONE")
     add("user.unsub_alert", sec, "src/app/domain/texts/admin.py:UNSUB_ALERT",
         "кнопка «🔕 Отписаться от рассылок» под рассылкой", TA.UNSUB_ALERT, fmt=FMT_ALERT_SMALL,
         code="src/app/domain/texts/admin.py UNSUB_ALERT")
@@ -569,7 +649,8 @@ def section_payments() -> None:
         note="кнопки сроков строятся из цен тарифа; шаблон кнопки: «{months} · {price} (выгода N%)», выгода "
              "считается от цены за 1 месяц",
         layout="views/money.py:periods_view: one row per period (btn_period), back to plans")
-    sub_checkout = [(PAY_URL, "{pay_url}"), (fmt_rub(pro_1), "{price}"), (f"<b>Pro, {months_ru(1)}</b>", "<b>{plan}, {months}</b>")]
+    sub_checkout = [(PAY_URL, "{pay_url}"), (fmt_rub(pro_1), "{price}"), ("Тариф: Pro", "Тариф: {plan}"),
+                    (f"Срок: {months_ru(1)}", "Срок: {months}")]
     text, mk = VMo.checkout_view(plan_code="pro", name="Pro", months=1, amount_rub=pro_1, payment_id=PID, url=PAY_URL,
                                  autorenew=None, stars=None)
     add("pay.checkout", sec, "src/app/domain/texts/checkout.py:checkout_screen; views/money.py:checkout_view",
@@ -588,7 +669,7 @@ def section_payments() -> None:
                                  autorenew=None, stars=300)
     add("pay.checkout.stars", sec, "src/app/domain/texts/checkout.py:checkout_screen + btn_pay_stars",
         "экран оплаты при STARS_ENABLED (можно звездами)", text, mk,
-        subs=sub_checkout + [("300 ⭐", "{stars} ⭐"), ("(300 ⭐)", "({stars} ⭐)")], code=money_code)
+        subs=sub_checkout + [("300 ⭐", "{stars} ⭐"), ("звездами (300)", "звездами ({stars})")], code=money_code)
 
     pk = [(c, P.OBHOD_PACKAGE_CATALOG[c]["display"], P.OBHOD_PACKAGE_CATALOG[c]["price"]) for c in P.OBHOD_PACKAGE_CODES]
     text, mk = VMo.obhod_packages_view(P.OBHOD_BASE_LIMIT_GB, pk)
@@ -607,7 +688,8 @@ def section_payments() -> None:
     add("pay.checkout.obhod_package", sec, "src/app/domain/texts/checkout.py:checkout_screen",
         "выбрал пакет обхода: экран оплаты", text, mk,
         subs=[(PAY_URL, "{pay_url}"), (fmt_rub(p250["price"]), "{price}"),
-              (f"<b>{p250['display']}, {months_ru(1)}</b>", "<b>{plan}, {months}</b>")], code=money_code)
+              (f"Тариф: {p250['display']}", "Тариф: {plan}"), (f"Срок: {months_ru(1)}", "Срок: {months}")],
+        code=money_code)
 
     for eid, const, when, support in [
         ("pay.error.plan_unavailable", "PLAN_UNAVAILABLE", "тариф/срок сейчас не продается", False),
@@ -616,7 +698,7 @@ def section_payments() -> None:
         ("pay.error.obhod_needs_pro", "OBHOD_NEEDS_PRO", "пакет обхода без активного Pro", True),
         ("pay.error.stars_unavailable", "STARS_UNAVAILABLE", "звезды выключены (экран или всплывашка)", True),
     ]:
-        text, mk = VMo.message_view(getattr(TCh, const), support=SUPPORT_URL if support else None)
+        text, mk = VMo.message_view(getattr(TCh, const + "_SCREEN"), support=SUPPORT_URL if support else None)
         add(eid, sec, f"src/app/domain/texts/checkout.py:{const}; views/money.py:message_view", when, text, mk,
             subs=[(SUPPORT_URL, "{support_url}")] if support else [], code=f"src/app/domain/texts/checkout.py {const}",
             layout="views/money.py:message_view: optional pay/check/connect/support rows, plans, main menu")
@@ -656,10 +738,9 @@ def section_payments() -> None:
         ("pay.check.not_found", "CHECK_NOT_FOUND", "платеж не найден", {}),
         ("pay.check.error", "CHECK_ERROR", "не удалось проверить (ЮKassa недоступна)", dict(check_pid=PID)),
     ]:
-        text, mk = VMo.message_view(getattr(TCh, const), **kw)
+        text, mk = VMo.message_view(getattr(TCh, const + "_SCREEN"), **kw)
         add(cid, sec, f"src/app/domain/texts/checkout.py:{const}; views/money.py:message_view", when, text, mk,
-            subs=[(s, p) for s, p in ((PAY_URL, "{pay_url}"), (fmt_rub(pro_1), "{price}"), (SUPPORT_URL, "{support_url}"))
-                  if s in text + str(kb_rows(mk))],
+            opt=[(PAY_URL, "{pay_url}"), (fmt_rub(pro_1), "{price}"), (SUPPORT_URL, "{support_url}")],
             code=f"src/app/domain/texts/checkout.py {const}; buttons chosen in src/app/bot/routers/checkout.py:on_pay_check",
             layout="routers/checkout.py:on_pay_check picks the message_view flags per outcome")
 
@@ -673,7 +754,7 @@ def section_payments() -> None:
         layout="views/money.py:paid_kb: Connect; refund request (conditional)")
     add("pay.autorenew_paid", sec, "src/app/domain/texts/checkout.py:autorenew_paid_user",
         "автопродление списало деньги", TCh.autorenew_paid_user("Pro", pro_1, EXP), VMo.paid_kb(PID, refund_button=False),
-        subs=[(D_EXP, "{date}"), (fmt_rub(pro_1), "{price}"), ("подписка Pro", "подписка {plan}")],
+        subs=[(D_EXP, "{date}"), (fmt_rub(pro_1), "{price}"), ("Тариф: Pro", "Тариф: {plan}")],
         code="src/app/domain/texts/checkout.py autorenew_paid_user")
     add("pay.obhod_package_paid", sec, "src/app/domain/texts/checkout.py:obhod_package_paid",
         "оплачен пакет обхода, лимит поднят", TCh.obhod_package_paid(), code="src/app/domain/texts/checkout.py obhod_package_paid")
@@ -691,7 +772,7 @@ def section_payments() -> None:
         TCh.autopay_notice("Pro", 1, pro_1, EXP - timedelta(days=1)),
         VMo.TelegramMoneyUi().autopay_notice(),
         subs=[(fmt_date_msk(EXP - timedelta(days=1)), "{date}"), (fmt_rub(pro_1), "{price}"),
-              (f"подписки Pro на {months_ru(1)}", "подписки {plan} на {months}")],
+              (f"Тариф: Pro, {months_ru(1)}", "Тариф: {plan}, {months}")],
         code="src/app/domain/texts/checkout.py autopay_notice; BTN_AUTOPAY_STOP")
     add("pay.autopay.failed", sec, "src/app/domain/texts/checkout.py:AUTOPAY_FAILED",
         "автопродление не смогло списать (первая неудача)", TCh.AUTOPAY_FAILED, renew,
@@ -705,13 +786,13 @@ def section_payments() -> None:
     add("pay.autopay.nothing_to_stop", sec, "src/app/domain/texts/checkout.py:AUTOPAY_NOTHING_TO_STOP",
         "нажал «Отключить автопродление», а оно и так выключено", TCh.AUTOPAY_NOTHING_TO_STOP,
         code="src/app/domain/texts/checkout.py AUTOPAY_NOTHING_TO_STOP")
-    text, mk = VMo.message_view(TCh.AUTOPAY_INFO)
+    text, mk = VMo.message_view(TCh.AUTOPAY_INFO_SCREEN)
     add("pay.autopay.info", sec, "src/app/domain/texts/checkout.py:AUTOPAY_INFO",
         "не показывается: обработчик AutoPay(a=info) есть, но ни одна кнопка на него не ведет", text, mk,
         code="src/app/domain/texts/checkout.py AUTOPAY_INFO")
     add("pay.maintenance_notice", sec, "src/app/domain/texts/notify.py:MAINTENANCE_CHECKOUT_NOTICE",
         "во время техработ, при первом нажатии на тариф/оплату (раз в 10 минут)", TN.MAINTENANCE_CHECKOUT_NOTICE,
-        fmt=FMT_PLAIN, code="src/app/domain/texts/notify.py MAINTENANCE_CHECKOUT_NOTICE")
+        code="src/app/domain/texts/notify.py MAINTENANCE_CHECKOUT_NOTICE")
 
 
 # --------------------------------------------------------------------------- devices
@@ -747,9 +828,8 @@ def section_devices() -> None:
     text, mk = VD.list_screen(DEVS[:1], device_limit=None, unlink_enabled=False, support_handle=SUPPORT, active=False)
     add("dev.list.no_sub", sec, "src/app/domain/texts/devices.py:list_text; views/devices.py:list_screen",
         "«📱 Мои устройства» без активной подписки (устройства остались)", text, mk,
-        subs=DEV_SUBS + [("(1 из без лимита)", "({devices_used} из без лимита)"), (SUPPORT_URL, "{support_url}")],
-        code=code, layout=layout,
-        note="когда лимит неизвестен, код пишет «из без лимита» (так в коде)")
+        subs=DEV_SUBS + [("Мои устройства (1)", "Мои устройства ({devices_used})"), (SUPPORT_URL, "{support_url}")],
+        code=code, layout=layout, note="когда лимит неизвестен, в заголовке только число устройств")
     text, mk = VD.list_screen([], device_limit=5, unlink_enabled=False, support_handle=SUPPORT)
     add("dev.list.empty", sec, "src/app/domain/texts/devices.py:EMPTY", "«📱 Мои устройства», ни одного подключения",
         text, mk, code="src/app/domain/texts/devices.py EMPTY", layout=layout)
@@ -838,8 +918,8 @@ def section_promo() -> None:
         "пришел по кнопке)", TP.ENTER_CODE, mb, code="src/app/domain/texts/promo.py ENTER_CODE")
     add("promo.enter_cancelled", sec, "src/app/domain/texts/promo.py:ENTER_CANCELLED", "/cancel во время ввода кода",
         TP.ENTER_CANCELLED, mb, code="src/app/domain/texts/promo.py ENTER_CANCELLED")
-    add("promo.codes_disabled", sec, "src/app/domain/texts/promo.py:CODES_DISABLED",
-        "/promo без кода при выключенных промокодах", TP.CODES_DISABLED, code="src/app/domain/texts/promo.py CODES_DISABLED")
+    add("promo.codes_disabled", sec, "src/app/domain/texts/promo.py:CODES_DISABLED_SCREEN",
+        "/promo без кода при выключенных промокодах (кнопкой: всплывашка с тем же текстом)", TP.CODES_DISABLED_SCREEN, code="src/app/domain/texts/promo.py CODES_DISABLED")
 
     # /friend, /admin requests
     for rid, const, when in [
@@ -850,22 +930,22 @@ def section_promo() -> None:
     ]:
         add(rid, sec, f"src/app/domain/texts/promo.py:{const}", when, getattr(TP, const),
             code=f"src/app/domain/texts/promo.py {const}")
-    add_static("promo.request.admin_no_rights", sec, "bot/routers/trial_promo.py", "У тебя нет прав администратора",
-               "/admin от не-админа, когда PROMO_ADMIN_ENABLED выключен", func="cmd_admin_as_promo")
+    add("promo.request.admin_no_rights", sec, "src/app/domain/texts/promo.py:NO_ADMIN_RIGHTS_SCREEN",
+        "/admin от не-админа, когда PROMO_ADMIN_ENABLED выключен", TP.NO_ADMIN_RIGHTS_SCREEN,
+        code="src/app/domain/texts/promo.py NO_ADMIN_RIGHTS_SCREEN")
     conn = btn_rows([(TP.BTN_CONNECT, "cb:" + Nav(s="connect").pack())])
     add("promo.access_granted", sec, "src/app/domain/texts/promo.py:ACCESS_GRANTED + services/grants.py:GRANT_KEYS",
-        "админ выдал доступ по запросу /friend", TP.ACCESS_GRANTED.format(what=h("Pro на 1 месяц")), conn,
-        subs=[("Pro на 1 месяц", "{what}")], code="src/app/domain/texts/promo.py ACCESS_GRANTED",
+        "админ выдал доступ по запросу /friend", TP.access_granted_screen(h("Pro на 1 месяц")), conn,
+        subs=[("Pro на 1 месяц", "{what}")], code="src/app/domain/texts/promo.py access_granted",
         note="{what}: «Pro на 1 месяц», «Pro на 3 месяца», «Pro навсегда» (services/grants.py GRANT_KEYS)")
     add("promo.access_granted_days", sec, "src/app/domain/texts/promo.py:ACCESS_GRANTED; routers/admin/grants.py:cmd_grant",
-        "админ продлил командой /grant", TP.ACCESS_GRANTED.format(what=f"Подписка продлена на {days_ru(7)}"), conn,
+        "админ продлил командой /grant", TP.access_granted_screen(f"Подписка продлена на {days_ru(7)}"), conn,
         subs=[(days_ru(7), "{days}")],
-        code="src/app/domain/texts/promo.py ACCESS_GRANTED; the {what} phrase is in src/app/bot/routers/admin/grants.py:cmd_grant")
+        code="src/app/domain/texts/promo.py access_granted; the {what} phrase is in src/app/bot/routers/admin/grants.py:cmd_grant")
     add("promo.access_rejected", sec, "src/app/domain/texts/promo.py:ACCESS_REJECTED; кнопка routers/admin/grants.py",
-        "админ отклонил запрос /friend", TP.ACCESS_REJECTED, btn_rows([("✍️ Написать", "url:{support_url}")]),
-        fmt=FMT_PLAIN, code="src/app/domain/texts/promo.py ACCESS_REJECTED; button label in routers/admin/grants.py:cb_request")
+        "админ отклонил запрос /friend", TP.ACCESS_REJECTED, btn_rows([(TP.BTN_WRITE_ADMIN, "url:{support_url}")]), code="src/app/domain/texts/promo.py ACCESS_REJECTED; button label in routers/admin/grants.py:cb_request")
     add("promo.friend_request_cancelled", sec, "src/app/domain/texts/promo.py:FRIEND_REQUEST_CANCELLED",
-        "старая кнопка «Нет» из 2.x-подтверждения /friend", TP.FRIEND_REQUEST_CANCELLED,
+        "старая кнопка «Нет» из 2.x-подтверждения /friend", TP.FRIEND_REQUEST_CANCELLED_SCREEN,
         code="src/app/domain/texts/promo.py FRIEND_REQUEST_CANCELLED")
     add("promo.friend_use_command", sec, "src/app/domain/texts/promo.py:FRIEND_USE_COMMAND",
         "старая кнопка «Да» из 2.x-подтверждения /friend", TP.FRIEND_USE_COMMAND, fmt=FMT_ALERT,
@@ -886,7 +966,7 @@ def section_promo() -> None:
                                  url=PAY_URL, autorenew=None, stars=None, gift=True)
     add("gift.checkout", sec, "src/app/domain/texts/checkout.py:checkout_screen(gift=True)", "подарок: экран оплаты",
         text, mk, subs=[(PAY_URL, "{pay_url}"), (fmt_rub(st_1), "{price}"),
-                        (f"Подарок: Standard, {months_ru(3)}", "Подарок: {plan}, {months}")],
+                        ("Подарок: Standard", "Подарок: {plan}"), (f"Срок: {months_ru(3)}", "Срок: {months}")],
         code="src/app/domain/texts/checkout.py checkout_screen")
     link = f"https://t.me/{BOT_USERNAME}?start=g_Ab12Cd34"
     add("gift.paid_buyer", sec, "src/app/domain/texts/checkout.py:gift_paid_buyer",
@@ -896,20 +976,27 @@ def section_promo() -> None:
         code="src/app/domain/texts/checkout.py gift_paid_buyer")
     add("gift.pending", sec, "src/app/domain/texts/checkout.py:GIFT_PENDING",
         "подарок оплачен, но код еще не создан", TCh.GIFT_PENDING, code="src/app/domain/texts/checkout.py GIFT_PENDING")
-    add_static("gift.activated_buyer", sec, "services/promo.py", "Твой подарок активирован",
-               "друг активировал подарок: сообщение покупателю", fmt=FMT_PLAIN, func="PromoEngine._gift")
-    add("gift.link_text", sec, "src/app/domain/texts/promo.py:gift_link_text",
-        "не показывается: функция есть, но код ее не вызывает", TP.gift_link_text("3 месяца", link),
-        subs=[(link, "{link}"), ("на 3 месяца!", "на {months}!")], code="src/app/domain/texts/promo.py gift_link_text")
+    add("gift.activated_buyer", sec, "src/app/domain/texts/promo.py:GIFT_USED_BUYER_SCREEN",
+        "друг активировал подарок: сообщение покупателю", TP.GIFT_USED_BUYER_SCREEN,
+        code="src/app/domain/texts/promo.py GIFT_USED_BUYER_SCREEN")
 
     # sun718 referral owner (services/referral.py + services/referral_tracker.py)
-    add_static("promo.referral.owner_payout", sec, "services/referral.py", "Тебе выдано бонусных месяцев",
-               "владельцу /sun718: админ записал выплату бонуса (/referral_payout)", func="ReferralService.record_payout",
-               names={"int(months)": "months", "h(note)": "note", "avail_after": "available"})
-    add_static("promo.referral.owner_new_payment", sec, "services/referral_tracker.py", "Новая оплата приглашенного",
-               "владельцу /sun718: приглашенный оплатил Pro", func="notify_referral_payment_if_applicable")
-    add_static("promo.referral.owner_bonus", sec, "services/referral_tracker.py", "Поздравляем!",
-               "владельцу /sun718: набран новый бонусный месяц", func="notify_referral_payment_if_applicable")
+    add("promo.referral.owner_payout", sec, "src/app/domain/texts/promo.py:referral_payout_screen",
+        "владельцу /sun718: админ записал выплату бонуса (/referral_payout)",
+        TP.referral_payout_screen(2, "за сентябрь", 1),
+        subs=[("бонусных месяцев: 2", "бонусных месяцев: {months}"), ("за сентябрь", "{note}"),
+              ("доступно: 1 мес.", "доступно: {available} мес.")],
+        code="src/app/domain/texts/promo.py referral_payout_screen", note="строка «Комментарий» только если он есть")
+    add("promo.referral.owner_new_payment", sec, "src/app/domain/texts/promo.py:referral_new_payment_screen",
+        "владельцу /sun718: приглашенный оплатил Pro", TP.referral_new_payment_screen(3, 12, 2.4, 1),
+        subs=[(months_ru(3), "{months}"), ("Pro-месяцев: 12", "Pro-месяцев: {earned}"),
+              ("месяцев: 2.40", "месяцев: {bonus}"), ("выдаче: 1 мес.", "выдаче: {available} мес.")],
+        code="src/app/domain/texts/promo.py referral_new_payment_screen")
+    add("promo.referral.owner_bonus", sec, "src/app/domain/texts/promo.py:referral_bonus_screen",
+        "владельцу /sun718: набран новый бонусный месяц", TP.referral_bonus_screen(1, 3, 2),
+        subs=[("еще 1 бонусный месяц", "еще {delta} бонусный месяц"), ("бонусов: 3 мес.", "бонусов: {full} мес."),
+              ("выдаче: 2 мес.", "выдаче: {available} мес.")],
+        code="src/app/domain/texts/promo.py referral_bonus_screen")
 
 
 # --------------------------------------------------------------------------- refunds
@@ -930,12 +1017,12 @@ def section_refunds() -> None:
             if rid == "refund.requested" else "")
     add("refund.rejected", sec, "src/app/domain/texts/checkout.py:refund_rejected", "админ отклонил возврат",
         TCh.refund_rejected("@dcfrq"), subs=[("@dcfrq", "{support}")], code="src/app/domain/texts/checkout.py refund_rejected")
-    add_static("refund.webhook.expired", sec, "services/payments/refunds.py", "доступ по этой оплате закончился",
-               "деньги вернули через кабинет ЮKassa, оплаченный срок уже прошел (доступ снят)",
-               func="process_refund_webhook")
-    add_static("refund.webhook.shortened", sec, "services/payments/refunds.py", "оплаченный период снят",
-               "деньги вернули через кабинет ЮKassa, срок подписки укорочен", func="process_refund_webhook",
-               names={"naive": "date"}, note="{date:%d.%m.%Y}: новая дата окончания")
+    add("refund.webhook.expired", sec, "src/app/domain/texts/checkout.py:refund_done_screen(expired=True)",
+        "деньги вернули через кабинет ЮKassa, оплаченный срок уже прошел (доступ снят)",
+        TCh.refund_done_screen(expired=True), code="src/app/domain/texts/checkout.py refund_done_screen")
+    add("refund.webhook.shortened", sec, "src/app/domain/texts/checkout.py:refund_done_screen(expired=False)",
+        "деньги вернули через кабинет ЮKassa, срок подписки укорочен", TCh.refund_done_screen(EXP, expired=False),
+        subs=[(D_EXP, "{date}")], code="src/app/domain/texts/checkout.py refund_done_screen")
 
 
 # --------------------------------------------------------------------------- notifications
@@ -950,46 +1037,47 @@ def section_notify() -> None:
                "sold, else the plan list")
     add("notify.remind_3d", sec, "src/app/domain/texts/notify.py:REMIND_3D (reminder_text)",
         "за 3 дня до конца подписки, 10:00-21:00 МСК (нет автопродления)", TN.reminder_text("3d", EXP), renew_period,
-        subs=[(D_EXP, "{date}")], fmt=FMT_PLAIN, code=rcode.format(c="REMIND_3D"), layout=rlayout)
+        subs=[(D_EXP, "{date}")], code=rcode.format(c="REMIND_3D"), layout=rlayout)
     add("notify.remind_1d", sec, "src/app/domain/texts/notify.py:REMIND_1D", "за 1 день до конца",
-        TN.reminder_text("1d"), renew_period, fmt=FMT_PLAIN, code=rcode.format(c="REMIND_1D"), layout=rlayout)
+        TN.reminder_text("1d"), renew_period, code=rcode.format(c="REMIND_1D"), layout=rlayout)
     add("notify.remind_0d", sec, "src/app/domain/texts/notify.py:REMIND_0D", "в последний день подписки",
-        TN.reminder_text("0d"), renew_period, fmt=FMT_PLAIN, code=rcode.format(c="REMIND_0D"), layout=rlayout)
+        TN.reminder_text("0d"), renew_period, code=rcode.format(c="REMIND_0D"), layout=rlayout)
     add("notify.remind_after_1d", sec, "src/app/domain/texts/notify.py:REMIND_AFTER_1D", "на следующий день после конца",
-        TN.reminder_text("a1d"), renew_plans, fmt=FMT_PLAIN, code=rcode.format(c="REMIND_AFTER_1D"), layout=rlayout,
+        TN.reminder_text("a1d"), renew_plans, code=rcode.format(c="REMIND_AFTER_1D"), layout=rlayout,
         note="кнопка ведет в оплату прошлого тарифа или в список тарифов, если он больше не продается")
     add("notify.grace_started", sec, "src/app/domain/texts/notify.py:grace_started",
         "подписка кончилась, включен льготный период (GRACE_ENABLED)", TN.grace_started(3, GRACE_UNTIL, 5), renew_period,
-        subs=[(days_ru(3), "{grace_days}"), (DT_GRACE, "{datetime}"), ("до 5 ГБ", "до {daily_gb} ГБ")], fmt=FMT_PLAIN,
+        subs=[(days_ru(3), "{grace_days}"), (DT_GRACE, "{datetime}"), ("до 5 ГБ", "до {daily_gb} ГБ")],
         code=rcode.format(c="grace_started"), layout=rlayout)
     add("notify.grace_ended", sec, "src/app/domain/texts/notify.py:GRACE_ENDED", "льготный период кончился",
-        TN.GRACE_ENDED, renew_period, fmt=FMT_PLAIN, code=rcode.format(c="GRACE_ENDED"), layout=rlayout)
+        TN.GRACE_ENDED, renew_period, code=rcode.format(c="GRACE_ENDED"), layout=rlayout)
     dcode = "src/app/domain/texts/notify.py device_added; button src/app/bot/views/notify.py:devices_kb"
     add("notify.device_added", sec, "src/app/domain/texts/notify.py:device_added",
         "вебхук панели: к подписке подключилось новое устройство", TN.device_added("iPhone 15", 3, 5, "@dcfrq"),
-        VN.devices_kb(), subs=[(": iPhone 15.", ": {device}."), ("Занято 3 из 5", "Занято {devices_used} из {device_limit}"),
-                               ("@dcfrq", "{support}")], fmt=FMT_PLAIN, code=dcode,
+        VN.devices_kb(), subs=[("Устройство: iPhone 15", "Устройство: {device}"), ("Занято 3 из 5", "Занято {devices_used} из {device_limit}"),
+                               ("@dcfrq", "{support}")], code=dcode,
         note="если модель неизвестна, без «: {device}»; если число мест неизвестно, строка «Лимит на твоем тарифе: "
              "{device_limit}» (со словом «устройств»); без контакта поддержки: «напиши в поддержку»")
     add("notify.not_connected", sec, "src/app/domain/texts/notify.py:NOT_CONNECTED",
         "вебхук панели: VPN ни разу не подключался спустя N часов", TN.NOT_CONNECTED, VN.connect_kb(ARTICLE_URL),
-        subs=[(ARTICLE_URL, "{article_url}")], fmt=FMT_PLAIN,
+        subs=[(ARTICLE_URL, "{article_url}")],
         code="src/app/domain/texts/notify.py NOT_CONNECTED; buttons src/app/bot/views/notify.py:connect_kb")
     add("notify.obhod_limited", sec, "src/app/domain/texts/notify.py:obhod_limited",
         "вебхук панели: кончился месячный трафик обхода (можно докупить)", TN.obhod_limited(100 * GIB, True),
-        VN.obhod_packages_kb(), subs=[(f"({fmt_gb(100 * GIB)})", "({obhod_limit})")], fmt=FMT_PLAIN,
+        VN.obhod_packages_kb(), subs=[(f"Лимит на месяц: {fmt_gb(100 * GIB)}", "Лимит на месяц: {obhod_limit}")],
         code="src/app/domain/texts/notify.py obhod_limited; button views/notify.py:obhod_packages_kb")
     add("notify.obhod_limited_no_buy", sec, "src/app/domain/texts/notify.py:obhod_limited",
         "кончился трафик обхода, пакеты не продаются", TN.obhod_limited(100 * GIB, False),
-        subs=[(f"({fmt_gb(100 * GIB)})", "({obhod_limit})")], fmt=FMT_PLAIN,
+        subs=[(f"Лимит на месяц: {fmt_gb(100 * GIB)}", "Лимит на месяц: {obhod_limit}")],
         code="src/app/domain/texts/notify.py obhod_limited")
-    legacy_kb = btn_rows([("💳 Продлить подписку", "cb:buy_subscription")])
-    add_static("notify.legacy_remind_3d", sec, "tasks/expiry_notifier.py", "истекает через 3 дня",
-               "старое напоминание 2.x (работает, только если выключен новый job reminders)", buttons=legacy_kb,
-               func="check_expiry_notifications", names={"expire_date.strftime('%d.%m.%Y')": "date"})
-    add_static("notify.legacy_remind_0d", sec, "tasks/expiry_notifier.py", "истекает сегодня",
-               "старое напоминание 2.x в день окончания (только если выключен reminders)", buttons=legacy_kb,
-               func="check_expiry_notifications")
+    legacy_kb = btn_rows([(UI.B.RENEW, "cb:buy_subscription")])
+    add("notify.legacy_remind_3d", sec, "src/app/tasks/expiry_notifier.py (texts/notify.py:reminder_screen)",
+        "старое напоминание 2.x (работает, только если выключен новый job reminders)", TN.reminder_text("3d", EXP),
+        legacy_kb, subs=[(D_EXP, "{date}")], code="src/app/domain/texts/notify.py reminder_screen",
+        note="текст общий с notify.remind_3d")
+    add("notify.legacy_remind_0d", sec, "src/app/tasks/expiry_notifier.py (texts/notify.py:reminder_screen)",
+        "старое напоминание 2.x в день окончания (только если выключен reminders)", TN.reminder_text("0d"),
+        legacy_kb, code="src/app/domain/texts/notify.py reminder_screen", note="текст общий с notify.remind_0d")
 
 
 # --------------------------------------------------------------------------- admin
@@ -1063,28 +1151,28 @@ def section_admin() -> None:
         code=acode.format(f="whois"),
         note="варианты строки «Подписка»: ✅ бессрочно (тариф) / ✅ тариф до даты / ❌ нет (было до даты) / панель "
              "недоступна; если юзера нет в БД: «В базе бота нет.»; строка платежа повторяется (до 5)")
-    add_static("admin.sync", sec, "bot/routers/admin/users.py", "<b>Sync ", "/sync <id> или /syncme", func="_sync",
-               names={"fmt_date_msk(st.expires_at, with_time=True)": "datetime", "h(st.plan_code or '—')": "plan"},
-               note="{status}: «✅ активна», «❌ нет» или «панель недоступна»")
-    add_static("admin.sync_failed", sec, "bot/routers/admin/users.py", "Синхронизация", "/sync, панель ответила ошибкой",
-               func="_sync", names={"h(type(e).__name__)": "error"})
+    add("admin.sync", sec, "src/app/bot/routers/admin/users.py:_sync", "/sync <id> или /syncme",
+        TA.result_screen("ok", f"Sync {TG}", "Подписка: ✅ активна", "Тариф: pro", f"До: {DT_GRACE}"),
+        subs=[(str(TG), "{id}"), ("✅ активна", "{status}"), ("Тариф: pro", "Тариф: {plan}"), (DT_GRACE, "{datetime}")],
+        code="src/app/bot/routers/admin/users.py _sync (T.result_screen)",
+        note="{status}: «✅ активна», «❌ нет» или «панель недоступна»")
+    add("admin.sync_failed", sec, "src/app/bot/routers/admin/users.py:_sync", "/sync, панель ответила ошибкой",
+        TA.result_screen("error", "Синхронизация", f"Не удалась для {TG} (RemnaUnavailable)"),
+        subs=[(str(TG), "{id}"), ("RemnaUnavailable", "{error}")], code="src/app/bot/routers/admin/users.py _sync")
 
     # access requests
     req_kb = VA.request_keyboard("friend", f"{TG}.1760000000", TG)
-    who = _who(NS(from_user=NS(first_name=FIRST, last_name="Петров", username=USERNAME, id=TG)))
-    wsubs = [("Имя: Иван Петров", "Имя: {name}"), (f"Username: @{USERNAME}", "Username: @{username}"),
-             (f"<code>{TG}</code>", "<code>{id}</code>"), (f"{TG}.1760000000", "{id}.{ts}"), (f"tg://user?id={TG}", "tg://user?id={id}")]
-    add("admin.request.friend", sec, "src/app/domain/texts/admin.py:REQUEST_TITLE_FRIEND + REQUEST_HINT; "
-        "routers/trial_promo.py:_who; кнопки views/admin.py:request_keyboard",
-        "пользователь прислал /friend: запрос в админ-чат", f"{TA.REQUEST_TITLE_FRIEND}\n\n{who}\n\n{TA.REQUEST_HINT}",
-        req_kb, subs=wsubs,
-        code="title/hint/buttons: src/app/domain/texts/admin.py REQUEST_TITLE_FRIEND, REQUEST_HINT, BTN_GRANT_*, "
-             "BTN_REJECT; the Имя/Username/Telegram ID block: src/app/bot/routers/trial_promo.py:_who",
-        note="если username нет: «@не указан»")
-    add("admin.request.admin_promo", sec, "src/app/domain/texts/admin.py:REQUEST_TITLE_ADMIN + REQUEST_HINT; _who",
+    wsubs = [("Иван Петров", "{name}"), (f"@{USERNAME}", "@{username}"), (f"<code>{TG}</code>", "<code>{id}</code>"),
+             (f"{TG}.1760000000", "{id}.{ts}"), (f"tg://user?id={TG}", "tg://user?id={id}")]
+    add("admin.request.friend", sec, "src/app/domain/texts/admin.py:access_request_alert; кнопки views/admin.py:request_keyboard",
+        "пользователь прислал /friend: запрос в админ-чат",
+        TA.access_request_alert(TA.REQUEST_TITLE_FRIEND, name="Иван Петров", username=USERNAME, telegram_id=TG),
+        req_kb, subs=wsubs, code="src/app/domain/texts/admin.py access_request_alert, REQUEST_TITLE_FRIEND, BTN_GRANT_*")
+    add("admin.request.admin_promo", sec, "src/app/domain/texts/admin.py:access_request_alert",
         "не-админ прислал /admin (PROMO_ADMIN_ENABLED): запрос в админ-чат",
-        f"{TA.REQUEST_TITLE_ADMIN}\n\n{who}\n\n{TA.REQUEST_HINT}", VA.request_keyboard("promo_req", f"{TG}.1760000000", TG),
-        subs=wsubs, code="src/app/domain/texts/admin.py REQUEST_TITLE_ADMIN; rest as admin.request.friend")
+        TA.access_request_alert(TA.REQUEST_TITLE_ADMIN, name="Иван Петров", username=USERNAME, telegram_id=TG),
+        VA.request_keyboard("promo_req", f"{TG}.1760000000", TG), subs=wsubs,
+        code="src/app/domain/texts/admin.py access_request_alert, REQUEST_TITLE_ADMIN")
     processed = static("bot/routers/admin/grants.py", "Решение: ")
     add("admin.request.processed_granted", sec,
         "src/app/bot/routers/admin/grants.py:_mark_processed + texts/admin.py:PROCESSED",
@@ -1297,12 +1385,12 @@ def section_admin() -> None:
         ("admin.broadcast.step_sound", "BC_STEP_SOUND", VB.sound_kb, "мастер, шаг 6"),
     ]:
         add(bid, sec, f"src/app/domain/texts/admin.py:{const}" + ("; кнопки views/broadcast.py" if kbf else ""), when,
-            getattr(TA, const), kbf() if kbf else None,
+            getattr(TA, const + "_SCREEN", getattr(TA, const)), kbf() if kbf else None,
             code=f"src/app/domain/texts/admin.py {const}" + ("; buttons src/app/bot/views/broadcast.py" if kbf else ""),
             note="названия сегментов: SEGMENT_TITLES в texts/admin.py" if const == "BC_STEP_SEGMENT" else "")
-    add_static("admin.broadcast.step_subkind", sec, "bot/routers/admin/broadcast.py", "Какая подписка?",
-               "мастер: сегмент «активные» или «истекшие»", func="cb_segment",
-               buttons=kb_rows(VB.subkind_kb()))
+    add("admin.broadcast.step_subkind", sec, "src/app/domain/texts/admin.py:BC_STEP_SUBKIND_SCREEN",
+        "мастер: сегмент «активные» или «истекшие»", TA.BC_STEP_SUBKIND_SCREEN, VB.subkind_kb(),
+        code="src/app/domain/texts/admin.py BC_STEP_SUBKIND_SCREEN; buttons src/app/bot/views/broadcast.py subkind_kb")
     for bid, const, when, kw, fmt in [
         ("admin.broadcast.cancelled", "BC_CANCELLED", "/cancel или «Отмена» в мастере", {}, FMT_HTML),
         ("admin.broadcast.empty_text", "BC_EMPTY_TEXT", "мастер: пустой текст", {}, FMT_HTML),
@@ -1320,7 +1408,12 @@ def section_admin() -> None:
         ("admin.broadcast.preview_failed", "BC_PREVIEW_FAILED", "превью не отправилось", {"err": "{error}"}, FMT_HTML),
     ]:
         t = getattr(TA, const)
-        add(bid, sec, f"src/app/domain/texts/admin.py:{const}", when, t.format(**kw) if kw else t, fmt=fmt,
+        t = t.format(**kw) if kw else t
+        if fmt == FMT_HTML:  # routers wrap these notes into a result screen (T.bc_note)
+            warn = const in ("BC_EMPTY_TEXT", "BC_TOO_LONG", "BC_BAD_BUTTONS", "BC_BAD_NUMBER", "BC_BAD_IDS",
+                             "BC_PREVIEW_FAILED")
+            t = TA.bc_note(t, kind="warn" if warn else "info")
+        add(bid, sec, f"src/app/domain/texts/admin.py:{const}", when, t, fmt=fmt,
             code=f"src/app/domain/texts/admin.py {const}" + (" (str.format placeholders)" if kw else ""))
     add_static("admin.broadcast.preview_sent", sec, "bot/routers/admin/broadcast.py", "Превью отправлено",
                "«👁 Превью себе»", fmt=FMT_ALERT_SMALL, func="_preview")
@@ -1422,14 +1515,19 @@ def section_admin() -> None:
                                                                reason="чужая карта"),
         subs=[(EXT_ID, "{external_id}"), ("220220-7882-09/2028", "{card}"), ("чужая карта", "{reason}")],
         code="src/app/domain/texts/checkout.py admin_blocked_card")
-    add_static("admin.alert.blocked_user_pay", sec, "services/checkout.py", "Заблокированный пользователь пытался оплатить",
-               "человек из стоп-листа нажал оплату", fmt=FMT_PLAIN, func="CheckoutServiceImpl.start_checkout",
-               names={"fresh.plan_code": "plan", "reason or '-'": "reason"})
-    add_static("admin.alert.stars_orphan", sec, "services/fulfillment.py", "Оплата звездами без платежа в БД",
-               "пришла оплата звездами, а платежа нет в БД", fmt=FMT_PLAIN, func="on_stars_paid")
-    add_static("admin.alert.stars_dup", sec, "services/fulfillment.py", "Повторная оплата звездами",
-               "второй платеж звездами по одному счету", fmt=FMT_PLAIN, func="on_stars_paid",
-               names={"rec.id": "payment_id"})
+    add("admin.alert.blocked_user_pay", sec, "src/app/domain/texts/checkout.py:admin_blocked_user_pay",
+        "человек из стоп-листа нажал оплату", TCh.admin_blocked_user_pay(telegram_id=TG, plan_code="pro", reason="чарджбэк"),
+        subs=[(str(TG), "{id}"), ("Тариф: pro", "Тариф: {plan}"), ("чарджбэк", "{reason}")],
+        code="src/app/domain/texts/checkout.py admin_blocked_user_pay")
+    add("admin.alert.stars_orphan", sec, "src/app/domain/texts/checkout.py:admin_stars_orphan",
+        "пришла оплата звездами, а платежа нет в БД",
+        TCh.admin_stars_orphan(telegram_id=TG, payment_id=PID, amount=300, currency="XTR", charge_id="ch_77"),
+        subs=[(str(TG), "{id}"), (f"Payment: {PID}", "Payment: {payment_id}"), ("300 XTR", "{amount} {currency}"),
+              ("ch_77", "{charge_id}")], code="src/app/domain/texts/checkout.py admin_stars_orphan")
+    add("admin.alert.stars_dup", sec, "src/app/domain/texts/checkout.py:admin_stars_dup",
+        "второй платеж звездами по одному счету", TCh.admin_stars_dup(telegram_id=TG, payment_id=PID, charge_id="ch_78"),
+        subs=[(str(TG), "{id}"), (f"#{PID}", "#{payment_id}"), ("ch_78", "{charge_id}")],
+        code="src/app/domain/texts/checkout.py admin_stars_dup")
     rr = TCh.admin_refund_request(request_id=31, full_name="Иван Петров", username=USERNAME, telegram_id=TG, payment_id=PID,
                                   external_id=EXT_ID, plan_label="Pro, 1 месяц", amount=449, currency="RUB",
                                   paid_at=NOW - timedelta(hours=3))
@@ -1458,17 +1556,19 @@ def section_admin() -> None:
         "повторное решение по уже решенному запросу", "{alert}\n\n<b>" + TCh.admin_refund_already("refunded") + "</b>",
         subs=[("деньги возвращены", "{status}")], code="src/app/domain/texts/checkout.py admin_refund_already",
         note="{status}: в работе, отклонен, деньги возвращены, ошибка возврата")
-    add_static("admin.alert.refund_webhook", sec, "services/payments/refunds.py", "возврат</b>",
-               "ЮKassa прислала возврат (в т.ч. сделанный в кабинете)", func="process_refund_webhook",
-               names={"'Полный' if is_full else 'Частичный'": "kind", "_he(_plan_line(plan_code, period_months))": "plan",
-                      "_he(action_note + obhod_note)": "action_note", "_rub(refund['amount'])": "amount",
-                      "_rub(refunded_total)": "refunded_total", "_rub(paid_amount)": "paid_amount",
-                      "_he(str(payment_ext_id))": "external_id"},
-               note="{kind}: Полный/Частичный; {action_note}: что сделано с доступом (варианты в refunds.py)")
-    add_static("admin.alert.refund_unknown", sec, "services/payments/refunds.py", "Возврат по неизвестному платежу",
-               "возврат по платежу, которого нет в БД", func="process_refund_webhook",
-               names={"_he(str(refund_id))": "refund_id", "_he(str(payment_ext_id))": "external_id",
-                      "_rub(refund['amount'])": "amount", "_he(str(refund.get('currency') or ''))": "currency"})
+    add("admin.alert.refund_webhook", sec, "src/app/domain/texts/checkout.py:admin_refund_webhook",
+        "ЮKassa прислала возврат (в т.ч. сделанный в кабинете)",
+        TCh.admin_refund_webhook(full=True, telegram_id=TG, external_id=EXT_ID, amount=449, refunded_total=449,
+                                 paid_amount=449, plan_line="Pro, 1 мес.", note="Срок откатан на 1 мес."),
+        subs=[(str(TG), "{id}"), (EXT_ID, "{external_id}"), ("Pro, 1 мес.", "{plan}"),
+              ("Срок откатан на 1 мес.", "{action_note}"), (fmt_rub(449), "{price}")],
+        code="src/app/domain/texts/checkout.py admin_refund_webhook; note built in services/payments/refunds.py",
+        note="заголовок «Полный возврат» или «Частичный возврат»; {action_note}: что сделано с доступом")
+    add("admin.alert.refund_unknown", sec, "src/app/domain/texts/checkout.py:admin_refund_unknown",
+        "возврат по платежу, которого нет в БД",
+        TCh.admin_refund_unknown(refund_id="rf_12", external_id=EXT_ID, amount="449", currency="RUB"),
+        subs=[("rf_12", "{refund_id}"), (EXT_ID, "{external_id}"), ("449 RUB", "{amount} {currency}")],
+        code="src/app/domain/texts/checkout.py admin_refund_unknown")
     add("admin.alert.node_lost", sec, "src/app/domain/texts/notify.py:admin_node_lost", "вебхук панели: нода недоступна",
         TN.admin_node_lost("nl-1", "95.182.97.10", "connect ECONNREFUSED"),
         subs=[("nl-1", "{node}"), ("95.182.97.10", "{address}"), ("connect ECONNREFUSED", "{reason}")], fmt=FMT_PLAIN,
@@ -1490,52 +1590,64 @@ def section_admin() -> None:
         "вебхук панели упал при обработке", TN.admin_webhook_error("user.expired", "KeyError"),
         subs=[("user.expired", "{event}"), ("KeyError", "{error}")], fmt=FMT_PLAIN,
         code="src/app/domain/texts/notify.py admin_webhook_error")
-    add_static("admin.alert.handler_error", sec, "bot/middlewares/errors.py", "Ошибка в ",
-               "необработанная ошибка в обработчике 3.0 (топик «Ошибки», раз в 10 минут на тип)", fmt=FMT_PLAIN,
-               func="ErrorsMiddleware.__call__", names={"str(exc)[:300]": "error_text", "type(exc).__name__": "error",
-                                                       "name": "handler"})
-    pnames = {"row.uses + 1": "uses", "'/' + str(row.max_uses) if row.max_uses else ''": "max_uses_suffix",
-              "h(code)": "code", "h(code.upper())": "code", "h(plan)": "plan", "h(promo.plan_code)": "plan"}
-    promo_title = static("services/promo.py", "🎟 <b>Промокод {", pnames)
-    promo_body = static("services/promo.py", "Использований: {", pnames)
-    add("admin.alert.promo_applied", sec, "src/app/services/promo.py:_reserve_and_grant + _alert",
-        "кто-то активировал промокод из таблицы или подарок (топик «Промо»)",
-        f"{promo_title}\n\n🆔 <code>{{id}}</code>\n{promo_body}",
-        code="src/app/services/promo.py _reserve_and_grant (title/body literals) and _alert (layout)",
-        note="для подарка заголовок «🎁 <b>Подарок активирован</b>»; {max_uses_suffix}: «/100», если у кода есть предел")
-    b_title = static("services/promo.py", "🎁 <b>Промокод {", pnames)
-    b_body = static("services/promo.py", " на {days} дн.", pnames)
-    add("admin.alert.promo_builtin", sec, "src/app/services/promo.py:_builtin + _alert",
-        "активирован встроенный код: trial, solokhin (топик «Промо»)", f"{b_title}\n\n🆔 <code>{{id}}</code>\n{b_body}",
-        code="src/app/services/promo.py built-in branch (title/body literals of the _alert call)")
-    f_title = static("services/promo.py", ": выдача не удалась</b>", pnames)
-    f_body = static("services/promo.py", "Запись использования откатили")
-    add("admin.alert.promo_builtin_failed", sec, "src/app/services/promo.py:_builtin + _alert",
-        "встроенный код (trial, solokhin): выдача упала", f"{f_title}\n\n🆔 <code>{{id}}</code>\n{f_body}",
-        code="src/app/services/promo.py built-in branch, failure _alert")
-    add_static("admin.alert.grant", sec, "services/grants.py", "Выдача администратором",
-               "админ выдал доступ (/friend, /grant)", func="GrantsService._grant",
-               names={"int(admin_id)": "admin_id"},
-               note="{date}: «бессрочно» для выдачи навсегда")
-    for sid_, anchor, body_anchor, when in [
-        ("admin.alert.sun718_applied", "SUN718 активирован", "Записано для рефералки", "/sun718 активирован"),
-        ("admin.alert.sun718_repeat", "SUN718: повторная активация", "Повторно не выдавали", "/sun718 повторно"),
-        ("admin.alert.sun718_panel_down", "SUN718: панель недоступна", "Статус подписки не проверен", "/sun718, панель не ответила"),
-        ("admin.alert.sun718_lifetime", "SUN718: бессрочная подписка", "Отказ (рефералить", "/sun718 у бессрочной"),
-        ("admin.alert.sun718_not_recorded", "SUN718: не записали активацию", "Подписка не выдана", "/sun718: запись в БД не удалась"),
-        ("admin.alert.sun718_grant_failed", "SUN718: выдача не удалась", "Запись откатили", "/sun718: выдача упала"),
-        ("admin.alert.sun718_revert", "SUN718 REVERT выполнен", "Тариф: {", "через 5 дней вернули прежний тариф"),
-        ("admin.alert.sun718_revert_skipped", "SUN718 REVERT: пропущен", "Нет аккаунта в панели", "возврат тарифа пропущен"),
-        ("admin.alert.sun718_revert_failed", "SUN718 REVERT: сквад не вернули", "Повторим через час", "возврат тарифа не удался"),
+    add("admin.alert.handler_error", sec, "src/app/bot/middlewares/errors.py:ErrorsMiddleware",
+        "необработанная ошибка в обработчике 3.0 (топик «Ошибки», раз в 10 минут на тип)",
+        UI.admin_alert("Ошибка в on_plans", emoji="❌", lines=[UI.field("Тип", "KeyError"), UI.field("Текст", "'pro'"),
+                                                                UI.field("user", TG)]),
+        subs=[("on_plans", "{handler}"), ("KeyError", "{error}"), ("&#x27;pro&#x27;", "{error_text}"), (str(TG), "{id}")],
+        code="src/app/bot/middlewares/errors.py ErrorsMiddleware.__call__ (ui.admin_alert)")
+
+    def alert(id_, where, when, title, *lines, emoji, subs=(), note=""):
+        add(id_, sec, where, when, UI.admin_alert(title, emoji=emoji, who=UI.who_block(name=None, username=None, telegram_id=TG), lines=list(lines)),
+            subs=[(str(TG), "{id}")] + list(subs), code=where, note=note)
+
+    alert("admin.alert.promo_applied", "src/app/services/promo.py:_reserve_and_grant + _alert",
+          "кто-то активировал промокод из таблицы или подарок (топик «Промо»)", "Промокод AUTUMN7 активирован",
+          UI.field("Тариф", "standard +7 дн."), UI.field("До", D_EXP), UI.field("Использований", "24/100"), emoji="🎟",
+          subs=[("AUTUMN7", "{code}"), ("standard +7 дн.", "{plan} +{days} дн."), (D_EXP, "{date}"),
+                ("24/100", "{uses}/{max_uses}")],
+          note="для подарка заголовок «Подарок активирован» и эмодзи 🎁")
+    alert("admin.alert.promo_builtin", "src/app/services/promo.py:_builtin + _alert",
+          "активирован встроенный код: trial, solokhin (топик «Промо»)", "Промокод TRIAL активирован",
+          UI.field("Тариф", "standard на 5 дн."), UI.field("До", D_EXP), emoji="🎁",
+          subs=[("TRIAL", "{code}"), ("standard на 5 дн.", "{plan} на {days} дн."), (D_EXP, "{date}")])
+    alert("admin.alert.promo_builtin_failed", "src/app/services/promo.py:_builtin + _alert",
+          "встроенный код (trial, solokhin): выдача упала", "TRIAL: выдача не удалась",
+          "Запись использования откатили, пользователь может повторить.", emoji="❌", subs=[("TRIAL", "{code}")])
+    alert("admin.alert.grant", "src/app/services/grants.py:GrantsService._grant", "админ выдал доступ (/friend, /grant)",
+          "Выдача администратором", UI.field("Тариф", "Pro на 1 месяц"), UI.field("До", D_EXP),
+          "Админ: <code>1328087031</code>", emoji="⭐",
+          subs=[("Pro на 1 месяц", "{label}"), (D_EXP, "{date}"), ("1328087031", "{admin_id}")],
+          note="{date}: «бессрочно» для выдачи навсегда")
+    ref = "src/app/services/referral.py (engine._alert / Sun718Reverter._alert)"
+    alert("admin.alert.sun718_applied", ref, "/sun718 активирован", "SUN718 активирован",
+          "Тариф: Pro 5 дн. поверх standard", f"Возврат тарифа: {DT_GRACE} на standard", f"До: {D_EXP}",
+          "Записано для рефералки", emoji="🎁",
+          subs=[("Pro 5 дн. поверх standard", "Pro {days} дн. поверх {old_plan}"), (DT_GRACE, "{datetime}"),
+                ("на standard", "на {old_plan}"), (D_EXP, "{date}")],
+          note="без возврата тарифа строка «Тариф: Pro N дн.» (или «(продление)»), строки «Возврат тарифа» нет")
+    for sid_, title, line, emoji, when in [
+        ("admin.alert.sun718_repeat", "SUN718: повторная активация", "Повторно не выдавали, в БД ничего не писали.", "⚠️",
+         "/sun718 повторно"),
+        ("admin.alert.sun718_panel_down", "SUN718: панель недоступна", "Статус подписки не проверен, ничего не выдали.",
+         "❌", "/sun718, панель не ответила"),
+        ("admin.alert.sun718_lifetime", "SUN718: бессрочная подписка",
+         "Отказ (рефералить бессрочных нельзя), в БД не писали.", "🌟", "/sun718 у бессрочной"),
+        ("admin.alert.sun718_not_recorded", "SUN718: не записали активацию",
+         "Подписка не выдана (без записи код стал бы многоразовым).", "❌", "/sun718: запись в БД не удалась"),
+        ("admin.alert.sun718_grant_failed", "SUN718: выдача не удалась", "Запись откатили, пользователь может повторить.",
+         "❌", "/sun718: выдача упала"),
+        ("admin.alert.sun718_revert_skipped", "SUN718 REVERT: пропущен", "Нет аккаунта в панели.", "⚠️",
+         "возврат тарифа пропущен"),
     ]:
-        title = static("services/referral.py", anchor)
-        body = static("services/referral.py", body_anchor, {"h(pre)": "old_plan", "h(target)": "plan"})
-        add(sid_, sec, "src/app/services/referral.py (engine._alert / Sun718Reverter._alert)", when,
-            f"{title}\n\n🆔 <code>{{id}}</code>\n{body}",
-            code="src/app/services/referral.py: title and body literals of the _alert call; layout in PromoEngine._alert / "
-                 "Sun718Reverter._alert",
-            note="{line} у активации: «📦 Pro N дн.» или «📦 Pro N дн. поверх ... / 🔄 Возврат тарифа: ...»"
-            if sid_ == "admin.alert.sun718_applied" else "")
+        alert(sid_, ref, when, title, line, emoji=emoji)
+    alert("admin.alert.sun718_revert", ref, "через 5 дней вернули прежний тариф", "SUN718 REVERT выполнен",
+          "Тариф: standard → <b>standard</b>", emoji="🔄",
+          subs=[("standard → <b>standard</b>", "{old_plan} → <b>{plan}</b>")],
+          note="если пользователь докупил Pro: строка «Пользователь докупил Pro, Pro остался.»")
+    alert("admin.alert.sun718_revert_failed", ref, "возврат тарифа не удался", "SUN718 REVERT: сквад не вернули",
+          "Цель: standard. Ошибка: RemnaUnavailable. Повторим через час.", emoji="❌",
+          subs=[("Цель: standard", "Цель: {plan}"), ("RemnaUnavailable", "{error}")])
     add_static("admin.alert.referral_payout", sec, "services/referral.py", "SUN718: выплата записана",
                "админ записал выплату /referral_payout", func="ReferralService.record_payout",
                names={"int(months)": "months", "h(note) or '—'": "note",
@@ -1576,9 +1688,13 @@ def section_admin() -> None:
                            ("вручную: 3", "вручную: {disabled}")],
         fmt=FMT_PLAIN, code="src/app/services/panel_sync.py SyncReport.text",
         note="при обрыве: «Сверка с панелью прервана: панель не отдала полный список пользователей. БД не менялась.»")
-    add_static("admin.alert.broadcast_credit_failed", sec, "services/broadcast.py", "не начислено",
-               "после рассылки с подарком часть дней не начислилась", fmt=FMT_PLAIN,
-               names={"int(broadcast_id)": "bc_id", "int(days)": "days", "int(failed)": "failed"})
+    add("admin.alert.broadcast_credit_failed", sec, "src/app/services/broadcast.py:_alert_credit_failures",
+        "после рассылки с подарком часть дней не начислилась",
+        UI.admin_alert("Рассылка: сбой начисления подарка", emoji="⚠️",
+                       lines=[UI.field("Рассылка", "#12"), UI.field("Не начислено", "+3 дн. у 2 получателей")],
+                       hint="Причина в логах бота (broadcast credit ... failed). Начислить вручную: /grant."),
+        subs=[("#12", "#{bc_id}"), ("+3 дн. у 2 получателей", "+{days} дн. у {failed} получателей")],
+        code="src/app/services/broadcast.py _alert_credit_failures")
     add_static("admin.alert.reconciler_stuck", sec, "tasks/remnawave_reconciler.py", "Reconciler: подписка застряла",
                "старая сверка 2.x: подписка не синкается много раз подряд", func="RemnawaveReconciler",
                names={"MAX_RESYNC_ATTEMPTS": "max_attempts"})
@@ -1590,7 +1706,7 @@ def section_admin() -> None:
 def section_errors() -> None:
     sec = "Ошибки"
     add("err.generic", sec, "src/app/domain/texts/common.py:GENERIC_ERROR", "неожиданная ошибка в ответ на команду/сообщение",
-        TCo.GENERIC_ERROR, fmt=FMT_PLAIN + "; отправляется без parse_mode", code="src/app/domain/texts/common.py GENERIC_ERROR")
+        TCo.GENERIC_ERROR, code="src/app/domain/texts/common.py GENERIC_ERROR")
     add("err.generic_alert", sec, "src/app/domain/texts/common.py:GENERIC_ERROR_ALERT", "неожиданная ошибка при нажатии кнопки",
         TCo.GENERIC_ERROR_ALERT, fmt=FMT_ALERT, code="src/app/domain/texts/common.py GENERIC_ERROR_ALERT")
     add("err.stale_button", sec, "src/app/domain/texts/common.py:STALE_BUTTON",
@@ -1600,12 +1716,9 @@ def section_errors() -> None:
         "техработы: нажал «Подключиться», «Устройства», триал (всплывашка) или /trial, /devices (сообщение)",
         TN.MAINTENANCE_SCREEN, fmt=FMT_ALERT + "; на команды приходит обычным сообщением",
         code="src/app/domain/texts/notify.py MAINTENANCE_SCREEN")
-    add("err.maintenance_common", sec, "src/app/domain/texts/common.py:MAINTENANCE",
-        "не используется: константа есть, но код ее не вызывает", TCo.MAINTENANCE, fmt=FMT_PLAIN,
-        code="src/app/domain/texts/common.py MAINTENANCE")
-    add_static("err.blocked", sec, "middlewares/blocklist.py", "Доступ ограничен",
-               "пользователь заблокирован в боте (/block): любое сообщение или кнопка", fmt=FMT_PLAIN,
-               func="BlocklistMiddleware")
+    add("err.blocked", sec, "src/app/middlewares/blocklist.py:BlocklistMiddleware",
+        "пользователь заблокирован в боте (/block): любое сообщение (на кнопку: всплывашка «⛔ Доступ ограничен.»)",
+        UI.result("error", "Доступ ограничен"), code="src/app/middlewares/blocklist.py BlocklistMiddleware")
     add("err.unused_buttons", sec, "src/app/domain/texts/promo.py:BTN_ENTER_CODE, BTN_TRIAL, BTN_WRITE_USER; "
         "texts/connect.py:LOADING",
         "не используются: тексты есть, но нигде не показываются",
@@ -1659,35 +1772,146 @@ def attach_old() -> list[str]:
 
 HEADER = """# Экраны бота 3.0
 
-Здесь все сообщения и экраны релиза 3.0: что видит пользователь и что приходит админам. Файл собран
-скриптом `scripts/render_screens_catalog.py` из настоящего кода ветки release/3.0 ({head}), тексты
-отрисованы теми же функциями, что работают в боте.
+Все сообщения и экраны релиза 3.0: что видит пользователь и что приходит админам. Файл собран скриптом
+`scripts/render_screens_catalog.py` из настоящего кода ветки release/3.0 ({head}): тексты отрисованы теми же
+функциями, что работают в боте.
+
+Каждый экран относится к одному из {ntypes} типов. Тип задает вид: заголовок, цитаты-плашки, подсказку,
+порядок кнопок. Экран задает только слова. Поэтому файл в трех частях:
+
+1. **Типы экранов.** Шаблон каждого типа. Правка шаблона меняет все экраны этого типа сразу.
+2. **Словарь.** Подписи кнопок и эмодзи. Правка здесь меняет кнопку или эмодзи везде.
+3. **Экраны по типам.** Только слова каждого экрана: заголовок, строки в цитатах, подсказка, кнопки.
+
+Итого: {count} экранов, из них {kit} собраны из типов; {manual} пока собраны в коде вручную
+(в основном короткие ответы админке и служебные тексты 2.x), у них пометка «вручную».
 
 ## Как править
 
-- Меняй текст внутри блока ```html: слова, эмодзи, переносы строк, теги `<b>`, `<i>`, `<u>`, `<s>`,
-  `<code>`, `<blockquote>`, `<a href="...">`. Каждый открытый тег нужно закрыть.
-- Меняй подписи кнопок и их порядок в списке «кнопки:». Одна строка `- [...] [...]` = один ряд кнопок.
-  Можно переставлять кнопки, переносить в другой ряд, убирать. Новую кнопку добавляй с пометкой, куда
-  она должна вести.
-- Слова в фигурных скобках, например `{{date}}` или `{{plan}}`, это подстановки: бот сам вставит туда
-  значение. Их можно переставлять и удалять, но не переименовывать и не придумывать новые (новую
-  подстановку опиши словами рядом, мы добавим в код).
-- Не трогай строку `## ...` с ID экрана и строку `source:`, по ним правка попадает обратно в код.
-  Строки «когда», «формат», «примечание», «было в 2.1.1» можно не трогать, они для справки.
-- Если в строке «формат» написано «обычный текст», теги в этом сообщении не сработают: бот покажет их как
-  есть. Если хочешь там жирный или цитату, напиши об этом рядом, переведем сообщение в HTML.
-- «Всплывающее уведомление» Telegram показывает без форматирования, длина до 200 символов.
-- Хочешь оставить комментарий: пиши строку, начинающуюся с `>>`, прямо под экраном.
-- Пометка «⚠ нет blockquote, в 2.1.1 был» значит: в старой версии в этом месте была цитата-плашка,
-  в 3.0 ее нет.
-
-Итого: {count} экранов в {sections} разделах, из них {lost} с пометкой «⚠ нет blockquote».
+- В части 1 правь шаблон типа (```html блок) и правила кнопок. Слова в фигурных скобках там это места,
+  куда встанет содержимое экрана.
+- В части 2 правь подпись кнопки или эмодзи в таблице.
+- В части 3 правь слова экрана в строках `заголовок:`, `раздел:`, `> ...` (строка внутри цитаты),
+  `текст:`, `подсказка:` и подписи в `кнопки:`. Одна строка `- [...] [...]` = один ряд кнопок.
+  Не меняй оформление в части 3 (жирный, цитаты, пустые строки): его задает тип.
+- Слова в фигурных скобках, например `{{date}}`, это подстановки: бот вставит туда значение. Их можно
+  переставлять и удалять, но не переименовывать (новую подстановку опиши словами рядом).
+- Не трогай строки `## ...` (ID экрана) и `тип:`: по ним правка попадает обратно в код.
+- Хочешь оставить комментарий: строка, начинающаяся с `>>`, прямо под экраном.
+- «Всплывашка» Telegram показывает без форматирования, длина до 200 символов.
 
 ## Подстановки
 
 {glossary}
 """
+
+# One template, keyboard rule and one example per type (docs/SCREENS.md).
+TYPE_DOCS = {
+    "status": ("""{эмодзи раздела} <b>{раздел}</b>
+<blockquote>{Метка: значение}
+{Метка: значение}</blockquote>
+
+{эмодзи раздела} <b>{раздел}</b>
+<blockquote>{строки}</blockquote>
+
+<i>{подсказка}</i>""", "Общего заголовка нет, карточка состоит из разделов: профиль, статус подписки, обход (только Pro). "
+     "Кнопки: главное действие (Подключиться), пробный период (если доступен), затем по одной в ряд, "
+     "пара [Обновить] [Помощь], админам внизу «Админ-панель». Футера нет: это корневой экран.",
+     "user.menu.active_pro"),
+    "choice": ("""{эмодзи} <b>{заголовок}</b>
+<blockquote>{вводная}</blockquote>
+
+{эмодзи варианта} <b>{вариант}</b>
+<blockquote>· {особенность}</blockquote>
+
+<i>{Выбери ... кнопкой ниже}</i>""", "Варианты кнопками, по одному в ряд («Название · цена»), затем доп. действие (подарить), "
+     "футер: из меню [🏠 В меню], глубже [⬅️ Назад] [🏠 В меню].", "pay.plans"),
+    "checkout": ("""💳 <b>{заголовок}</b>
+<blockquote>Тариф: {plan}
+Срок: {months}
+К оплате: <b>{price}</b>
+Автопродление: {включено | выключено}</blockquote>
+
+<i>{как оплатить и что будет после}</i>
+
+<i>Нажимая «Оплатить», ты принимаешь условия <a href="{offer}">оферты</a> и <a href="{privacy}">политики конфиденциальности</a>.</i>""",
+     "Первая кнопка «💳 Оплатить {price}» (ссылка ЮKassa), затем звезды, автопродление, «🔄 Проверить оплату», "
+     "футер [⬅️ Назад] [🏠 В меню].", "pay.checkout.autopay_on"),
+    "result": ("""{✅ | ⏳ | ℹ️ | ⚠️ | ❌} <b>{заголовок}</b>
+<blockquote>{строка или Метка: значение}</blockquote>
+
+<i>{что делать дальше}</i>""", "Эмодзи заголовка задает вид: ✅ готово, ⏳ ждем, ℹ️ справка, ⚠️ внимание, ❌ ошибка. "
+     "Кнопки: 0-2 действия (главное первым), ссылки (поддержка), футер [🏠 В меню].", "pay.check.pending"),
+    "article": ("""{эмодзи} <b>{заголовок}</b>
+
+{эмодзи} <b>{раздел}</b>
+<blockquote>{текст раздела}</blockquote>
+
+{эмодзи} <b>{раздел со ссылкой}</b>
+<code>{ссылка}</code>
+
+<i>{подсказка}</i>""", "Кнопки-ссылки (открыть ссылку, инструкция, поддержка), действия, футер [🏠 В меню].",
+     "user.connect.success_pro"),
+    "items": ("""{эмодзи} <b>{заголовок} ({n} из {limit})</b>
+<blockquote>{иконка} {элемент}, {деталь}
+{иконка} {элемент}, {деталь}</blockquote>
+
+<i>{что можно сделать со списком}</i>""", "Действие на каждый элемент в своем ряду, затем прочее, футер [🏠 В меню]. "
+     "Пустой список: одна строка в цитате.", "dev.list.unlink_on"),
+    "confirm": ("""❓ <b>{вопрос?}</b>
+<blockquote>{последствия}</blockquote>""", "Один ряд: [✅ Да, {действие}] [✖️ Отмена]. Футера нет.", "dev.ask_unlink"),
+    "prompt": ("""✍️ <b>{что прислать}</b>
+<blockquote>{как прислать}</blockquote>
+
+<i>Отмена: /cancel</i>""", "Футер [🏠 В меню].", "promo.enter"),
+    "push": ("""{эмодзи} <b>{заголовок}</b>
+<blockquote>{строка или Метка: значение}</blockquote>
+
+<i>{что делать дальше}</i>""", "Бот пишет сам. 0-2 кнопки действия, футера нет.", "pay.paid_user"),
+    "toast": ("""{одно-два предложения без тегов, до 200 символов}""",
+              "Всплывает над чатом после нажатия кнопки. Кнопок нет.", "user.menu.refreshed"),
+    "admin_screen": ("""{эмодзи} <b>{заголовок}</b>
+<blockquote>{Метка: значение}</blockquote>
+
+{эмодзи} <b>{раздел}</b>
+<blockquote>{строки или элементы списка}</blockquote>
+
+<i>{команды или подсказка}</i>""", "Действия, листалка [⬅️] [➡️], футер [⬅️ В админку] или [⬅️ Назад].", "admin.stats"),
+    "admin_alert": ("""{эмодзи} <b>{событие}</b>
+<blockquote>👤 {имя} @{username}
+🆔 {id}</blockquote>
+
+<blockquote>{Метка: значение}</blockquote>
+
+<i>{что сделать админу}</i>""", "Решение одним рядом [✅ ...] [❌ ...], иначе без кнопок.", "admin.alert.paid"),
+}
+
+# Russian meaning of the dictionary entries (part 2).
+B_MEANING = {
+    "CONNECT": "подключение", "SUBSCRIPTION": "тарифы и подписка", "RENEW": "продлить (пуши)",
+    "PAY_PREFIX": "оплата (к подписи добавляется сумма)", "CHECK_PAYMENT": "проверить оплату",
+    "PAY_STARS": "оплата звездами", "AUTOPAY_ON": "включить автопродление", "AUTOPAY_OFF": "не продлевать автоматически",
+    "AUTOPAY_STOP": "отключить автопродление (пуш)", "DEVICES": "мои устройства", "OBHOD_MORE": "докупить трафик обхода",
+    "OPEN_LINK": "открыть ссылку подписки", "OPEN_OBHOD": "открыть ссылку обхода", "ARTICLE": "статья-инструкция",
+    "SUPPORT": "поддержка", "WRITE_ADMIN": "написать администратору", "OFFER": "оферта",
+    "PRIVACY": "политика конфиденциальности", "TRIAL": "пробный период", "GIFT": "подарить подписку",
+    "REFUND": "возврат за 24 часа", "REFRESH": "обновить", "HELP": "помощь", "ADMIN_PANEL": "админ-панель",
+    "UNLINK": "отвязать устройство", "YES_PREFIX": "подтверждение", "CANCEL": "отмена", "TO_LIST": "к списку",
+    "BACK": "на экран выше", "MENU": "в главное меню", "BACK_ADMIN": "в админ-панель",
+    "APPROVE": "решение админа: да", "REJECT": "решение админа: нет", "PREV": "листалка назад", "NEXT": "листалка вперед",
+}
+E_MEANING = {
+    "OK": "готово", "WAIT": "ждем", "INFO": "справка", "WARN": "внимание", "ERROR": "ошибка",
+    "ACTIVE": "подписка активна", "GRACE": "льготный период", "EXPIRED": "подписка истекла", "NONE": "подписки нет",
+    "PROFILE": "профиль", "CONNECT": "подключение", "SUBSCRIPTION": "подписка", "PAYMENT": "оплата", "OBHOD": "обход",
+    "DEVICES": "устройство, телефон", "DEVICE_DESKTOP": "компьютер", "DEVICE_OTHER": "неизвестное устройство",
+    "LINK": "ссылка", "HOWTO": "как подключить", "GIFT": "подарок, пробный период", "PROMO": "промокод",
+    "REFUND": "возврат", "AUTOPAY": "автопродление", "LOCK": "доступ закрыт", "ASK": "вопрос", "INPUT": "ввод",
+    "ID": "Telegram ID", "DATE": "дата", "LEFT": "сколько осталось", "HELP": "помощь", "FAQ": "частые вопросы",
+    "VPN": "что такое VPN", "MONEY": "деньги", "BELL": "со звуком", "MUTE": "без звука", "ADMIN": "админ",
+}
+
+SPECIAL = "special"  # command menu, Stars invoice, broadcast body: not screens
 
 
 def _buttons_md(rows: list) -> list[str]:
@@ -1707,45 +1931,120 @@ def lost_blockquote(e: Entry) -> bool:
     return bool(e.old and "<blockquote>" in e.old.get("html", "") and "<blockquote>" not in e.text)
 
 
+def _content_md(e: Entry) -> list[str]:
+    """Part 3 body of a kit screen: its words only, line by line, placeholders applied."""
+    sc = e.screen
+
+    def t(x: str) -> str:
+        return _sub(x, e.subs)
+
+    out = []
+    if sc.title:
+        out.append(f"заголовок: {sc.emoji} {t(sc.title)}".replace(":  ", ": "))
+    for bl in sc.blocks:
+        if bl.title:
+            out.append(f"раздел: {bl.emoji} {t(bl.title)}".replace(":  ", ": "))
+        for line in bl.lines:
+            for part in t(line).split("\n"):
+                out.append(("> " if bl.quote else "текст: ") + part if part else ">")
+    if sc.hint:
+        for part in t(sc.hint).split("\n"):
+            out.append(f"подсказка: {part}")
+    return out
+
+
+def _entry_type(e: Entry) -> str:
+    if e.id in ("user.commands", "pay.stars.invoice", "admin.broadcast.message", "err.unused_buttons"):
+        return SPECIAL
+    return e.type
+
+
+def _example(type_: str) -> Optional[Entry]:
+    want = TYPE_DOCS.get(type_, ("", "", ""))[2]
+    for e in ENTRIES:
+        if e.id == want:
+            return e
+    return next((e for e in ENTRIES if _entry_type(e) == type_ and e.screen is not None), None)
+
+
 def write_catalog(path: Path, head: str) -> None:
-    lost = sum(1 for e in ENTRIES if lost_blockquote(e))
     used = sorted({v for e in ENTRIES for v in _vars(e)})
     gl = "\n".join(f"- `{{{k}}}`: {GLOSSARY[k]}" for k in GLOSSARY if k in used)
     others = [v for v in used if v not in GLOSSARY]
     if others:
         gl += "\n- остальные (" + ", ".join(f"`{{{v}}}`" for v in others) + "): смысл понятен из названия и " \
               "строки «примечание» у экрана"
-    out = [HEADER.format(head=head, count=len(ENTRIES), sections=len(SECTIONS), lost=lost, glossary=gl)]
-    for n, sec in enumerate(SECTIONS, 1):
-        items = [e for e in ENTRIES if e.section == sec]
-        out.append(f"\n# {n}. {sec} ({len(items)})\n")
+    kit_n = sum(1 for e in ENTRIES if e.screen is not None)
+    manual = sum(1 for e in ENTRIES if e.screen is None and _entry_type(e) not in ("toast", SPECIAL))
+    out = [HEADER.format(head=head, ntypes=len(UI.TYPES), count=len(ENTRIES), kit=kit_n, manual=manual, glossary=gl)]
+
+    # Part 1: types
+    out.append("\n# Часть 1. Типы экранов\n")
+    for n, ty in enumerate(UI.TYPES, 1):
+        tmpl, rules, _ = TYPE_DOCS[ty]
+        items = [e for e in ENTRIES if _entry_type(e) == ty]
+        out.append("---")
+        out.append(f"## тип {n}. {ty} · {UI.TYPE_TITLES[ty]}")
+        out.append(f"экранов: {len(items)}")
+        out.append("шаблон:")
+        out.append("```html")
+        out.append(tmpl)
+        out.append("```")
+        out.append(f"кнопки: {rules}")
+        ex = _example(ty)
+        if ex is not None:
+            out.append(f"пример ({ex.id}):")
+            out.append("```html")
+            out.append(ex.text)
+            out.append("```")
+            if ex.buttons:
+                out.extend(_buttons_md(ex.buttons))
+    out.append("---")
+
+    # Part 2: dictionary
+    out.append("\n# Часть 2. Словарь\n")
+    out.append("Подписи кнопок (`src/app/domain/texts/ui.py`, класс `B`). Одна вещь называется одинаково везде.\n")
+    out.append("| Ключ | Подпись | Что это |")
+    out.append("|---|---|---|")
+    for k, v in vars(UI.B).items():
+        if k.isupper():
+            out.append(f"| `{k}` | {v} | {B_MEANING.get(k, '')} |")
+    out.append("\nЭмодзи (`src/app/domain/texts/ui.py`, класс `E`).\n")
+    out.append("| Ключ | Эмодзи | Значение |")
+    out.append("|---|---|---|")
+    for k, v in vars(UI.E).items():
+        if k.isupper():
+            out.append(f"| `{k}` | {v} | {E_MEANING.get(k, '')} |")
+    out.append("\nТарифы в списках: " + ", ".join(f"{v} {k}" for k, v in TCh.PLAN_EMOJI.items()) + ".")
+
+    # Part 3: screens by type
+    out.append("\n# Часть 3. Экраны по типам\n")
+    for n, ty in enumerate(list(UI.TYPES) + [SPECIAL], 1):
+        items = [e for e in ENTRIES if _entry_type(e) == ty]
+        if not items:
+            continue
+        title = UI.TYPE_TITLES.get(ty, "Особые тексты (не экраны)")
+        out.append(f"\n## 3.{n}. {ty} · {title} ({len(items)})\n")
         for e in items:
             out.append("---")
             out.append(f"## {e.id}")
-            out.append(f"source: {e.source}")
+            mark = "" if e.screen is not None or ty in ("toast", SPECIAL) else " · вручную (переносится на тип)"
+            out.append(f"тип: {ty}{mark}")
             out.append(f"когда: {e.when}")
-            if e.fmt != FMT_HTML:
-                out.append(f"формат: {e.fmt}")
-            vs = _vars(e)
-            out.append("variables: " + (", ".join("{" + v + "}" for v in vs) if vs else "нет"))
             if e.note:
                 out.append(f"примечание: {e.note}")
-            if lost_blockquote(e):
-                out.append("⚠ нет blockquote, в 2.1.1 был")
-            out.append("```html")
-            out.append(e.text)
-            out.append("```")
-            out.append("кнопки:" + ("" if e.buttons else " нет"))
-            out.extend(_buttons_md(e.buttons))
-            if e.old:
-                out.append("было в 2.1.1:")
+            if e.screen is not None:
+                out.extend(_content_md(e))
+            else:
+                if e.fmt != FMT_HTML:
+                    out.append(f"формат: {e.fmt}")
                 out.append("```html")
-                out.append(e.old["html"])
+                out.append(e.text)
                 out.append("```")
-                ob = e.old.get("buttons") or []
-                if ob:
-                    out.append("кнопки в 2.1.1: " + " / ".join(" ".join(f"[{b}]" for b in row) for row in ob))
-        out.append("---")
+            if e.buttons:
+                out.append("кнопки:")
+                out.extend(_buttons_md(e.buttons))
+    out.append("---")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
@@ -1753,36 +2052,39 @@ MAPPING_HEADER = """# Screens catalog 3.0: mapping back to code
 
 Generated by `scripts/render_screens_catalog.py` (release/3.0 {head}) together with
 `../ЭКРАНЫ_3.0.md`. English on purpose: this is the implementer's side of the owner's catalog.
+Screen kit: `docs/SCREENS.md`, `src/app/domain/texts/ui.py` (dictionary + 12 type builders),
+`src/app/bot/views/kit.py` (keyboard order and footers).
 
 ## How to apply an edited catalog
 
-1. Parse the owner's file: screens are separated by `---`; each starts with `## <SCREEN_ID>`; the template is
-   the first fenced block after it (the second fenced block, after `было в 2.1.1:`, is reference only);
-   buttons are the `- [..] [..]` lines under `кнопки:` (one line = one row). Lines starting with `>>` are
-   owner comments: read them, do not paste them.
-2. Diff each template against the generated one (re-run the script on the same commit, compare by id).
-   Only changed screens need work.
-3. For every changed screen go to the location in the table below and edit the literal there:
-   - `{{name}}` placeholders map to the argument/expression the table names; keep the helper that formats
-     it (`h()`, `fmt_rub`, `fmt_date_msk`, `days_ru`, `months_ru`, `fmt_gb`). A placeholder the owner
-     deleted = drop the interpolation; a new placeholder = needs new data, ask.
-   - Strings sent as plain text (`формат: обычный текст`) go through `Notifier(html=False)` or
-     `parse_mode=None`: tags the owner adds there require switching that call to `html=True` and
-     `h()`-escaping every interpolated value.
-   - Several screens share one constant (e.g. `BTN_BACK_MAIN`, `BTN_CONNECT`, `OBHOD_ABOUT`, `GENERIC_ERROR`):
-     a label edited in one screen changes it everywhere; if the owner changed it in only one place, ask or
-     split the constant.
-   - Button order/rows live in the view function named in the "layout" column, not in the texts module.
-4. Rules of the text modules still apply: no letter U+0451 (test enforces it), no em dashes in user copy,
-   "ты", values through `h()`.
-5. Re-run the generator and diff its output with the owner's file: every screen must now match 1:1
-   (whitespace included). Run `pytest tests` (snapshot tests of views pin some texts and must be updated
-   together with the texts).
+1. Parse the owner's file. Part 1 (`## тип N. <type> · ...`): the ```html template and the `кнопки:` rule of
+   each type. Part 2: two tables (`B` labels, `E` emoji), key in the first column. Part 3: screens separated
+   by `---`; each starts with `## <SCREEN_ID>` and `тип: <type>`; the words are the lines starting with
+   `заголовок:`, `раздел:`, `> ` (a line inside the quote), `текст:` (a plain line), `подсказка:`; buttons are
+   the `- [..] [..]` lines under `кнопки:` (one line = one row). Screens marked `вручную` keep a ```html block
+   (text still built by hand). Lines starting with `>>` are owner comments: read them, do not paste them.
+2. Diff against a fresh run of the generator on the same commit, compare by id.
+3. Where each kind of edit goes:
+   - Part 1 template or keyboard rule changed: change the type, not the screens: `ui.render` / the type
+     builder in `src/app/domain/texts/ui.py` (text) or `kit.keyboard` / `kit.Footer` (buttons). Then update
+     `docs/SCREENS.md` and the layout tests in `tests/ui/test_kit.py`.
+   - Part 2 label or emoji changed: `B.<KEY>` / `E.<KEY>` in `src/app/domain/texts/ui.py` (every screen
+     follows).
+   - Part 3 words changed: the text function named in the table below (a `*_screen` function or a
+     `*_SCREEN` constant in `src/app/domain/texts/<area>.py`). `{{name}}` placeholders map to the argument
+     the function formats; keep the helper (`h()`, `ui.field`, `fmt_rub`, `fmt_date_msk`, `days_ru`,
+     `months_ru`, `fmt_gb`). A new placeholder needs new data: ask.
+   - Button order/rows: the view function (`kit.view(... primary=, options=, secondary=, links=, footer=)`)
+     named in the "layout" list; the order of groups itself is the type rule.
+4. Text rules: no letter U+0451 (test enforces it), no em dashes in user copy, "ты", values through `h()` /
+   `ui.field`. `pytest tests/ui` checks closed tags, toasts <= 200 chars, footers.
+5. Re-run the generator: every screen must match the owner's file. Golden tests in `tests/ui` pin the main
+   screens and must be updated together with the texts.
 
 ## Screen -> code location
 
-| Screen id | Where to edit | Callbacks / URLs of the buttons |
-|---|---|---|
+| Screen id | Type | Where to edit | Callbacks / URLs of the buttons |
+|---|---|---|---|
 """
 
 
@@ -1794,7 +2096,8 @@ def write_mapping(path: Path, head: str, unknown_old: list[str]) -> None:
     out = [MAPPING_HEADER.format(head=head).rstrip("\n")]
     for e in ENTRIES:
         cbs = "; ".join(f"{t} -> {c}" for row in e.buttons for t, c in row) or "-"
-        out.append(f"| `{e.id}` | {_md_cell(e.code_loc)} | {_md_cell(cbs)} |")
+        kind = _entry_type(e) + ("" if e.screen is not None or _entry_type(e) in ("toast", SPECIAL) else " (manual)")
+        out.append(f"| `{e.id}` | {kind} | {_md_cell(e.code_loc)} | {_md_cell(cbs)} |")
     out.append("\n## Screens whose layout or buttons come from code logic, not a template\n")
     out.append("Edits to these need code changes in the named function, not just a text swap.\n")
     seen = set()
@@ -1816,20 +2119,24 @@ Placeholders produced by the generator itself (not code variables):
 Screens rendered from AST (inline f-strings in routers/services): their `source` line names the file and a
 quoted anchor; the placeholder names are the interpolated expressions with formatting wrappers stripped.
 
-Known issues found while rendering (not fixed here, bot code untouched):
-- `views/connect.py:success`: for non-Pro users and for Pro with obhod not ready, `obhod_ready()` is appended
-  after `OBHOD_PRO_ONLY` / `OBHOD_PREPARING` (the `else` of the grace check), so the screen shows a second
-  «Обход блокировок (использовано 0 ГБ)» block with an empty `<code></code>`. See `user.connect.success`,
-  `user.connect.success_pro_preparing`.
-- `texts/menu.py:subscription_block`: «⏳ Истекает сегодня» is unreachable: `days_left()` rounds up, an
-  active subscription always has >= 1 day, so the last day shows «Осталось: 1 день» (`user.menu.expires_today`).
-- Offer acceptance line is gone: the 2.1.1 plan detail screen with a chosen period
-  (`ui/renderers/subscription.py:render_subscription_plan_detail`) said «Нажимая кнопку оплаты, вы принимаете
-  условия Публичной оферты и Политики конфиденциальности» with links; 3.0 `checkout_screen` has no such line
-  (the offer is only a button on the help screen).
-- Dead texts (defined, never shown): `connect.LOADING`, `common.MAINTENANCE`, `promo.gift_link_text`,
-  `promo.BTN_ENTER_CODE`, `promo.BTN_TRIAL`, `promo.BTN_WRITE_USER`, `checkout.ADMIN_REFUND_BUSY`,
-  `checkout.AUTOPAY_INFO` (handler exists, no button leads to it).
+Fixed in the screen-kit migration (were listed here as known issues):
+- `user.connect.success*`: no second, empty «Обход блокировок (использовано 0 ГБ)» block for non-Pro users and
+  for Pro while the obhod link is not ready (`texts/connect.py:obhod_sections`).
+- `user.menu.expires_today`: the last day by the Moscow calendar says «⏳ Истекает сегодня»
+  (`texts/menu.py:_expires_today`).
+- `pay.checkout*`, `gift.checkout`: the offer acceptance line is back, with links from `OFFER_URL` /
+  `PRIVACY_URL` (defaults: the 2.1.1 documents, `texts/common.py:legal_line`).
+- Dead texts removed: `common.MAINTENANCE`, `promo.gift_link_text`.
+
+Still dead (defined, never shown): `connect.LOADING`, `promo.BTN_ENTER_CODE`, `promo.BTN_TRIAL`,
+`promo.BTN_WRITE_USER`, `checkout.ADMIN_REFUND_BUSY`, `checkout.AUTOPAY_INFO` (handler exists, no button
+leads to it).
+
+Manual (not on the kit yet): entries of type `(manual)` in the table: short admin replies in routers
+(usage strings, stop-list and block confirmations, payments_new/payment_find, legacy hits), the decision
+lines appended to review/refund alerts, nightly reports (`ObhodReport`, `CleanupReport`, `SyncReport`),
+2.x services (`referral_tracker` admin alerts, `remnawave_reconciler`, `provisioning` disabled-user alert,
+`obhod` kept-manual alert) and the 2.x site-login relay texts.
 """)
     out.append("## 2.1.1 screens with no 3.0 counterpart\n")
     for k, v in OLD_REMOVED_NOTE.items():
@@ -1886,6 +2193,8 @@ def main() -> None:
     write_mapping(out / "impl" / "screens_catalog_mapping.md", head, unknown)
     if args.raw:
         write_raw(Path(args.raw))
+    for m in MISSING_SUBS + [f"static text not found: {x}" for x in STATIC_MISSING]:
+        print(f"warning: {m}", file=sys.stderr)
     lost = sum(1 for e in ENTRIES if lost_blockquote(e))
     per = {s: sum(1 for e in ENTRIES if e.section == s) for s in SECTIONS}
     print(f"screens: {len(ENTRIES)}; sections: {per}; lost blockquote: {lost}; with 2.1.1: "
@@ -2335,3 +2644,4 @@ OLD_2_1_1 = {
 
 if __name__ == "__main__":
     main()
+

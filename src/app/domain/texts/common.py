@@ -13,7 +13,6 @@ from app.domain.texts.ui import B, E
 GENERIC_ERROR_SCREEN = ui.result("error", "Что-то пошло не так", hint="Попробуй еще раз чуть позже.")
 GENERIC_ERROR = GENERIC_ERROR_SCREEN.html()
 GENERIC_ERROR_ALERT = ui.toast("Ошибка, попробуй еще раз")
-MAINTENANCE = "Идут технические работы. Бот скоро вернется, данные и подписки на месте."
 
 # --- Buttons: aliases of the dictionary (app.domain.texts.ui.B) ---
 BTN_CONNECT = B.CONNECT

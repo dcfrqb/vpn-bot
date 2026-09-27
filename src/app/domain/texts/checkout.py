@@ -306,7 +306,7 @@ def admin_not_provisioned(*, payment_id: int, telegram_id: int, error: str) -> s
     return ui.admin_alert(
         "Оплата есть, доступ не выдан", emoji="⚠️",
         who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
-        lines=[ui.field("Payment row id", payment_id), ui.field("Ошибка", ui.code(error[:300]))],
+        lines=[ui.field("Payment row id", payment_id), f"Ошибка: {ui.code(error[:300])}"],
         hint="Бот повторит выдачу сам (повтор вебхука, recovery, реконсилер). Если не пройдет, проверь "
              "сквады и юзера в Remnawave.",
     ).html()

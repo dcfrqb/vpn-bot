@@ -152,3 +152,8 @@ def test_pushes_are_html_screens():
               promo.referral_new_payment_screen(3, 10, 0.4, 1), promo.referral_payout_screen(1, "<n>", 0)):
         assert s.type == "push"
         assert_well_formed(s.html())
+
+
+def test_admin_alert_error_is_not_escaped_twice():
+    text = checkout.admin_not_provisioned(payment_id=1, telegram_id=2, error="x<y")
+    assert "Ошибка: <code>x&lt;y</code>" in text and "&lt;code&gt;" not in text
