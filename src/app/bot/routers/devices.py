@@ -53,12 +53,13 @@ async def ask_unlink(callback: CallbackQuery, callback_data: Dev, **data) -> Non
         return
     devices_service = data["devices"]
     devices = await devices_service.list_devices(callback.from_user.id)
-    dev = next((d for d in devices if d.short_id == callback_data.id), None)
-    if dev is None:
+    found = t.number_of(devices, callback_data.id)
+    if found is None:
         text, markup = devices_view.not_found()
         await render(callback, text, markup)
         return
-    text, markup = devices_view.ask_unlink(dev)
+    n, dev = found
+    text, markup = devices_view.ask_unlink(dev, n)
     await render(callback, text, markup)
 
 

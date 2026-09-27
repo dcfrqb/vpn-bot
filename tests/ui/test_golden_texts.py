@@ -165,22 +165,56 @@ def test_connect_error_has_no_dead_back_button():
 # --- Devices -------------------------------------------------------------
 
 
-def test_devices_list_two_devices():
+def test_devices_list_cards():
     devs = [
-        DeviceInfo(hwid="aaaaaaaaaaaaaaaa11223344", platform="iOS", device_model="iPhone 15", updated_at=NOW),
-        DeviceInfo(hwid="bbbbbbbbbbbbbbbb55667788", platform="Android", device_model="Xiaomi Redmi", updated_at=NOW - timedelta(days=14)),
+        DeviceInfo(hwid="bbbbbbbbbbbbbbbb55667788", platform="Android", os_version="14", device_model="Xiaomi Redmi",
+                   user_agent="v2RayTun/5.13.2", created_at=NOW - timedelta(days=60),
+                   updated_at=NOW - timedelta(days=14)),
+        DeviceInfo(hwid="aaaaaaaaaaaaaaaa11223344", platform="iOS", os_version="18.1", device_model="iPhone 16",
+                   user_agent="Happ/3.1.0/ios CFNetwork/1568", created_at=NOW - timedelta(days=10), updated_at=NOW),
+        DeviceInfo(hwid="cccccccccccccccceck-vlad", created_at=NOW - timedelta(days=90),
+                   updated_at=NOW - timedelta(days=45)),
     ]
     text, kb = devices_view.list_screen(devs, device_limit=5, unlink_enabled=True)
 
     assert text == (
-        "📱 <b>Мои устройства (2 из 5)</b>\n<blockquote>"
-        "📱 iPhone 15, последний раз онлайн: сегодня\n"
-        "📱 Xiaomi Redmi, последний раз онлайн: 14\xa0дней назад</blockquote>\n\n"
-        "<i>Лишнее можно отвязать, освободится место под новое устройство.</i>"
+        "📱 <b>Мои устройства (3 из 5)</b>\n"
+        "<blockquote>📱 <b>1. iPhone 16</b>\niOS 18.1 · Happ 3.1\nДобавлено: 13.09.2026\nОнлайн: сегодня</blockquote>\n\n"
+        "<blockquote>📱 <b>2. Xiaomi Redmi</b>\nAndroid 14 · v2RayTun 5.13\nДобавлено: 25.07.2026\n"
+        "Онлайн: 14\xa0дней назад</blockquote>\n\n"
+        "<blockquote>📶 <b>3. Устройство 3</b>\nДобавлено: 25.06.2026\nОнлайн: 45\xa0дней назад\n"
+        "⚠️ Давно не выходило на связь</blockquote>\n\n"
+        "<i>Нажми ❌ с номером устройства, чтобы отвязать его. Место освободится сразу, а если устройство "
+        "снова подключится, приложение добавит его заново.</i>"
     )
-    assert _keyboard_texts(kb) == [
-        ["❌ Отвязать: iPhone 15"], ["❌ Отвязать: Xiaomi Redmi"], ["🏠 В меню"],
-    ]
+    assert _keyboard_texts(kb) == [["❌ 1", "❌ 2", "❌ 3"], ["🏠 В меню"]]
+    # numbers of the buttons follow the cards (last seen first), not the panel order
+    assert [b.callback_data for b in kb.inline_keyboard[0]] == [
+        "dv:ask:11223344", "dv:ask:55667788", "dv:ask:eck-vlad"]
+
+
+def test_devices_one_name_in_card_button_and_confirmation():
+    """Review bug: the card said «Неизвестное устройство» while its button said «eck-vlad»."""
+    nameless = DeviceInfo(hwid="xxxxxxxxeck-vlad", updated_at=NOW)
+    by_os = DeviceInfo(hwid="yyyyyyyy12345678", platform="windows", os_version="11", updated_at=NOW)
+    by_app = DeviceInfo(hwid="zzzzzzzz87654321", user_agent="Hiddify/2.5.7 okhttp", updated_at=NOW)
+    text, _ = devices_view.list_screen([nameless, by_os, by_app], device_limit=3, unlink_enabled=True)
+    assert "<b>1. Устройство 1</b>" in text and "<b>2. Windows 11</b>" in text and "<b>3. Hiddify 2.5</b>" in text
+    assert "eck-vlad" not in text
+    confirm, kb = devices_view.ask_unlink(nameless, 1)
+    assert confirm.startswith("❓ <b>Отвязать Устройство 1?</b>")
+    assert _keyboard_texts(kb) == [["✅ Да, отвязать", "✖️ Отмена"]]
+    assert devices_view.ask_unlink(by_os, 2)[0].startswith("❓ <b>Отвязать Windows 11?</b>")
+
+
+def test_devices_client_app_from_user_agent():
+    from app.domain.texts.devices import app_title
+
+    assert app_title("Happ/3.1.0/ios CFNetwork/1568 Darwin/24") == "Happ 3.1"
+    assert app_title("v2RayTun/5.13.2 (iPhone)") == "v2RayTun 5.13"
+    assert app_title("clash-verge/v2.0.3") == "Clash Verge 2.0"
+    assert app_title("Shadowrocket/2070 CFNetwork") == "Shadowrocket"
+    assert app_title("okhttp/4.12") == app_title("Mozilla/5.0 (X11)") == app_title(None) == ""
 
 
 def test_devices_empty():

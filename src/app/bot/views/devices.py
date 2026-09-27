@@ -22,15 +22,14 @@ def list_screen(
     support_handle: Optional[str] = None,
     active: bool = True,
 ) -> kit.View:
-    """Always shows the list (N of M); the unlink button per device is
-    behind DEVICES_UNLINK_ENABLED, otherwise the support button (review UX M3).
+    """Always shows the cards (N of M); numbered unlink buttons ``❌ n`` (n = card number)
+    are behind DEVICES_UNLINK_ENABLED, otherwise the support button (review UX M3).
     No subscription: a way to the plans (m8)."""
     screen = t.list_screen(devices, len(devices), device_limit, unlink_enabled=unlink_enabled)
     options = []
     if unlink_enabled:
-        for dev in devices:
-            name = (dev.device_model or dev.platform or dev.short_id)[:24]
-            options.append(kit.action(B.UNLINK.format(name=name), Dev(a="ask", id=dev.short_id)))
+        options = kit.grid([kit.action(B.UNLINK_N.format(n=i), Dev(a="ask", id=dev.short_id))
+                            for i, dev in enumerate(t.ordered(devices), 1)])
     return kit.view(
         screen,
         options=options,
@@ -40,9 +39,10 @@ def list_screen(
     )
 
 
-def ask_unlink(dev: DeviceInfo) -> kit.View:
+def ask_unlink(dev: DeviceInfo, n: int = 1) -> kit.View:
+    """``n``: the card number, so a nameless device is «Устройство n» here too."""
     return kit.view(
-        t.ask_unlink_screen(dev),
+        t.ask_unlink_screen(dev, n),
         primary=[kit.pair(kit.action(f"{B.YES_PREFIX}, отвязать", Dev(a="unlink", id=dev.short_id)),
                           kit.action(B.CANCEL, Dev(a="list")))],
     )
