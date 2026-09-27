@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.bot.views import connect as connect_view
 from app.bot.views import devices as devices_view
 from app.bot.views import menu as menu_view
@@ -14,6 +16,23 @@ from app.bot.views import support as support_view
 from app.domain.models import DeviceInfo, SubscriptionState
 
 NOW = datetime(2026, 9, 23, tzinfo=timezone.utc)
+
+
+class _FrozenDatetime(datetime):
+    """datetime whose now() is pinned to NOW, so golden texts do not rot with the calendar."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    import app.domain.models as models_mod
+    import app.domain.texts.devices as devices_texts
+
+    monkeypatch.setattr(models_mod, "datetime", _FrozenDatetime)
+    monkeypatch.setattr(devices_texts, "datetime", _FrozenDatetime)
 
 
 def _keyboard_texts(markup):
