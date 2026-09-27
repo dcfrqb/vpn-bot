@@ -1085,7 +1085,6 @@ def section_notify() -> None:
 
 def section_admin() -> None:
     sec = "Админка"
-    from app.bot.routers.trial_promo import _who
     from app.services.admin_stats import BotStats, PaymentLine, UserCard
     from app.services.blocklist import StopEntry
     from app.services.devices import CleanupReport
