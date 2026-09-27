@@ -799,21 +799,30 @@ def section_payments() -> None:
 
 
 DEVS = [
-    DeviceInfo(hwid="hw-aaaa-11112222", platform="iOS", device_model="iPhone 15", updated_at=NOW),
-    DeviceInfo(hwid="hw-bbbb-33334444", platform="Windows", device_model=None, updated_at=NOW - timedelta(days=1)),
-    DeviceInfo(hwid="hw-cccc-55556666", platform="Android", device_model="Pixel 8", updated_at=NOW - timedelta(days=3)),
+    DeviceInfo(hwid="hw-aaaa-11112222", platform="iOS", os_version="18.1", device_model="iPhone 15",
+               user_agent="Happ/3.1.0/ios CFNetwork/1568", created_at=NOW - timedelta(days=10), updated_at=NOW),
+    DeviceInfo(hwid="hw-bbbb-33334444", platform="Windows", os_version="11", device_model=None,
+               user_agent="Hiddify/2.5.7", created_at=NOW - timedelta(days=20), updated_at=NOW - timedelta(days=1)),
+    DeviceInfo(hwid="hw-cccc-55556666", platform="Android", os_version="14", device_model="Pixel 8",
+               user_agent="v2RayTun/5.13.2", created_at=NOW - timedelta(days=90), updated_at=NOW - timedelta(days=40)),
 ]
-DEV_SUBS = [("📱 iPhone 15, последний раз онлайн: сегодня", "{icon} {device}, последний раз онлайн: {last_seen}")]
+DEV_SUBS = [("📱 <b>1. iPhone 15</b>", "{icon} <b>{n}. {device}</b>"), ("iOS 18.1 · Happ 3.1", "{os} · {app}"),
+            (f"Добавлено: {fmt_date_msk(NOW - timedelta(days=10))}", "Добавлено: {added}"),
+            ("Онлайн: сегодня", "Онлайн: {last_seen}")]
+DEV_NOTE = ("карточка повторяется для каждого устройства, свежие сверху; {icon}: 📱 телефон, 💻 компьютер, "
+            "📶 неизвестно; {device}: модель, иначе ОС, иначе приложение, иначе «Устройство {n}» (одно имя в "
+            "карточке, кнопке и подтверждении); {os}: платформа и версия ОС, {app}: приложение из User-Agent "
+            "(части, которых нет, не выводятся); {last_seen}: сегодня / вчера / N дней назад (МСК); строка "
+            "«⚠️ Давно не выходило на связь», если устройство молчит больше 30 дней")
 
 
 def section_devices() -> None:
     sec = "Устройства"
     code = "src/app/domain/texts/devices.py; buttons src/app/bot/views/devices.py"
-    layout = ("views/devices.py:list_screen: unlink button per device (DEVICES_UNLINK_ENABLED) or support; "
-              "plans (no active subscription); back to main. Device lines: texts/devices.py:_device_line, icon by "
-              "platform (_device_icon), last seen (_last_seen)")
-    note = ("строка устройства повторяется для каждого устройства; значок выбирается кодом по платформе "
-            "(📱 телефон, 💻 компьютер, 📶 неизвестно)")
+    layout = ("views/devices.py:list_screen: numbered unlink buttons ❌ n in kit.grid rows of <= 4 "
+              "(DEVICES_UNLINK_ENABLED) or support; plans (no active subscription); back to main. Cards: "
+              "texts/devices.py:device_card, name display_name, order ordered(), app app_title")
+    note = DEV_NOTE
     text, mk = VD.list_screen(DEVS, device_limit=5, unlink_enabled=False, support_handle=SUPPORT)
     add("dev.list", sec, "src/app/domain/texts/devices.py:list_text; views/devices.py:list_screen",
         "«📱 Мои устройства» или /devices (отвязывание выключено, как сейчас на проде)", text, mk,
@@ -821,10 +830,10 @@ def section_devices() -> None:
         code=code, layout=layout, note=note)
     text, mk = VD.list_screen(DEVS, device_limit=5, unlink_enabled=True)
     add("dev.list.unlink_on", sec, "src/app/domain/texts/devices.py:list_text; views/devices.py:list_screen",
-        "«📱 Мои устройства» при DEVICES_UNLINK_ENABLED (кнопка «Отвязать» у каждого)", text, mk,
-        subs=DEV_SUBS + [("(3 из 5)", "({devices_used} из {device_limit})"),
-                         ("❌ Отвязать: iPhone 15", "❌ Отвязать: {device}")],
-        code=code, layout=layout, note=note + "; имя в кнопке обрезается до 24 символов")
+        "«📱 Мои устройства» при DEVICES_UNLINK_ENABLED (номерные кнопки «❌ n»)", text, mk,
+        subs=DEV_SUBS + [("(3 из 5)", "({devices_used} из {device_limit})")],
+        code=code, layout=layout, note=note + "; кнопка «❌ n» на каждую карточку, номер = номер карточки, "
+                                              "до 4 в ряд (5 = 3+2, 6 = 3+3); имя обрезается до 32 символов")
     text, mk = VD.list_screen(DEVS[:1], device_limit=None, unlink_enabled=False, support_handle=SUPPORT, active=False)
     add("dev.list.no_sub", sec, "src/app/domain/texts/devices.py:list_text; views/devices.py:list_screen",
         "«📱 Мои устройства» без активной подписки (устройства остались)", text, mk,
@@ -833,9 +842,10 @@ def section_devices() -> None:
     text, mk = VD.list_screen([], device_limit=5, unlink_enabled=False, support_handle=SUPPORT)
     add("dev.list.empty", sec, "src/app/domain/texts/devices.py:EMPTY", "«📱 Мои устройства», ни одного подключения",
         text, mk, code="src/app/domain/texts/devices.py EMPTY", layout=layout)
-    text, mk = VD.ask_unlink(DEVS[0])
+    text, mk = VD.ask_unlink(DEVS[0], 1)
     add("dev.ask_unlink", sec, "src/app/domain/texts/devices.py:ask_unlink; views/devices.py:ask_unlink",
-        "нажал «❌ Отвязать: ...»", text, mk, subs=[("«iPhone 15»", "«{device}»")],
+        "нажал «❌ n» под карточкой", text, mk, subs=[("Отвязать iPhone 15?", "Отвязать {device}?"),
+                                                     ("dv:unlink:11112222", "dv:unlink:{device_id}")],
         code="src/app/domain/texts/devices.py ask_unlink; buttons in src/app/bot/views/devices.py:ask_unlink")
     text, mk = VD.not_found()
     add("dev.not_found", sec, "src/app/domain/texts/devices.py:UNLINK_NOT_FOUND; views/devices.py:not_found",
@@ -1095,6 +1105,7 @@ def section_admin() -> None:
     from app.services.referral import InvitedRow, ReferralStats
 
     acode = "src/app/bot/views/admin.py {f} (text is inline in the view); labels src/app/domain/texts/admin.py BTN_*"
+    ADM = VA.plain("")[1]  # [👑 В админку] under admin command replies (views/admin.py note/plain)
     stats = BotStats(total_users=1482, today_users=7, active_subscriptions=213, trials_total=356, trials_today=3,
                      paid_total=905, paid_today=2, revenue_total=312450, revenue_today=898, revenue_30d=48750,
                      refunded_total=2196)
@@ -1153,11 +1164,11 @@ def section_admin() -> None:
     add("admin.sync", sec, "src/app/bot/routers/admin/users.py:_sync", "/sync <id> или /syncme",
         TA.result_screen("ok", f"Sync {TG}", "Подписка: ✅ активна", "Тариф: pro", f"До: {DT_GRACE}"),
         subs=[(str(TG), "{id}"), ("✅ активна", "{status}"), ("Тариф: pro", "Тариф: {plan}"), (DT_GRACE, "{datetime}")],
-        code="src/app/bot/routers/admin/users.py _sync (T.result_screen)",
+        markup=ADM, code="src/app/bot/routers/admin/users.py _sync (T.result_screen)",
         note="{status}: «✅ активна», «❌ нет» или «панель недоступна»")
     add("admin.sync_failed", sec, "src/app/bot/routers/admin/users.py:_sync", "/sync, панель ответила ошибкой",
         TA.result_screen("error", "Синхронизация", f"Не удалась для {TG} (RemnaUnavailable)"),
-        subs=[(str(TG), "{id}"), ("RemnaUnavailable", "{error}")], code="src/app/bot/routers/admin/users.py _sync")
+        ADM, subs=[(str(TG), "{id}"), ("RemnaUnavailable", "{error}")], code="src/app/bot/routers/admin/users.py _sync")
 
     # access requests
     req_kb = VA.request_keyboard("friend", f"{TG}.1760000000", TG)
@@ -1202,7 +1213,8 @@ def section_admin() -> None:
         ("admin.msg.no_db", "NO_DB", "админ-экран без БД", FMT_HTML),
         ("admin.msg.done", "DONE", "действие в карточке обхода выполнено", FMT_ALERT_SMALL),
     ]:
-        add(aid, sec, f"src/app/domain/texts/admin.py:{const}", when, getattr(TA, const), fmt=fmt,
+        add(aid, sec, f"src/app/domain/texts/admin.py:{const}", when, getattr(TA, const),
+            ADM if fmt == FMT_HTML else None, fmt=fmt,
             code=f"src/app/domain/texts/admin.py {const}",
             note="в /grant этот же текст приходит обычным сообщением" if fmt != FMT_HTML and const != "USE_PANEL" and const != "DONE" else "")
     for uid_, const, when, kw in [
@@ -1213,13 +1225,13 @@ def section_admin() -> None:
         ("admin.usage.stoplist", "USAGE_STOPLIST", "/stoplist_add без аргументов (и под стоп-листом)", {}),
     ]:
         t = getattr(TA, const)
-        add(uid_, sec, f"src/app/domain/texts/admin.py:{const}", when, t.format(**kw) if kw else t,
+        add(uid_, sec, f"src/app/domain/texts/admin.py:{const}", when, t.format(**kw) if kw else t, ADM,
             subs=[("/whois", "/{cmd}")] if kw else [], code=f"src/app/domain/texts/admin.py {const}")
     add_static("admin.grant.done", sec, "bot/routers/admin/grants.py", ", до ", "/grant <id> <дней> выполнен",
                func="cmd_grant", names={"fmt_date_msk(until)": "date"},
-               note="{label}: «+7 дн.» или «+7 дн. (pro)»; пользователю уходит promo.access_granted_days")
+               note="{label}: «+7 дн.» или «+7 дн. (pro)»; пользователю уходит promo.access_granted_days", buttons=ADM)
     add_static("admin.grant.bad_plan", sec, "bot/routers/admin/grants.py", "Неизвестный тариф", "/grant с неизвестным тарифом",
-               func="cmd_grant")
+               func="cmd_grant", buttons=ADM)
 
     # referral
     rst = ReferralStats(code="sun718", activations=41, paying=12, earned_months=23, full_bonus=4, bonus=4.6,
@@ -1237,9 +1249,9 @@ def section_admin() -> None:
         VA.referral(None), [VA.BACK_TO_PANEL], code=acode.format(f="referral"))
     add_static("admin.referral.payout_done", sec, "bot/routers/admin/ops.py", "Записано: ", "/referral_payout sun718 N выполнен",
                func="cmd_referral_payout",
-               note="если выплачено больше доступного, сверху строка из admin.referral.payout_warn")
+               note="если выплачено больше доступного, сверху строка из admin.referral.payout_warn", buttons=ADM)
     add_static("admin.referral.payout_warn", sec, "bot/routers/admin/ops.py", "а доступно было только",
-               "/referral_payout больше доступного (предупреждение над ответом)", func="cmd_referral_payout")
+               "/referral_payout больше доступного (предупреждение над ответом)", func="cmd_referral_payout", buttons=ADM)
 
     # obhod
     text, mk = VA.obhod_overview({"active": 38, "total": 44})
@@ -1264,7 +1276,7 @@ def section_admin() -> None:
         "«⛔ Выключить» в карточке обхода", text, mk, subs=[(str(TG), "{id}")],
         code="text: src/app/bot/routers/admin/obhod.py cb_obhod; buttons: src/app/bot/views/admin.py confirm")
     add_static("admin.obhod_read_failed", sec, "bot/routers/admin/obhod.py", "Не получилось прочитать обход",
-               "/obhod <id>, панель или БД недоступны", func="_card")
+               "/obhod <id>, панель или БД недоступны", func="_card", buttons=ADM)
     for aid, anchor, when in [
         ("admin.alert_cb.obhod_pkg_unknown", "Неизвестный пакет", "кнопка пакета с неизвестным кодом"),
         ("admin.alert_cb.obhod_pkg_failed", "Не применился", "пакет не применился"),
@@ -1292,7 +1304,7 @@ def section_admin() -> None:
         ("admin.stoplist.not_found", "Такой записи нет", "/stoplist_del несуществующего", "cmd_stoplist_del"),
     ]:
         add_static(aid, sec, "bot/routers/admin/ops.py", anchor, when, func=func,
-                   names={"h(key)": "key"})
+                   names={"h(key)": "key"}, buttons=ADM)
 
     # promo codes
     row = PromoCodeRow(id=17, code="AUTUMN7", kind="days", plan_code="standard", days=7, audience="new", max_uses=100,
@@ -1319,9 +1331,9 @@ def section_admin() -> None:
         note="{note}: «⚠️ PROMO_CODES_ENABLED выключен: код не примется, пока флаг не включат.» (только когда флаг выключен)")
     add_static("admin.promo_not_created", sec, "bot/routers/admin/promo.py", "Не создал:", "/promo_new с ошибкой",
                func="cmd_promo_new", names={"h(str(e))": "error", "T.USAGE_PROMO_NEW": "usage_promo_new"},
-               note="{usage_promo_new}: текст admin.usage.promo_new; {error}: причина из parse_promo_new")
+               note="{usage_promo_new}: текст admin.usage.promo_new; {error}: причина из parse_promo_new", buttons=ADM)
     add_static("admin.promo_exists", sec, "bot/routers/admin/promo.py", "Такой код уже есть", "/promo_new с занятым кодом",
-               func="cmd_promo_new")
+               func="cmd_promo_new", buttons=ADM)
     add_static("admin.alert_cb.promo_not_found", sec, "bot/routers/admin/promo.py", "Промокод не найден",
                "карточка удаленного кода", fmt=FMT_ALERT, func="cb_code")
 
@@ -1373,25 +1385,28 @@ def section_admin() -> None:
                                 (f"+{days_ru(3)}: начислено 120", "+{credit_days}: начислено {credited}"),
                                 (fmt_date_msk(run.started_at, with_time=True), "{started}")],
         code=bcode.format(f="progress"), note="строка «Финиш: ...» после завершения; кнопка «🛑 Остановить» пока идет")
+    BC_NAV_NOTE = ("на каждом шаге внизу [✖️ Отменить рассылку] [👑 В админку] (черновик сбрасывается), выше "
+                   "[⬅️ Назад] на прошлый шаг (кроме шага 1); /cancel работает как «Отменить»")
     for bid, const, kbf, when in [
-        ("admin.broadcast.step_text", "BC_STEP_TEXT", None, "«➕ Новая рассылка» или /bc_new"),
+        ("admin.broadcast.step_text", "BC_STEP_TEXT", VB.text_kb, "«➕ Новая рассылка» или /bc_new"),
         ("admin.broadcast.step_photo", "BC_STEP_PHOTO", lambda: VB.skip_kb("photo"), "мастер, шаг 2"),
         ("admin.broadcast.step_buttons", "BC_STEP_BUTTONS", lambda: VB.skip_kb("buttons"), "мастер, шаг 3"),
         ("admin.broadcast.step_segment", "BC_STEP_SEGMENT", VB.segment_kb, "мастер, шаг 4"),
-        ("admin.broadcast.step_days", "BC_STEP_DAYS", None, "мастер: выбран сегмент с ограничением по дням"),
-        ("admin.broadcast.step_ids", "BC_STEP_IDS", None, "мастер: сегмент «список ID»"),
+        ("admin.broadcast.step_days", "BC_STEP_DAYS", VB.days_kb, "мастер: выбран сегмент с ограничением по дням"),
+        ("admin.broadcast.step_ids", "BC_STEP_IDS", VB.ids_kb, "мастер: сегмент «список ID»"),
         ("admin.broadcast.step_credit", "BC_STEP_CREDIT", VB.credit_kb, "мастер, шаг 5"),
         ("admin.broadcast.step_sound", "BC_STEP_SOUND", VB.sound_kb, "мастер, шаг 6"),
     ]:
         add(bid, sec, f"src/app/domain/texts/admin.py:{const}" + ("; кнопки views/broadcast.py" if kbf else ""), when,
             getattr(TA, const + "_SCREEN", getattr(TA, const)), kbf() if kbf else None,
             code=f"src/app/domain/texts/admin.py {const}" + ("; buttons src/app/bot/views/broadcast.py" if kbf else ""),
-            note="названия сегментов: SEGMENT_TITLES в texts/admin.py" if const == "BC_STEP_SEGMENT" else "")
+            note=("названия сегментов: SEGMENT_TITLES в texts/admin.py; " if const == "BC_STEP_SEGMENT" else "")
+            + BC_NAV_NOTE)
     add("admin.broadcast.step_subkind", sec, "src/app/domain/texts/admin.py:BC_STEP_SUBKIND_SCREEN",
-        "мастер: сегмент «активные» или «истекшие»", TA.BC_STEP_SUBKIND_SCREEN, VB.subkind_kb(),
+        "мастер: сегмент «активные» или «истекшие»", TA.BC_STEP_SUBKIND_SCREEN, VB.subkind_kb(), note=BC_NAV_NOTE,
         code="src/app/domain/texts/admin.py BC_STEP_SUBKIND_SCREEN; buttons src/app/bot/views/broadcast.py subkind_kb")
     for bid, const, when, kw, fmt in [
-        ("admin.broadcast.cancelled", "BC_CANCELLED", "/cancel или «Отмена» в мастере", {}, FMT_HTML),
+        ("admin.broadcast.cancelled", "BC_CANCELLED", "«✖️ Отменить рассылку» или /cancel в мастере", {}, FMT_HTML),
         ("admin.broadcast.empty_text", "BC_EMPTY_TEXT", "мастер: пустой текст", {}, FMT_HTML),
         ("admin.broadcast.too_long", "BC_TOO_LONG", "мастер: текст длиннее 4000", {"n": "{n}"}, FMT_HTML),
         ("admin.broadcast.bad_buttons", "BC_BAD_BUTTONS", "мастер: кривой JSON кнопок", {"err": "{error}"}, FMT_HTML),
@@ -1412,8 +1427,15 @@ def section_admin() -> None:
             warn = const in ("BC_EMPTY_TEXT", "BC_TOO_LONG", "BC_BAD_BUTTONS", "BC_BAD_NUMBER", "BC_BAD_IDS",
                              "BC_PREVIEW_FAILED")
             t = TA.bc_note(t, kind="warn" if warn else "info")
-        add(bid, sec, f"src/app/domain/texts/admin.py:{const}", when, t, fmt=fmt,
-            code=f"src/app/domain/texts/admin.py {const}" + (" (str.format placeholders)" if kw else ""))
+        bkb = None
+        if fmt == FMT_HTML:
+            bkb = {"BC_EMPTY_TEXT": VB.text_kb, "BC_TOO_LONG": VB.text_kb, "BC_BAD_NUMBER": VB.days_kb,
+                   "BC_BAD_IDS": VB.ids_kb, "BC_BAD_BUTTONS": lambda: VB.skip_kb("buttons"),
+                   "BC_STARTED": lambda: VB.started_kb(12)}.get(const, VB.exit_kb)()
+        add(bid, sec, f"src/app/domain/texts/admin.py:{const}", when, t, bkb, fmt=fmt, opt=bsubs,
+            code=f"src/app/domain/texts/admin.py {const}" + (" (str.format placeholders)" if kw else ""),
+            note="ошибка ввода в мастере: кнопки того же шага" if bkb is not None and const.startswith("BC_BAD")
+            or const in ("BC_EMPTY_TEXT", "BC_TOO_LONG") else "")
     add_static("admin.broadcast.preview_sent", sec, "bot/routers/admin/broadcast.py", "Превью отправлено",
                "«👁 Превью себе»", fmt=FMT_ALERT_SMALL, func="_preview")
     add_static("admin.broadcast.unknown_segment", sec, "bot/routers/admin/broadcast.py", "Неизвестный сегмент",
@@ -1433,25 +1455,25 @@ def section_admin() -> None:
         ("admin.broadcast.usage_cancel", "/bc_cancel &lt;id&gt;", "/bc_cancel без ID"),
         ("admin.broadcast.sent_to", "Отправлено в чат", "/bc_send_to выполнен"),
     ]:
-        add_static(bid, sec, "bot/routers/admin/broadcast.py", anchor, when, names={"ids[1]": "id"})
+        add_static(bid, sec, "bot/routers/admin/broadcast.py", anchor, when, names={"ids[1]": "id"}, buttons=VB.exit_kb())
 
     # 2.x payment-request log and legacy hits
     add("admin.payments_new", sec, "src/app/bot/routers/admin/ops.py:cmd_payments_new", "/payments_new",
         static("bot/routers/admin/ops.py", "Новые заявки на оплату") + "\n\n"
         + static("bot/routers/admin/ops.py", "req_id={", {"i": "n"}),
-        code="src/app/bot/routers/admin/ops.py cmd_payments_new (header and line f-strings)",
+        markup=ADM, code="src/app/bot/routers/admin/ops.py cmd_payments_new (header and line f-strings)",
         note="строка заявки повторяется (до 10)")
-    add_static("admin.payments_new_empty", sec, "bot/routers/admin/ops.py", "Новых заявок нет", "/payments_new, заявок нет")
-    add_static("admin.payment_find_usage", sec, "bot/routers/admin/ops.py", "/payment_find PRQ-XXXXX", "/payment_find без ID")
+    add_static("admin.payments_new_empty", sec, "bot/routers/admin/ops.py", "Новых заявок нет", "/payments_new, заявок нет", buttons=ADM)
+    add_static("admin.payment_find_usage", sec, "bot/routers/admin/ops.py", "/payment_find PRQ-XXXXX", "/payment_find без ID", buttons=ADM)
     add_static("admin.payment_find_none", sec, "bot/routers/admin/ops.py", "не найдена", "/payment_find, заявка не найдена",
-               names={"h(req_id)": "req_id"})
+               names={"h(req_id)": "req_id"}, buttons=ADM)
     add("admin.payment_find", sec, "src/app/bot/routers/admin/ops.py:cmd_payment_find", "/payment_find <req_id>",
         static("bot/routers/admin/ops.py", "📋 <b>Заявка ", {"h(req_id)": "req_id"}) + "\n\n"
         + static("bot/routers/admin/ops.py", "event={"),
-        code="src/app/bot/routers/admin/ops.py cmd_payment_find", note="блок event/tg_id повторяется")
+        markup=ADM, code="src/app/bot/routers/admin/ops.py cmd_payment_find", note="блок event/tg_id повторяется")
     add("admin.legacy_hits", sec, "src/app/bot/routers/admin/ops.py:cmd_legacy_hits", "/legacy_hits (нажатия старых кнопок)",
         static("bot/routers/admin/ops.py", "Старые кнопки (2.x)", {"body": "lines"}),
-        code="src/app/bot/routers/admin/ops.py cmd_legacy_hits",
+        markup=ADM, code="src/app/bot/routers/admin/ops.py cmd_legacy_hits",
         note="{lines}: строки «• {кнопка}: {число}» или «Нажатий старых кнопок нет.»")
 
     # guard texts
@@ -1852,11 +1874,15 @@ TYPE_DOCS = {
 <i>{подсказка}</i>""", "Кнопки-ссылки (открыть ссылку, инструкция, поддержка), действия, футер [🏠 В меню].",
      "user.connect.success_pro"),
     "items": ("""{эмодзи} <b>{заголовок} ({n} из {limit})</b>
-<blockquote>{иконка} {элемент}, {деталь}
-{иконка} {элемент}, {деталь}</blockquote>
+<blockquote>{иконка} <b>1. {элемент}</b>
+{детали, по строке}</blockquote>
 
-<i>{что можно сделать со списком}</i>""", "Действие на каждый элемент в своем ряду, затем прочее, футер [🏠 В меню]. "
-     "Пустой список: одна строка в цитате.", "dev.list.unlink_on"),
+<blockquote>{иконка} <b>2. {элемент}</b>
+{детали, по строке}</blockquote>
+
+<i>{что можно сделать со списком}</i>""", "Каждый элемент в своей цитате-карточке с номером (или строками в одной "
+     "цитате). Номерные кнопки [❌ 1] [❌ 2] ... до 4 в ряд, номер = номер карточки, затем прочее, футер "
+     "[🏠 В меню]. Пустой список: одна строка в цитате.", "dev.list.unlink_on"),
     "confirm": ("""❓ <b>{вопрос?}</b>
 <blockquote>{последствия}</blockquote>""", "Один ряд: [✅ Да, {действие}] [✖️ Отмена]. Футера нет.", "dev.ask_unlink"),
     "prompt": ("""✍️ <b>{что прислать}</b>
@@ -1875,7 +1901,7 @@ TYPE_DOCS = {
 {эмодзи} <b>{раздел}</b>
 <blockquote>{строки или элементы списка}</blockquote>
 
-<i>{команды или подсказка}</i>""", "Действия, листалка [⬅️] [➡️], футер [⬅️ В админку] или [⬅️ Назад].", "admin.stats"),
+<i>{команды или подсказка}</i>""", "Действия, листалка [⬅️] [➡️], футер [👑 В админку] или [⬅️ Назад] [👑 В админку]; шаг мастера: [⬅️ Назад], затем [✖️ Отменить рассылку] [👑 В админку].", "admin.stats"),
     "admin_alert": ("""{эмодзи} <b>{событие}</b>
 <blockquote>👤 {имя} @{username}
 🆔 {id}</blockquote>
@@ -1940,7 +1966,11 @@ def _content_md(e: Entry) -> list[str]:
     out = []
     if sc.title:
         out.append(f"заголовок: {sc.emoji} {t(sc.title)}".replace(":  ", ": "))
+    prev = None
     for bl in sc.blocks:
+        if prev is not None and prev.quote and bl.quote and not bl.title:
+            out.append("")  # two quotes in a row (item cards): keep them apart
+        prev = bl
         if bl.title:
             out.append(f"раздел: {bl.emoji} {t(bl.title)}".replace(":  ", ": "))
         for line in bl.lines:
