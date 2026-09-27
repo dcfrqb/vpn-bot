@@ -10,7 +10,7 @@ from typing import Optional
 from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.callbacks import Adm, Dev, Nav, Period
-from app.bot.views import kb, kit
+from app.bot.views import kit
 from app.domain.texts import notify as T
 
 # The 3.0 packages screen (review UX m24: no legacy hit per press).
@@ -38,6 +38,7 @@ def obhod_packages_kb() -> InlineKeyboardMarkup:
 
 
 def maintenance_admin_kb(active: bool) -> InlineKeyboardMarkup:
-    if active:
-        return kb([[(T.BTN_MAINT_OFF, Adm(s="maint", a="off"))]])
-    return kb([[(T.BTN_MAINT_ON, Adm(s="maint", a="on"))]])
+    """Admin screen /maintenance: the toggle, then [⬅️ В админку]."""
+    toggle = (kit.action(T.BTN_MAINT_OFF, Adm(s="maint", a="off")) if active
+              else kit.action(T.BTN_MAINT_ON, Adm(s="maint", a="on")))
+    return kit.keyboard(primary=[toggle], footer=kit.Footer.to_admin())

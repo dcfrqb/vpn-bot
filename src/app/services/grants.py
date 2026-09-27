@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any, Optional, Protocol
 
 from app.domain.models import AdminTopic, Entitlement, EntitlementSource, SubKind, SubscriptionState
-from app.domain.texts import fmt_date_msk, h
+from app.domain.texts import fmt_date_msk, ui
 from app.logger import logger
 from app.services.provisioning_rules import CreditOutcomeUnknown
 
@@ -367,9 +367,12 @@ class GrantsService:
         try:
             await self.notifier.notify_admins(
                 AdminTopic.PROMO,
-                f"⭐ <b>Выдача администратором</b>\n\n🆔 <code>{tg}</code>\n📦 {h(label)}\n"
-                f"📅 До: {'бессрочно' if days is None and not extend else fmt_date_msk(state.expires_at)}\n"
-                f"👤 Админ: <code>{int(admin_id)}</code>",
+                ui.admin_alert("Выдача администратором", emoji="⭐",
+                               who=ui.who_block(name=None, username=None, telegram_id=int(tg)),
+                               lines=[ui.field("Тариф", label),
+                                      ui.field("До", "бессрочно" if days is None and not extend
+                                               else fmt_date_msk(state.expires_at)),
+                                      f"Админ: <code>{int(admin_id)}</code>"]).html(),
                 html=True,
             )
         except Exception:  # noqa: BLE001

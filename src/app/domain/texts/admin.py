@@ -48,9 +48,17 @@ PROCESSED = "✅ Обработано"
 
 # ----------------------------------------------------------------- requests (/friend, /admin)
 
-REQUEST_TITLE_FRIEND = "👤 <b>Запрос на доступ (/friend)</b>"
-REQUEST_TITLE_ADMIN = "👤 <b>Запрос на доступ (промокод /admin)</b>"
+REQUEST_TITLE_FRIEND = "Запрос на доступ (/friend)"
+REQUEST_TITLE_ADMIN = "Запрос на доступ (промокод /admin)"
 REQUEST_HINT = "Выдай Pro или отклони запрос."
+
+
+def access_request_alert(title: str, *, name: str, username: "str | None", telegram_id: int) -> str:
+    """/friend and /admin (non-admin) access requests: ``ui.admin_alert``, HTML."""
+    from app.domain.texts import ui
+
+    return ui.admin_alert(title, emoji="👤", who=ui.who_block(name=name, username=username, telegram_id=telegram_id),
+                          hint=REQUEST_HINT).html()
 BTN_GRANT_1M = "Выдать Pro на 1 месяц"
 BTN_GRANT_3M = "Выдать Pro на 3 месяца"
 BTN_GRANT_FOREVER = "Выдать Pro навсегда"

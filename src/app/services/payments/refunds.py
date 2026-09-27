@@ -29,7 +29,6 @@
 Админу всегда уходит сообщение о возврате (один раз на refund_id).
 """
 from datetime import datetime, timezone
-from html import escape as _he
 from typing import Any, Dict, Optional
 
 from sqlalchemy import select
@@ -136,12 +135,11 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         )
         payment = res.scalar_one_or_none()
         if not payment:
-            await _notify_admins(bot, (
-                "↩️ <b>Возврат по неизвестному платежу</b>\n\n"
-                f"Refund: <code>{_he(str(refund_id))}</code>\n"
-                f"Payment: <code>{_he(str(payment_ext_id))}</code>\n"
-                f"Сумма: {_rub(refund['amount'])} {_he(str(refund.get('currency') or ''))}\n"
-                "Платежа нет в БД бота, доступ не трогали."
+            from app.domain.texts.checkout import admin_refund_unknown
+
+            await _notify_admins(bot, admin_refund_unknown(
+                refund_id=str(refund_id), external_id=str(payment_ext_id), amount=_rub(refund['amount']),
+                currency=str(refund.get('currency') or ''),
             ))
             return True
 
@@ -291,14 +289,12 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         except Exception as e:
             logger.debug(f"refund {refund_id}: suppress expiry notices failed: {e}")
 
-    await _notify_admins(bot, (
-        f"↩️ <b>{'Полный' if is_full else 'Частичный'} возврат</b>\n\n"
-        f"Telegram ID: <code>{tg_id}</code>\n"
-        f"Payment: <code>{_he(str(payment_ext_id))}</code>\n"
-        f"Возврат: {_rub(refund['amount'])} ₽ "
-        f"(всего возвращено {_rub(refunded_total)} из {_rub(paid_amount)} ₽)\n"
-        f"Тариф: {_he(_plan_line(plan_code, period_months))}\n\n"
-        f"{_he(action_note + obhod_note)}"
+    from app.domain.texts.checkout import admin_refund_webhook
+
+    await _notify_admins(bot, admin_refund_webhook(
+        full=is_full, telegram_id=int(tg_id), external_id=str(payment_ext_id), amount=refund['amount'],
+        refunded_total=refunded_total, paid_amount=paid_amount, plan_line=_plan_line(plan_code, period_months),
+        note=action_note + obhod_note,
     ))
     if user_text:
         try:

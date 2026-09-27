@@ -211,9 +211,9 @@ class Fulfillment(FulfillmentNotices):
             logger.error(f"stars payment for unknown row: payment={payment_id} tg_id={telegram_id}")
             await self.d.notifier.notify_admins(
                 AdminTopic.PAYMENTS,
-                f"Оплата звездами без платежа в БД: tg_id={telegram_id}, payment={payment_id}, "
-                f"{total_amount} {currency}, charge={charge_id}. Проверь и верни звезды вручную.",
-                dedup_key=f"stars:orphan:{charge_id}", dedup_ttl=ALERT_TTL_S,
+                T.admin_stars_orphan(telegram_id=int(telegram_id), payment_id=payment_id, amount=total_amount,
+                                     currency=currency, charge_id=charge_id),
+                html=True, dedup_key=f"stars:orphan:{charge_id}", dedup_ttl=ALERT_TTL_S,
             )
             return FulfilResult(Outcome.NOT_FOUND)
         if rec.status in PENDING_STATUSES:
@@ -235,9 +235,8 @@ class Fulfillment(FulfillmentNotices):
             logger.error(f"stars: second charge {charge_id} for payment {rec.id}")
             await self.d.notifier.notify_admins(
                 AdminTopic.PAYMENTS,
-                f"Повторная оплата звездами одного счета: payment #{rec.id}, tg_id={telegram_id}, "
-                f"charge={charge_id}. Верни звезды вручную.",
-                dedup_key=f"stars:dup:{charge_id}", dedup_ttl=ALERT_TTL_S,
+                T.admin_stars_dup(telegram_id=int(telegram_id), payment_id=rec.id, charge_id=charge_id),
+                html=True, dedup_key=f"stars:dup:{charge_id}", dedup_ttl=ALERT_TTL_S,
             )
             return FulfilResult(Outcome.ALREADY, rec)
         return await self.process(rec.id, source="stars")

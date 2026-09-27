@@ -88,7 +88,7 @@ class PanelHealthMonitor:
                 logger.warning(f"panel_health: guard read failed ({type(e).__name__})")
             if was_down or cleared:
                 await delete_key(DOWN_KEY)
-                await self.notifier.notify_admins(AdminTopic.PANEL, T.ADMIN_PANEL_UP)
+                await self.notifier.notify_admins(AdminTopic.PANEL, T.ADMIN_PANEL_UP, html=True)
                 return "recovered"
             return "ok"
 
@@ -111,7 +111,7 @@ class PanelHealthMonitor:
         first = await set_once(DOWN_KEY, "1", ttl=7 * 24 * 3600)
         if first is True or (first is None and fails == FAILS_THRESHOLD):
             await self.notifier.notify_admins(
-                AdminTopic.PANEL, T.admin_panel_down(int(fails), switched),
+                AdminTopic.PANEL, T.admin_panel_down(int(fails), switched), html=True,
                 dedup_key="panel_down", dedup_ttl=1800,
             )
         return "down"

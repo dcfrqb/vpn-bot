@@ -54,15 +54,16 @@ async def redeem_sun718(engine: Any, tg: int, promo: Any) -> PromoReward:
     code = promo.code
     await engine.repo.ensure_user(tg)
     if await engine.repo.builtin_used(code, tg):
-        await engine._alert("⚠️ <b>SUN718: повторная активация</b>", tg, "Повторно не выдавали, в БД ничего не писали.")
+        await engine._alert("SUN718: повторная активация", tg, "Повторно не выдавали, в БД ничего не писали.", emoji="⚠️")
         return PromoReward(code=code, outcome=PromoOutcome.ALREADY_USED)
     state = await engine._state(tg)
     if state.stale:
-        await engine._alert("❌ <b>SUN718: панель недоступна</b>", tg, "Статус подписки не проверен, ничего не выдали.")
+        await engine._alert("SUN718: панель недоступна", tg, "Статус подписки не проверен, ничего не выдали.", emoji="❌")
         return PromoReward(code=code, outcome=PromoOutcome.ERROR)
     exp = ensure_utc(state.expires_at)
     if state.is_lifetime or (exp is not None and exp.year >= LIFETIME_YEAR):
-        await engine._alert("🌟 <b>SUN718: бессрочная подписка</b>", tg, "Отказ (рефералить бессрочных нельзя), в БД не писали.")
+        await engine._alert("SUN718: бессрочная подписка", tg, "Отказ (рефералить бессрочных нельзя), в БД не писали.",
+                            emoji="🌟")
         return PromoReward(code=code, outcome=PromoOutcome.NOT_ELIGIBLE, plan_code="lifetime")
     current_plan: Optional[str] = None
     if state.active:
@@ -85,7 +86,8 @@ async def redeem_sun718(engine: Any, tg: int, promo: Any) -> PromoReward:
     if rec.status == "used":
         return PromoReward(code=code, outcome=PromoOutcome.ALREADY_USED)
     if rec.status != "ok":
-        await engine._alert("❌ <b>SUN718: не записали активацию</b>", tg, "Подписка не выдана (без записи код стал бы многоразовым).")
+        await engine._alert("SUN718: не записали активацию", tg,
+                            "Подписка не выдана (без записи код стал бы многоразовым).", emoji="❌")
         return PromoReward(code=code, outcome=PromoOutcome.ERROR)
     ent = Entitlement(plan_code="pro", source=EntitlementSource.PROMO, days=promo.days, note="promo:sun718")
     try:
@@ -93,16 +95,16 @@ async def redeem_sun718(engine: Any, tg: int, promo: Any) -> PromoReward:
     except Exception as e:  # noqa: BLE001
         logger.error(f"sun718: grant failed tg={tg} ({type(e).__name__})")
         await engine.repo.rollback_builtin(code, tg)
-        await engine._alert("❌ <b>SUN718: выдача не удалась</b>", tg, "Запись откатили, пользователь может повторить.")
+        await engine._alert("SUN718: выдача не удалась", tg, "Запись откатили, пользователь может повторить.", emoji="❌")
         return PromoReward(code=code, outcome=PromoOutcome.ERROR)
     await engine.repo.finish(rec.redemption_id, True, {"plan": "pro", "days": promo.days, "revert": schedule_revert})
     if schedule_revert:
-        line = (f"📦 Pro {promo.days} дн. поверх {h(current_plan or 'не-Pro')}\n"
-                f"🔄 Возврат тарифа: {fmt_date_msk(revert_at, with_time=True)} на {h(current_plan or 'basic')}")
+        lines = [f"Тариф: Pro {promo.days} дн. поверх {h(current_plan or 'не-Pro')}",
+                 f"Возврат тарифа: {fmt_date_msk(revert_at, with_time=True)} на {h(current_plan or 'basic')}"]
     else:
-        line = f"📦 Pro {promo.days} дн.{' (продление)' if state.active else ''}"
-    await engine._alert("🎁 <b>SUN718 активирован</b>", tg,
-                      f"{line}\n📅 До: {fmt_date_msk(new_state.expires_at)}\n✅ Записано для рефералки")
+        lines = [f"Тариф: Pro {promo.days} дн.{' (продление)' if state.active else ''}"]
+    await engine._alert("SUN718 активирован", tg, *lines, f"До: {fmt_date_msk(new_state.expires_at)}",
+                        "Записано для рефералки", emoji="🎁")
     return PromoReward(code=code, outcome=PromoOutcome.APPLIED, plan_code="pro", days=promo.days,
                        expires_at=new_state.expires_at, redemption_id=rec.redemption_id)
 
@@ -362,7 +364,7 @@ class Sun718Reverter:
         target = paid if paid == "pro" else pre
         if panel_id is None:
             await self._mark(payment_id, "skipped_no_panel_user")
-            await self._alert("⚠️ <b>SUN718 REVERT: пропущен</b>", tg, "Нет аккаунта в панели.")
+            await self._alert("SUN718 REVERT: пропущен", tg, "Нет аккаунта в панели.", emoji="⚠️")
             return False
         user = await self.remna.get_user(panel_id)
         if user is None:
@@ -371,8 +373,8 @@ class Sun718Reverter:
         try:
             await self.remna.update_user(panel_id, squads=target_squads(list(user.squads), target))
         except Exception as e:  # noqa: BLE001 - retry on the next pass
-            await self._alert("❌ <b>SUN718 REVERT: сквад не вернули</b>", tg,
-                              f"Цель: {h(target)}. Ошибка: {h(type(e).__name__)}. Повторим через час.")
+            await self._alert("SUN718 REVERT: сквад не вернули", tg,
+                              f"Цель: {h(target)}. Ошибка: {h(type(e).__name__)}. Повторим через час.", emoji="❌")
             return False
         if self.status is not None:
             try:
@@ -380,8 +382,8 @@ class Sun718Reverter:
             except Exception:  # noqa: BLE001
                 pass
         await self._mark(payment_id, target)
-        extra = "\nПользователь докупил Pro, Pro остался." if (paid == "pro" and pre != "pro") else ""
-        await self._alert("🔄 <b>SUN718 REVERT выполнен</b>", tg, f"Тариф: {h(pre)} → <b>{h(target)}</b>{extra}")
+        extra = "Пользователь докупил Pro, Pro остался." if (paid == "pro" and pre != "pro") else ""
+        await self._alert("SUN718 REVERT выполнен", tg, f"Тариф: {h(pre)} → <b>{h(target)}</b>", extra, emoji="🔄")
         return True
 
     async def _mark(self, payment_id: int, reverted_to: str) -> None:
@@ -397,9 +399,14 @@ class Sun718Reverter:
             p.payment_metadata = meta
             await s.commit()
 
-    async def _alert(self, title: str, tg: int, body: str) -> None:
+    async def _alert(self, title: str, tg: int, *lines: str, emoji: str = "🔄") -> None:
+        """Admin alert (screen kit ``ui.admin_alert``); ``lines`` are already HTML-safe."""
+        from app.domain.texts import ui
+
+        text = ui.admin_alert(title, emoji=emoji, who=ui.who_block(name=None, username=None, telegram_id=tg),
+                              lines=list(lines)).html()
         try:
-            await self.notifier.notify_admins(AdminTopic.PROMO, f"{title}\n\n🆔 <code>{tg}</code>\n{body}", html=True)
+            await self.notifier.notify_admins(AdminTopic.PROMO, text, html=True)
         except Exception:  # noqa: BLE001
             pass
 

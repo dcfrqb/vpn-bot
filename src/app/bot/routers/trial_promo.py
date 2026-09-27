@@ -24,7 +24,6 @@ from app.bot.views import admin as admin_views
 from app.domain.models import AdminTopic, PromoReward
 from app.domain.plans import get_plan_name
 from app.domain.texts import admin as TA
-from app.domain.texts import h
 from app.domain.texts import promo as T
 from app.logger import logger
 from app.services.promo import get_promo
@@ -151,11 +150,10 @@ async def cb_gift_claim(callback: CallbackQuery, callback_data: Gift, container:
 # ----------------------------------------------------------------- access requests (/friend, /admin)
 
 
-def _who(message: Message) -> str:
+def _who(message: Message) -> dict:
     u = message.from_user
     name = " ".join(x for x in (u.first_name, u.last_name) if x) or u.username or f"User_{u.id}"
-    return (f"Имя: {h(name)}\nUsername: @{h(u.username or 'не указан')}\n"
-            f"Telegram ID: <code>{u.id}</code>")
+    return {"name": name, "username": u.username, "telegram_id": u.id}
 
 
 async def _access_request(message: Message, container: Any, *, section: str, title: str) -> None:
@@ -174,7 +172,7 @@ async def _access_request(message: Message, container: Any, *, section: str, tit
         return
     arg = f"{uid}.{int(time.time())}"
     sent = await container.notifier.notify_admins(
-        AdminTopic.GENERAL, f"{title}\n\n{_who(message)}\n\n{TA.REQUEST_HINT}", html=True,
+        AdminTopic.GENERAL, TA.access_request_alert(title, **_who(message)), html=True,
         reply_markup=admin_views.request_keyboard(section, arg, uid),
         dedup_key=f"access_req:{section}:{uid}", dedup_ttl=600,
     )

@@ -53,10 +53,14 @@ class ErrorsMiddleware(BaseMiddleware):
             notifier = data.get("notifier")
             if notifier is not None:
                 try:
+                    from app.domain.texts import ui
+
                     await notifier.notify_admins(
                         AdminTopic.ERRORS,
-                        f"Ошибка в {name}: {type(exc).__name__}: {str(exc)[:300]}\nuser={uid}",
-                        dedup_key=f"err:{name}:{type(exc).__name__}",
+                        ui.admin_alert(f"Ошибка в {ui.h(name)}", emoji="❌", lines=[
+                            ui.field("Тип", type(exc).__name__), ui.field("Текст", str(exc)[:300]),
+                            ui.field("user", uid)]).html(),
+                        html=True, dedup_key=f"err:{name}:{type(exc).__name__}",
                         dedup_ttl=ERROR_DEDUP_TTL,
                     )
                 except Exception as e:  # noqa: BLE001

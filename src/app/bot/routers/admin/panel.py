@@ -49,7 +49,7 @@ async def _screen(maintenance) -> tuple[str, object]:
 @router.message(Command("maintenance"))
 async def maintenance_cmd(message: Message, maintenance) -> None:
     text, markup = await _screen(maintenance)
-    await render(message, text, markup, parse_mode=None)
+    await render(message, text, markup)
 
 
 @router.callback_query(Adm.filter(F.s == SECTION))
@@ -64,5 +64,5 @@ async def maintenance_cb(callback: CallbackQuery, callback_data: Adm, maintenanc
         await maintenance.set_active(False, by=callback.from_user.id)
     logger.info(f"admin {callback.from_user.id}: maintenance {callback_data.a}")
     text, markup = await _screen(maintenance)
-    await render(callback, text, markup, parse_mode=None)
+    await render(callback, text, markup)
 

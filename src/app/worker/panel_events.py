@@ -234,7 +234,7 @@ class PanelEventProcessor:
             dedup_ttl=4 * 24 * 3600,
         )
         await self.c.notifier.notify_admins(
-            AdminTopic.PANEL, T.admin_grace_started(tg, until), disable_notification=True,
+            AdminTopic.PANEL, T.admin_grace_started(tg, until), html=True, disable_notification=True,
         )
         return "grace_started"
 

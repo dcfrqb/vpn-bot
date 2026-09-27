@@ -101,7 +101,7 @@ async def process_in_background(event: Any, dedup_key: Optional[str], trace_id: 
         if container is not None:
             try:
                 await container.notifier.notify_admins(
-                    AdminTopic.ERRORS, T.admin_webhook_error(event.event, type(e).__name__),
+                    AdminTopic.ERRORS, T.admin_webhook_error(event.event, type(e).__name__), html=True,
                     dedup_key=f"rw_err:{event.event}:{type(e).__name__}", dedup_ttl=3600,
                 )
             except Exception:  # noqa: BLE001

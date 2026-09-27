@@ -217,11 +217,12 @@ class CheckoutServiceImpl:
             logger.warning(f"blocked_user_payment_attempt: tg_id={tg} plan={fresh.plan_code}")
             from app.domain.models import AdminTopic
 
+            from app.domain.texts.checkout import admin_blocked_user_pay
+
             await self.d.notifier.notify_admins(
                 AdminTopic.PAYMENTS,
-                f"⛔ Заблокированный пользователь пытался оплатить: ID {tg}, тариф {fresh.plan_code}, "
-                f"причина: {reason or '-'}",
-                dedup_key=f"blocked_pay:{tg}", dedup_ttl=86400,
+                admin_blocked_user_pay(telegram_id=int(tg), plan_code=str(fresh.plan_code), reason=str(reason or "")),
+                html=True, dedup_key=f"blocked_pay:{tg}", dedup_ttl=86400,
             )
             return StartResult(error="blocked")
         async with user_action_lock("checkout", tg, ttl=CHECKOUT_LOCK_TTL) as acquired:

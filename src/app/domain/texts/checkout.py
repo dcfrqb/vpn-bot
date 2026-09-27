@@ -492,3 +492,58 @@ REVIEW_TEXT = {
 }
 
 NOT_ADMIN = "Недоступно."
+
+
+# --- refund made in the YooKassa dashboard (admin_alert) -----------------------------------
+
+
+def _money(v) -> str:
+    try:
+        return fmt_rub(v)
+    except Exception:  # noqa: BLE001 - odd values from the YooKassa payload are shown as is
+        return h(v)
+
+
+def admin_refund_webhook(*, full: bool, telegram_id: int, external_id: str, amount: Money, refunded_total: Money,
+                         paid_amount: Money, plan_line: str, note: str) -> str:
+    return ui.admin_alert(
+        "Полный возврат" if full else "Частичный возврат", emoji=E.REFUND,
+        who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+        lines=[f"Payment: {ui.code(external_id)}",
+               f"Возврат: {_money(amount)} (всего возвращено {_money(refunded_total)} из {_money(paid_amount)})",
+               ui.field("Тариф", plan_line)],
+        hint=h(note),
+    ).html()
+
+
+def admin_refund_unknown(*, refund_id: str, external_id: str, amount: Money, currency: str) -> str:
+    return ui.admin_alert(
+        "Возврат по неизвестному платежу", emoji=E.REFUND,
+        lines=[f"Refund: {ui.code(refund_id)}", f"Payment: {ui.code(external_id)}",
+               f"Сумма: {h(amount)} {h(currency)}"],
+        hint="Платежа нет в БД бота, доступ не трогали.",
+    ).html()
+
+
+# --- Stars and stop-list alerts (admin_alert) ----------------------------------------------
+
+
+def admin_stars_orphan(*, telegram_id: int, payment_id: int, amount: object, currency: str, charge_id: str) -> str:
+    return ui.admin_alert("Оплата звездами без платежа в БД", emoji=E.WARN,
+                          who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+                          lines=[ui.field("Payment", payment_id), f"Сумма: {h(amount)} {h(currency)}",
+                                 f"Charge: {ui.code(charge_id)}"],
+                          hint="Проверь и верни звезды вручную.").html()
+
+
+def admin_stars_dup(*, telegram_id: int, payment_id: int, charge_id: str) -> str:
+    return ui.admin_alert("Повторная оплата звездами одного счета", emoji=E.WARN,
+                          who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+                          lines=[ui.field("Payment", f"#{payment_id}"), f"Charge: {ui.code(charge_id)}"],
+                          hint="Верни звезды вручную.").html()
+
+
+def admin_blocked_user_pay(*, telegram_id: int, plan_code: str, reason: str) -> str:
+    return ui.admin_alert("Заблокированный пользователь пытался оплатить", emoji="⛔",
+                          who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
+                          lines=[ui.field("Тариф", plan_code), ui.field("Причина", reason or "-")]).html()

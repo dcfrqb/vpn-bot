@@ -102,7 +102,7 @@ async def test_refund_texts_for_admin_and_user():
     await _call(fake, session, refund, api_payment, bot)
     by_chat = {c.kwargs["chat_id"]: c.kwargs["text"] for c in bot.send_message.await_args_list}
     admin = by_chat[900]
-    assert "129 из 129 ₽" in admin
+    assert "129\xa0₽ (всего возвращено 129\xa0₽ из 129\xa0₽)" in admin
     assert "None" not in admin and "129.0" not in admin
     assert "мес." in admin
     assert "Возврат оформлен" in by_chat[TG_ID]

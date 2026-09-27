@@ -120,7 +120,7 @@ MAINTENANCE_CHECKOUT_SCREEN = ui.push(
 )
 MAINTENANCE_CHECKOUT_NOTICE = MAINTENANCE_CHECKOUT_SCREEN.html()
 
-# --------------------------------------------------------------- admins (plain text)
+# --------------------------------------------------------------- admins (admin_alert / admin_screen, HTML)
 
 def admin_node_lost(name: str, address: str, message: Optional[str]) -> str:
     """HTML, through the screen kit (``ui.admin_alert``); the caller passes html=True."""
@@ -135,23 +135,26 @@ def admin_node_restored(name: str, address: str) -> str:
 
 
 def admin_panel_down(fails: int, auto: bool) -> str:
-    tail = " Включен режим техработ." if auto else " Режим техработ не включался (MAINTENANCE_AUTO_ENABLED выключен)."
-    return f"Панель Remnawave не отвечает ({fails} проверки подряд).{tail}"
+    """HTML (``ui.admin_alert``); the caller passes html=True."""
+    return ui.admin_alert("Панель Remnawave не отвечает", emoji=E.EXPIRED, lines=[
+        ui.field("Проверок подряд", int(fails)),
+        "Включен режим техработ." if auto
+        else "Режим техработ не включался (MAINTENANCE_AUTO_ENABLED выключен).",
+    ]).html()
 
 
-ADMIN_PANEL_UP = "Панель Remnawave снова отвечает. Автоматический режим техработ снят."
+ADMIN_PANEL_UP = ui.admin_alert("Панель Remnawave снова отвечает", emoji=E.ACTIVE,
+                                lines=["Автоматический режим техработ снят."]).html()
 
 
 def admin_maintenance_state(active: bool, reason: Optional[str], auto_enabled: bool) -> str:
-    state = "ВКЛЮЧЕН" if active else "выключен"
-    lines = [f"Режим техработ: {state}."]
-    if active and reason:
-        lines.append(f"Причина: {reason}")
-    lines.append(
-        "Автовключение по проверке панели: " + ("да" if auto_enabled else "нет (MAINTENANCE_AUTO_ENABLED)")
-    )
-    lines.append("Пока режим включен, пользователям закрыты пробный период, подключение и устройства. Оплата работает.")
-    return "\n".join(lines)
+    """Admin screen /maintenance (``ui.admin_screen``), HTML."""
+    return ui.admin_screen("Техработы", emoji="🛠", lines=[
+        ui.field("Режим", "ВКЛЮЧЕН" if active else "выключен"),
+        ui.field("Причина", reason) if active and reason else None,
+        ui.field("Автовключение по проверке панели", "да" if auto_enabled else "нет (MAINTENANCE_AUTO_ENABLED)"),
+    ], hint="Пока режим включен, пользователям закрыты пробный период, подключение и устройства. "
+            "Оплата работает.").html()
 
 
 BTN_MAINT_ON = "Включить техработы"
@@ -159,8 +162,11 @@ BTN_MAINT_OFF = "Выключить техработы"
 
 
 def admin_grace_started(telegram_id: int, until) -> str:
-    return f"Льготный период: юзер {telegram_id} до {fmt_date_msk(until, with_time=True)}."
+    return ui.admin_alert("Льготный период", emoji=E.GRACE, who=ui.who_block(name=None, username=None,
+                                                                            telegram_id=telegram_id),
+                          lines=[ui.field("До", fmt_date_msk(until, with_time=True)) + " (МСК)"]).html()
 
 
 def admin_webhook_error(event: str, error_type: str) -> str:
-    return f"Вебхук панели {event}: ошибка обработки ({error_type})."
+    return ui.admin_alert("Вебхук панели: ошибка обработки", emoji=E.ERROR,
+                          lines=[ui.field("Событие", event), ui.field("Ошибка", error_type)]).html()
