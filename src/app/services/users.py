@@ -295,7 +295,7 @@ async def get_or_create_telegram_user(
 
     Локальная строка нужна потому, что FK-зависимые таблицы (`payments`,
     `subscriptions`, `access_requests`, `broadcast_recipients`) ссылаются на
-    `telegram_users.telegram_id`. Без неё `INSERT INTO payments` падает с
+    `telegram_users.telegram_id`. Без нее `INSERT INTO payments` падает с
     `ForeignKeyViolationError` — например в `_handle_promo_command` после
     успешной выдачи подписки, что ломает защиту от повторного использования
     промокода.
