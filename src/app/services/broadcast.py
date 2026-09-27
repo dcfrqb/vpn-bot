@@ -336,12 +336,16 @@ async def _alert_credit_failures(broadcast_id: int, days: int, failed: int) -> N
     try:
         from app.container import get_container
         from app.domain.models import AdminTopic
+        from app.domain.texts import ui
 
+        text = ui.admin_alert(
+            "Рассылка: сбой начисления подарка", emoji="⚠️",
+            lines=[ui.field("Рассылка", f"#{int(broadcast_id)}"),
+                  ui.field("Не начислено", f"+{int(days)} дн. у {int(failed)} получателей")],
+            hint="Причина в логах бота (broadcast credit ... failed). Начислить вручную: /grant.",
+        ).html()
         await get_container().notifier.notify_admins(
-            AdminTopic.BROADCAST,
-            f"Рассылка #{int(broadcast_id)}: не начислено +{int(days)} дн. у {int(failed)} получателей.\n"
-            "Причина в логах бота (broadcast credit ... failed). Начислить вручную: /grant.",
-            dedup_key=f"bc_credit_failed:{int(broadcast_id)}",
+            AdminTopic.BROADCAST, text, html=True, dedup_key=f"bc_credit_failed:{int(broadcast_id)}",
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"broadcast {broadcast_id}: credit failure alert not sent ({type(e).__name__})")

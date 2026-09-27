@@ -12,6 +12,7 @@ from typing import Optional
 
 from app.domain.texts import days_ru, devices_ru, fmt_date_msk, fmt_gb
 from app.domain.texts import common as _c
+from app.domain.texts import ui
 
 # --------------------------------------------------------------- buttons
 
@@ -113,12 +114,15 @@ MAINTENANCE_CHECKOUT_NOTICE = (
 # --------------------------------------------------------------- admins (plain text)
 
 def admin_node_lost(name: str, address: str, message: Optional[str]) -> str:
-    tail = f"\nПричина: {message}" if message else ""
-    return f"Нода {name} ({address}) недоступна.{tail}"
+    """HTML, through the screen kit (``ui.admin_alert``); the caller passes html=True."""
+    lines = [ui.field("Нода", f"{name} ({address})")]
+    if message:
+        lines.append(ui.field("Причина", message))
+    return ui.admin_alert("Нода недоступна", emoji="🔴", lines=lines).html()
 
 
 def admin_node_restored(name: str, address: str) -> str:
-    return f"Нода {name} ({address}) снова на связи."
+    return ui.admin_alert("Нода снова на связи", emoji="🟢", lines=[ui.field("Нода", f"{name} ({address})")]).html()
 
 
 def admin_panel_down(fails: int, auto: bool) -> str:

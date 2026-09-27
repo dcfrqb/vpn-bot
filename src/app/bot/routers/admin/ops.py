@@ -16,7 +16,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import Adm
 from app.bot.middlewares.admin_guard import guard_router, is_admin_id
 from app.bot.views import admin as V
-from app.bot.views import kb, render
+from app.bot.views import kb, kit, render
 from app.domain.texts import admin as T
 from app.domain.texts import h
 from app.logger import logger
@@ -43,10 +43,10 @@ async def cmd_block(message: Message, command: CommandObject) -> None:
         await render(message, T.USAGE_ID.format(cmd="block"))
         return
     if is_admin_id(tg):
-        await render(message, "Нельзя заблокировать администратора.")
+        await render(message, *kit.view(T.result_screen("warn", "Блокировка", "Нельзя заблокировать администратора.")))
         return
     await blocklist.bot_block(tg)
-    await render(message, f"✅ Пользователь <code>{tg}</code> заблокирован в боте.")
+    await render(message, *kit.view(T.result_screen("ok", "Блокировка", f"Пользователь <code>{tg}</code> заблокирован в боте.")))
 
 
 @router.message(Command("unblock"))
@@ -56,7 +56,7 @@ async def cmd_unblock(message: Message, command: CommandObject) -> None:
         await render(message, T.USAGE_ID.format(cmd="unblock"))
         return
     await blocklist.bot_unblock(tg)
-    await render(message, f"✅ Пользователь <code>{tg}</code> разблокирован.")
+    await render(message, *kit.view(T.result_screen("ok", "Блокировка", f"Пользователь <code>{tg}</code> разблокирован.")))
 
 
 # ----------------------------------------------------------------- stop-list (no sales)
@@ -90,7 +90,7 @@ async def cmd_stoplist_add(message: Message, command: CommandObject) -> None:
     key, reason = parts[0], (parts[1] if len(parts) > 1 else "")
     if key.isdigit():
         if is_admin_id(int(key)):
-            await render(message, "Нельзя добавить администратора.")
+            await render(message, *kit.view(T.result_screen("warn", "Стоп-лист", "Нельзя добавить администратора.")))
             return
         await blocklist.stop_user(int(key), reason)
     elif CARD_FP_RE.match(key):
@@ -98,7 +98,7 @@ async def cmd_stoplist_add(message: Message, command: CommandObject) -> None:
     else:
         await render(message, T.USAGE_STOPLIST)
         return
-    await render(message, f"⛔ <code>{h(key)}</code> в стоп-листе.")
+    await render(message, *kit.view(T.result_screen("warn", "Стоп-лист", f"<code>{h(key)}</code> в стоп-листе.")))
 
 
 @router.message(Command("stoplist_del"))
@@ -108,7 +108,8 @@ async def cmd_stoplist_del(message: Message, command: CommandObject) -> None:
         await render(message, T.USAGE_STOPLIST)
         return
     removed = await (blocklist.unstop_user(int(key)) if key.isdigit() else blocklist.unstop_card(key))
-    await render(message, f"✅ <code>{h(key)}</code> убран из стоп-листа." if removed else "Такой записи нет.")
+    await render(message, *kit.view(T.result_screen("ok", "Стоп-лист", f"<code>{h(key)}</code> убран из стоп-листа.")
+                                if removed else T.result_screen("info", "Стоп-лист", "Такой записи нет.")))
 
 
 # ----------------------------------------------------------------- referral
