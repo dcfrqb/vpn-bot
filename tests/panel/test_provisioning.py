@@ -37,7 +37,9 @@ class RecordingObhod:
 
 @pytest.fixture
 def fake():
-    return FakeRemna(squads=SQUADS)
+    f = FakeRemna(squads=SQUADS)
+    f.now = NOW  # the panel lives on the same fixed clock as the services
+    return f
 
 
 @pytest.fixture

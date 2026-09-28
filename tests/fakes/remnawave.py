@@ -42,6 +42,9 @@ class FakeRemna:
         self.fail_squads = False
         self.fail_lookup_tg = False
         self._next_id = 1000
+        # "now" of the fake panel (EXPIRED -> ACTIVE on a future expireAt); tests
+        # with a fixed clock set it, otherwise the wall clock.
+        self.now = None
         self.devices: Dict[int, List[Dict[str, Any]]] = {}
         self.deleted_devices: List[tuple] = []
         self.healthy = True
@@ -104,7 +107,7 @@ class FakeRemna:
             from datetime import datetime, timezone
             try:
                 exp = datetime.fromisoformat(str(payload["expireAt"]).replace("Z", "+00:00"))
-                if exp > datetime.now(timezone.utc):
+                if exp > (self.now or datetime.now(timezone.utc)):
                     user["status"] = "ACTIVE"
             except ValueError:
                 pass

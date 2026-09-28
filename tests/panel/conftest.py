@@ -117,7 +117,9 @@ def redis():
 
 @pytest.fixture
 def fake() -> FakeRemna:
-    return FakeRemna()
+    f = FakeRemna()
+    f.now = NOW  # the panel lives on the same fixed clock as the services
+    return f
 
 
 @pytest.fixture
