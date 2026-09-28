@@ -129,7 +129,7 @@ GLOSSARY = {
     "url": "ссылка подписки",
     "obhod_url": "ссылка обхода",
     "obhod_used": "сколько трафика обхода израсходовано («12,4 ГБ»)",
-    "obhod_limit": "лимит обхода («100 ГБ») или «без лимита»",
+    "obhod_limit": "лимит обхода («150 ГБ») или «без лимита»",
     "devices_used": "сколько устройств подключено",
     "device_limit": "лимит устройств по тарифу",
     "device": "название устройства (модель или платформа)",
@@ -639,9 +639,16 @@ def section_payments() -> None:
     add("pay.plans", sec, "src/app/domain/texts/checkout.py:plans_screen + btn_plan; views/money.py:plans_view",
         "«💳 Подписка»: список тарифов", text, mk, code=money_code,
         note="блоки тарифов и кнопки строятся кодом из каталога src/app/domain/plans.py (PLAN_CATALOG: display, "
-             "features, prices); шаблон кнопки: «{plan} · от {price}/мес». Кнопка «Подарить подписку» только при "
-             "GIFTS_ENABLED. У клиента со старым тарифом (Базовый/Премиум) в конце списка добавляется его тариф",
+             "prices, countries, device_limit, obhod_gb; строки описания собирает build_plan_features); шаблон "
+             "кнопки: «{plan} · от {price}/мес». Кнопка «Подарить подписку» только при GIFTS_ENABLED",
         layout="views/money.py:plans_view: one row per plan (btn_plan), gift row (GIFTS_ENABLED), back")
+    text, mk = VMo.plans_view(_plan_options(legacy="basic"), gifts=True)
+    add("pay.plans.legacy_owner", sec, "src/app/services/checkout.py:plan_options + legacy_plan_for_list",
+        "«💳 Подписка» у текущего платящего подписчика старого тарифа (пример: Базовый)", text, mk,
+        code=money_code,
+        note="старый тариф (Базовый/Премиум) добавляется в конец списка, только если это текущая оплаченная "
+             "подписка: не бессрочная, без ручных сквадов (-m, -friend, arcadia), за нее был платеж. Остальным, "
+             "в том числе бессрочным и друзьям, его не видно; цена и лимиты старые")
     text, mk = VMo.periods_view("pro", P.get_plan_name("pro"), P.get_plan_features("pro"), _period_options("pro"))
     add("pay.periods", sec, "src/app/domain/texts/checkout.py:periods_screen + btn_period; views/money.py:periods_view",
         "выбрал тариф: выбор срока (пример для Pro)", text, mk, subs=_features_sub("pro") + [("<b>Pro</b>", "<b>{plan}</b>")],
@@ -675,7 +682,7 @@ def section_payments() -> None:
     text, mk = VMo.obhod_packages_view(P.OBHOD_BASE_LIMIT_GB, pk)
     add("pay.obhod_packages", sec, "src/app/domain/texts/checkout.py:obhod_packages_screen + btn_obhod_package",
         "«➕ Нужно больше обхода» на экране подключения (Pro)", text, mk, code=money_code,
-        note="пакеты, цены и лимит 100 ГБ берутся из src/app/domain/plans.py (OBHOD_PACKAGE_CATALOG, "
+        note=f"пакеты, цены и лимит {P.OBHOD_BASE_LIMIT_GB} ГБ берутся из src/app/domain/plans.py (OBHOD_PACKAGE_CATALOG, "
              "OBHOD_BASE_LIMIT_GB); шаблон строки «· <b>{пакет}</b>: {price}», кнопки «{пакет}: {price}»",
         layout="views/money.py:obhod_packages_view: one row per package, back")
     text, mk = VMo.obhod_packages_view(P.OBHOD_BASE_LIMIT_GB, [])
