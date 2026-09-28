@@ -1,4 +1,6 @@
 """Тесты для справочника тарифов (core.plans)"""
+import pytest
+
 from app.core.plans import (
     LEGACY_PLAN_CODES,
     MENU_PLAN_CODES,
@@ -106,7 +108,7 @@ class TestGetPlanDeviceLimit:
         assert get_plan_device_limit("premium") == 15
 
     def test_new(self):
-        assert get_plan_device_limit("lite") == 2
+        assert get_plan_device_limit("lite") == 3
         assert get_plan_device_limit("standard") == 5
         assert get_plan_device_limit("pro") == 10
 
@@ -167,3 +169,40 @@ class TestGetPlanFeatures:
 
     def test_unknown_returns_empty(self):
         assert get_plan_features("unknown") == []
+
+
+class TestTariffsStage1Catalog:
+    """Этап 1 тарифов 3.0 (docs/ПОРЯДОК_2026-09-27/04_тарифы_и_сквады.md, раздел 8):
+    цены старые, состав новый, описания собираются из данных каталога."""
+
+    def test_prices_unchanged(self):
+        assert PLAN_CATALOG["lite"]["prices"] == {1: 129, 3: 329, 6: 599, 12: 1099}
+        assert PLAN_CATALOG["standard"]["prices"] == {1: 249, 3: 649, 6: 1199, 12: 2199}
+        assert PLAN_CATALOG["pro"]["prices"] == {1: 449, 3: 1199, 6: 2199, 12: 3999}
+
+    def test_devices_and_countries(self):
+        from app.domain.plans import OBHOD_BASE_LIMIT_GB
+
+        assert [get_plan_device_limit(c) for c in ("lite", "standard", "pro")] == [3, 5, 10]
+        assert PLAN_CATALOG["lite"]["countries"] == ("fi", "nl")
+        assert PLAN_CATALOG["standard"]["countries"] == ("nl", "fi", "de")
+        assert PLAN_CATALOG["pro"]["countries"] == ("nl", "fi", "de", "us")
+        assert OBHOD_BASE_LIMIT_GB == 150 and PLAN_CATALOG["pro"]["obhod_gb"] == 150
+        assert PLAN_CATALOG["trial"]["squad"] == "standard"
+
+    def test_features_are_rendered_from_data(self):
+        assert get_plan_features("lite") == [
+            "Неограниченный трафик и скорость",
+            "Серверы: 🇫🇮 Финляндия, 🇳🇱 Нидерланды",
+            "Подключение до 3 устройств",
+        ]
+        pro = get_plan_features("pro")
+        assert "Обход блокировок: 150 ГБ в месяц" in pro
+        assert "Серверы: 🇳🇱 Нидерланды, 🇫🇮 Финляндия, 🇩🇪 Германия, 🇺🇸 США" in pro
+        assert "Подключение до 10 устройств" in pro
+
+    @pytest.mark.parametrize("code", sorted(PLAN_CATALOG))
+    def test_no_france_spain_or_stale_limits_in_any_plan_text(self, code):
+        text = " ".join(get_plan_features(code))
+        for word in ("FR", "ESP", "Франц", "Испан", "100 ГБ", "ё", "—"):
+            assert word not in text, (code, word)

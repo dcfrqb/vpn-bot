@@ -86,7 +86,7 @@ class TestPlanCodeToSquadAndLimit:
         ("basic", "basic", 5),
         ("premium", "premium", 15),
         # new
-        ("lite", "lite", 2),
+        ("lite", "lite", 3),
         ("standard", "standard", 5),
         ("pro", "pro", 10),
     ])

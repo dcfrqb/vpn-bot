@@ -29,8 +29,8 @@ def test_obhod_eligibility_only_pro():
 
 
 def test_obhod_base_limit_bytes():
-    assert plans.OBHOD_BASE_LIMIT_GB == 100
-    assert plans.obhod_base_limit_bytes() == 100 * 1024 * 1024 * 1024
+    assert plans.OBHOD_BASE_LIMIT_GB == 150  # этап 1 тарифов 3.0 (было 100)
+    assert plans.obhod_base_limit_bytes() == 150 * 1024 * 1024 * 1024
 
 
 def test_obhod_packages_purchasable_only_with_real_price():

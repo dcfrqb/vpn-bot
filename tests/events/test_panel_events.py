@@ -192,12 +192,12 @@ async def test_other_scopes_are_ignored(env):
 async def test_obhod_limited_upsells_packages_once_a_month(env):
     env.repo.obhod[700001] = {"panel_id": "1600", "active": True}
     u = user(uid=1600, tg=None, username="tg_700001_obhod", status="LIMITED", squads=(("obhod", "sq-obhod"),),
-             traffic_limit=100 * 1024 ** 3, strategy="MONTH")
+             traffic_limit=150 * 1024 ** 3, strategy="MONTH")
     p = proc(env)
     assert await p.process(parse_event(event("user.limited", u, ts=NOW))) == "upsell"
     assert await p.process(parse_event(event("user.limited", u, ts=NOW))) == "deduped"
     msg = user_sent(env)[0]
-    assert msg.target == 700001 and "100 ГБ" in plain(msg.text) and "докупить" in msg.text
+    assert msg.target == 700001 and "150 ГБ" in plain(msg.text) and "докупить" in msg.text
     assert buttons(msg) == ["n:plans:obhod"]  # the 3.0 packages screen (review UX m24)
 
 

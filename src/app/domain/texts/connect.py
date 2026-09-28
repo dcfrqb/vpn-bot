@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.domain.models import SubscriptionState
+from app.domain.plans import OBHOD_BASE_LIMIT_GB
 from app.domain.texts import fmt_date_msk, fmt_gb, h, ui
 from app.domain.texts.ui import E
 
@@ -44,7 +45,7 @@ HOWTO = ("1. Открой ссылку", "2. Скачай подходящий V
 # One description of the obhod link everywhere (review UX M8, ТЕКСТЫ_3.0 §1).
 OBHOD_ABOUT = (
     "Отдельная ссылка для мобильного интернета, когда оператор пускает только "
-    "в белый список сайтов. 100 ГБ в месяц."
+    f"в белый список сайтов. {OBHOD_BASE_LIMIT_GB} ГБ в месяц."
 )
 OBHOD_HOWTO = ("Добавляется так же, как основная. Включай обход, когда сайт заблокирован "
                "по мобильному интернету, и выключай, когда все работает штатно.")

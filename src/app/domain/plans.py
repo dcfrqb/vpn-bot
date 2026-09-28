@@ -6,6 +6,8 @@
 
 UI-меню тарифов (`MENU_PLAN_CODES`) одинаковое для всех юзеров — это новые
 тарифы lite/standard/pro. Legacy basic/premium остаются в каталоге для:
+- показа в списке тарифов только текущему платящему legacy-подписчику
+  (services/checkout.py plan_options, правило legacy_plan_listed);
 - продления существующих подписок через кнопку "🔄 Продлить" (см. services.users.get_user_last_plan);
 - админ-выдачи и аналитики;
 - корректного рендера "Мой тариф" у юзеров со старыми подписками.
@@ -31,6 +33,44 @@ LEGACY_CUTOFF = datetime(2026, 5, 4, 0, 0, 0, tzinfo=timezone.utc)
 
 
 # =============================================================================
+# Страны серверов (для описаний тарифов)
+# =============================================================================
+# Ключ страны -> (флаг, название). Какие ноды реально входят в тариф, решает
+# сквад в панели; здесь только то, что обещаем в тексте (этап 1 тарифов 3.0,
+# docs/ПОРЯДОК_2026-09-27/04_тарифы_и_сквады.md, раздел 8). Франции и Испании
+# в описаниях нет.
+COUNTRIES: dict[str, tuple[str, str]] = {
+    "nl": ("🇳🇱", "Нидерланды"),
+    "fi": ("🇫🇮", "Финляндия"),
+    "de": ("🇩🇪", "Германия"),
+    "us": ("🇺🇸", "США"),
+}
+
+
+# Базовый месячный кап трафика обхода для Pro, в гигабайтах (этап 1 тарифов
+# 3.0, решение владельца 28.09.2026: было 100).
+OBHOD_BASE_LIMIT_GB: int = 150
+
+
+def countries_line(countries) -> str:
+    """«🇳🇱 Нидерланды, 🇫🇮 Финляндия» в порядке тарифа."""
+    return ", ".join(f"{COUNTRIES[c][0]} {COUNTRIES[c][1]}" for c in countries)
+
+
+def build_plan_features(meta: dict) -> list[str]:
+    """Строки описания тарифа из данных каталога: трафик, серверы, обход, устройства."""
+    obhod_gb = meta.get("obhod_gb")
+    lines = ["Неограниченный трафик и скорость" + (" (не считая обхода)" if obhod_gb else "")]
+    countries = meta.get("countries") or ()
+    if countries:
+        lines.append(("Сервер: " if len(countries) == 1 else "Серверы: ") + countries_line(countries))
+    if obhod_gb:
+        lines.append(f"Обход блокировок: {int(obhod_gb)} ГБ в месяц")
+    lines.append(f"Подключение до {int(meta['device_limit'])} устройств")
+    return lines
+
+
+# =============================================================================
 # Plan catalog — единственный источник правды
 # =============================================================================
 # Поля:
@@ -38,73 +78,50 @@ LEGACY_CUTOFF = datetime(2026, 5, 4, 0, 0, 0, tzinfo=timezone.utc)
 #   device_limit  — hwidDeviceLimit для Remna user.update
 #   display       — что показывать юзеру (заголовок тарифа)
 #   prices        — RUB по периодам {months: amount}
-#   features      — список строк для рендера экрана выбора/деталей
+#   countries     — ключи COUNTRIES в порядке показа (что обещаем в описании)
+#   obhod_gb      — базовый месячный кап обхода, если тариф его дает
+#   features      — строки для экрана выбора/деталей; собираются из полей выше
+#                   (build_plan_features), руками не пишутся
 PLAN_CATALOG: dict[str, dict] = {
-    # --- LEGACY (только для cohort=legacy, не показываем новым) ---
+    # --- LEGACY (продление только владельцем, в списке только у текущего
+    # платящего, см. services/checkout.py plan_options) ---
     "basic": {
         "squad": "basic",
         "device_limit": 5,
         "display": "Базовый тариф",
         "prices": {1: 99, 3: 249, 6: 499, 12: 899},
-        "features": [
-            "Неограниченный трафик и скорость",
-            "Поддержка разных устройств",
-            "YouTube без рекламы",
-            "Сервер NL",
-            "Подключение до 5 устройств",
-        ],
+        "countries": ("nl",),
     },
     "premium": {
         "squad": "premium",
         "device_limit": 15,
         "display": "Премиум тариф",
         "prices": {1: 199, 3: 549, 6: 999, 12: 1799},
-        "features": [
-            "Неограниченный трафик и скорость",
-            "Поддержка разных устройств",
-            "YouTube без рекламы",
-            "Серверы NL, USA, FR",
-            "Подключение до 15 устройств",
-        ],
+        "countries": ("nl", "fi", "us"),
     },
 
-    # --- NEW (только для cohort=new) ---
+    # --- NEW (меню тарифов) ---
     "lite": {
         "squad": "lite",
-        "device_limit": 2,
+        "device_limit": 3,  # этап 1 тарифов 3.0: было 2
         "display": "Lite",
         "prices": {1: 129, 3: 329, 6: 599, 12: 1099},
-        "features": [
-            "Неограниченный трафик и скорость",
-            "YouTube без рекламы",
-            "Серверы: NL",
-            "Подключение до 2 устройств",
-        ],
+        "countries": ("fi", "nl"),  # fi-1 первой, nl-1
     },
     "standard": {
         "squad": "standard",
         "device_limit": 5,
         "display": "Standard",
         "prices": {1: 249, 3: 649, 6: 1199, 12: 2199},
-        "features": [
-            "Неограниченный трафик и скорость",
-            "YouTube без рекламы",
-            "Серверы: NL + FR",
-            "Подключение до 5 устройств",
-        ],
+        "countries": ("nl", "fi", "de"),  # nl-0, nl-1, fi-1, de-1
     },
     "pro": {
         "squad": "pro",
         "device_limit": 10,
         "display": "Pro",
         "prices": {1: 449, 3: 1199, 6: 2199, 12: 3999},
-        "features": [
-            "Неограниченный трафик и скорость (не считая обход)",
-            "YouTube без рекламы",
-            "Все серверы: NL, FR, USA, ESP",
-            "Обход блокировок (100 ГБ/мес)",
-            "Подключение до 10 устройств",
-        ],
+        "countries": ("nl", "fi", "de", "us"),  # + обход через ru-1
+        "obhod_gb": OBHOD_BASE_LIMIT_GB,
     },
 
     # --- TRIAL (служебный — squad/limit берутся через TARIFF_TO_DAYS) ---
@@ -113,9 +130,12 @@ PLAN_CATALOG: dict[str, dict] = {
         "device_limit": 5,
         "display": "Пробный период",
         "prices": {},  # триал не покупается
-        "features": [],
+        "countries": (),
     },
 }
+
+for _code, _meta in PLAN_CATALOG.items():
+    _meta["features"] = build_plan_features(_meta) if _meta["prices"] else []
 
 LEGACY_PLAN_CODES: tuple[str, ...] = ("basic", "premium")
 NEW_PLAN_CODES: tuple[str, ...] = ("lite", "standard", "pro")
@@ -143,10 +163,6 @@ OBHOD_ELIGIBLE_PLAN_CODES: frozenset[str] = frozenset({"pro"})
 # Имя сквада обхода в Remnawave (см. get_squad_by_name).
 OBHOD_SQUAD_NAME: str = "obhod"
 
-# Базовый месячный кап трафика обхода для Pro, в гигабайтах.
-# TODO(заказчик): подтвердить итоговый размер базового капа (предв. 100 ГБ).
-OBHOD_BASE_LIMIT_GB: int = 100
-
 # Стратегия лимита трафика в Remnawave: помесячный сброс.
 OBHOD_TRAFFIC_LIMIT_STRATEGY: str = "MONTH"
 
@@ -168,7 +184,7 @@ def is_obhod_eligible_plan(plan_code: Optional[str]) -> bool:
 
 # Каталог платных пакетов «Обход +трафик».
 # Покупаются только при активном Pro. Поднимают месячный кап obhod-юзера на
-# оплаченный период; по истечении пакета кап откатывается к базовым 100 ГБ.
+# оплаченный период; по истечении пакета кап откатывается к базовому OBHOD_BASE_LIMIT_GB.
 #
 # Поля пакета:
 #   limit_gb       — итоговый месячный кап (НЕ добавка к базовому, а целевой кап)

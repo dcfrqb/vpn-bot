@@ -344,7 +344,7 @@ def test_plan_from_last_payment_when_no_row(env):
     state["last_plan"] = "lite"
     acc = get_profile(client).json()["accounts"]
     assert acc == [{"kind": "main", "remna_id": 101, "plan_code": "lite", "plan_title": "Lite",
-                    "legacy": False, "device_limit": 2}]
+                    "legacy": False, "device_limit": 3}]
 
 
 def test_trial_without_db_row_found_in_panel(env):

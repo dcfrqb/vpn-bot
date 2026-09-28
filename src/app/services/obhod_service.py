@@ -417,7 +417,7 @@ async def apply_obhod_package(
     package_until = datetime.utcnow() + relativedelta(months=period_months)
 
     # M2: прежний кап (на случай отката при сбое commit). Если уже стоял активный
-    # пакет — его лимит, иначе базовые 100 ГБ. Так split-state (кап поднят в
+    # пакет — его лимит, иначе базовый OBHOD_BASE_LIMIT_GB. Так split-state (кап поднят в
     # Remnawave, но БД не записала package_until) не оставит юзера с поднятым капом
     # без срока — при сбое commit мы вернем кап к прежнему значению.
     prev_limit = obhod_base_limit_bytes()
