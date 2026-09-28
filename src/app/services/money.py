@@ -102,6 +102,46 @@ class LegacyHooks:
 
         return await get_user_last_plan(int(telegram_id))
 
+    async def listed_legacy_plan(self, telegram_id: int) -> Optional[str]:
+        """Legacy plan for the plan list (checkout.legacy_plan_for_list) or None.
+        Cheap for almost everyone: the panel is asked only when last_plan is legacy."""
+        from app.core.plans import LEGACY_PLAN_CODES
+        from app.services.checkout import legacy_plan_for_list
+
+        tg = int(telegram_id)
+        last = await self.last_plan(tg)
+        if last not in LEGACY_PLAN_CODES:
+            return None
+        paid = await self._paid_plans(tg)
+        if last not in paid:
+            return None
+        from app.container import get_container
+        from app.services.accounts import PanelAccounts, SqlAccountsRepo
+
+        container = get_container()
+        user = await PanelAccounts(container.remna, SqlAccountsRepo()).find_main(tg)
+        return legacy_plan_for_list(user, last_plan=last, paid_plans=paid, now=utcnow())
+
+    async def _paid_plans(self, telegram_id: int) -> set[str]:
+        """Plan codes of the user's succeeded non-promo payments."""
+        from sqlalchemy import select
+
+        from app.db import session as db_session
+        from app.db.models import Payment
+
+        if db_session.SessionLocal is None:
+            return set()
+        async with db_session.SessionLocal() as session:
+            rows = (await session.execute(select(Payment.payment_metadata).where(
+                Payment.telegram_user_id == int(telegram_id), Payment.status == "succeeded",
+                Payment.provider != "promo"))).scalars().all()
+        out = set()
+        for meta in rows:
+            code = meta.get("plan_code") if isinstance(meta, dict) else None
+            if isinstance(code, str) and code:
+                out.add(code.lower())
+        return out
+
     async def suppress_expiry_notices(self, telegram_id: int, expires_at: datetime) -> None:
         try:
             from app.tasks.expiry_notifier import suppress_expiry_notices

@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.models import PaymentKind
-from app.domain.plans import get_plan_price
+from app.domain.plans import PLAN_CATALOG, get_plan_price
 from app.services.checkout import parse_stars_payload, stars_payload
 from app.services.payments.pricing import stars_for_rub
 from tests.money.fakes import make_money
@@ -147,7 +147,7 @@ async def test_plan_and_period_options():
     plans = await m.checkout.plan_options(TG)
     assert [p[0] for p in plans] == ["lite", "standard", "pro"]
     deps.hooks.last_plans[TG] = "premium"
-    # legacy plans are hidden from the list even for their owner (owner decision 27.09)
+    # last_plan alone does not list a legacy plan (no live paid legacy subscription)
     assert [p[0] for p in await m.checkout.plan_options(TG)] == ["lite", "standard", "pro"]
     assert "premium" not in [p[0] for p in await m.checkout.plan_options(TG, gift=True)]
     periods = await m.checkout.period_options(TG, "pro")
@@ -220,3 +220,78 @@ async def test_reminder_renew_button_keeps_legacy_owner_on_their_plan(legacy):
     assert renew_kb(legacy, 3).inline_keyboard[0][0].callback_data.split(":")[1] == legacy
     other = ReminderInfo(TG + 1, last_plan_code=legacy, last_months=3)
     assert await renew_target(container, TG + 1, other) == (None, None)
+
+
+# --- tariffs stage 1: a legacy plan is listed only to its current paying subscriber ---------
+
+
+def _legacy_owner(deps, legacy, *, squads=None, status="ACTIVE", days=20, paid=True, tg=TG):
+    from datetime import datetime, timedelta, timezone
+
+    from app.domain.models import PanelUser
+
+    now = datetime.now(timezone.utc)
+    expire = datetime(2099, 12, 31, tzinfo=timezone.utc) if days is None else now + timedelta(days=days)
+    deps.hooks.last_plans[tg] = legacy
+    deps.hooks.paid_plans[tg] = {legacy} if paid else set()
+    deps.hooks.panel_users[tg] = PanelUser(id=501, telegram_id=tg, status=status, expire_at=expire,
+                                           squads=tuple(squads if squads is not None else (legacy,)))
+
+
+@pytest.mark.parametrize("legacy", ["basic", "premium"])
+async def test_legacy_plan_listed_for_current_paying_subscriber(legacy):
+    m, deps = make_money()
+    _legacy_owner(deps, legacy)
+    codes = [p[0] for p in await m.checkout.plan_options(TG)]
+    assert codes == ["lite", "standard", "pro", legacy]
+    row = (await m.checkout.plan_options(TG))[-1]
+    assert row[3] == min(PLAN_CATALOG[legacy]["prices"].values())
+    # the gift list never has it, other users never see it
+    assert legacy not in [p[0] for p in await m.checkout.plan_options(TG, gift=True)]
+    assert legacy not in [p[0] for p in await m.checkout.plan_options(TG + 1)]
+    # renewal at the legacy price stays as in 2.1.1
+    q = await m.checkout.quote(TG, legacy, 1)
+    assert q.is_legacy and q.amount_rub == get_plan_price(legacy, 1)
+
+
+@pytest.mark.parametrize("case", [
+    dict(days=None),                                   # lifetime (2099)
+    dict(squads=("basic", "pro-friend")),              # friend squad on the account
+    dict(squads=("basic-m",)),                         # manual payer squad only
+    dict(squads=("arcadia", "basic")),                 # arcadia is manual too
+    dict(squads=("lite",)),                            # already moved to a new plan
+    dict(status="EXPIRED", days=-1),                   # expired legacy
+    dict(status="DISABLED"),                           # disabled by an admin
+    dict(paid=False),                                  # never paid for it (grant/promo)
+])
+async def test_legacy_plan_hidden_unless_current_paid_subscription(case):
+    m, deps = make_money()
+    _legacy_owner(deps, "basic", **case)
+    assert [p[0] for p in await m.checkout.plan_options(TG)] == ["lite", "standard", "pro"]
+
+
+async def test_legacy_lookup_failure_shows_menu_plans_only():
+    m, deps = make_money()
+
+    async def boom(tg):
+        raise RuntimeError("panel down")
+
+    deps.hooks.listed_legacy_plan = boom
+    assert [p[0] for p in await m.checkout.plan_options(TG)] == ["lite", "standard", "pro"]
+
+
+async def test_legacy_hook_skips_panel_when_last_plan_is_not_legacy(monkeypatch):
+    """LegacyHooks.listed_legacy_plan asks the panel only for legacy last plans."""
+    from app.services.money import LegacyHooks
+
+    hooks = LegacyHooks()
+
+    async def last_plan(tg):
+        return "pro"
+
+    async def paid(tg):
+        raise AssertionError("no DB read for a non-legacy user")
+
+    monkeypatch.setattr(hooks, "last_plan", last_plan)
+    monkeypatch.setattr(hooks, "_paid_plans", paid)
+    assert await hooks.listed_legacy_plan(TG) is None

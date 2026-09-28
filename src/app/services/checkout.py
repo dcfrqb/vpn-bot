@@ -4,8 +4,9 @@
 the legacy router still call it). The rule itself is domain.plans.quote_purchase.
 
 ``CheckoutServiceImpl``: app.services.ports.CheckoutService.
-  quote()  server price for this user (catalog only; legacy plan only for its owner,
-           and only through explicit renewal entry points: plan_options never lists it),
+  quote()  server price for this user (catalog only; legacy plan only for its owner),
+  plan_options()  the menu plans, plus the user's own legacy plan only while it is
+           their current paid subscription (``legacy_plan_for_list``),
            plus the Stars price when STARS_ENABLED and STARS_RATE > 0;
   start()  create a payment, or reuse the user's pending one for the same
            (plan, months, kind, method, autorenew) created in the last 15 minutes;
@@ -18,10 +19,48 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any, Mapping, Optional
+from datetime import datetime
+from typing import Any, Iterable, Mapping, Optional
 
 from app.core.plans import LEGACY_PLAN_CODES, quote_purchase
 from app.logger import logger
+
+LIFETIME_YEAR = 2099
+LIVE_PANEL_STATUSES = ("ACTIVE", "LIMITED")
+
+
+def legacy_plan_for_list(user: Any, *, last_plan: Optional[str], paid_plans: Iterable[str],
+                         now: datetime) -> Optional[str]:
+    """Legacy plan (basic/premium) to add to this user's plan list, or None.
+
+    Tariffs stage 1 (release 3.0): a legacy plan is listed only to a CURRENT paying
+    subscriber of that very plan:
+      - the main panel account is live (ACTIVE/LIMITED, expireAt in the future)
+        and not lifetime (expireAt before 2099);
+      - it holds the legacy squad itself and no manual squad (``*-m``, ``*-friend``,
+        arcadia: friends and manual payers are not bot customers of that plan);
+      - the user's last plan (active DB subscription, else the last succeeded
+        non-promo payment) is that legacy plan, and the user has paid for it at
+        least once (a succeeded non-promo payment with that plan code).
+    Everyone else (new users, lifetime, friends, expired legacy) sees the menu only.
+    Renewal of a legacy plan by its owner (quote/period_options) is unchanged.
+    """
+    from app.services.remna_tariff import is_manual_squad_name
+
+    code = (last_plan or "").lower().strip()
+    if code not in LEGACY_PLAN_CODES or code not in {str(p).lower() for p in paid_plans or ()}:
+        return None
+    if user is None or (getattr(user, "status", None) or "").upper() not in LIVE_PANEL_STATUSES:
+        return None
+    expire = getattr(user, "expire_at", None)
+    if expire is None or expire <= now or expire.year >= LIFETIME_YEAR:
+        return None
+    squads = [str(s or "").lower() for s in (getattr(user, "squads", None) or ())]
+    if any(is_manual_squad_name(s) for s in squads):
+        return None
+    from app.domain.plans import get_plan_squad
+
+    return code if get_plan_squad(code) in squads else None
 
 
 async def resolve_purchase_amount(
@@ -130,20 +169,32 @@ class CheckoutServiceImpl:
                 out.append((code, q.title, q.amount_rub))
         return out
 
-    async def plan_options(self, telegram_id: int, *, gift: bool = False) -> list[tuple[str, str, tuple, int]]:
-        """[(code, name, features, 1-month price)] of the plan list: menu plans only.
+    async def _listed_legacy(self, telegram_id: int) -> Optional[str]:
+        """The user's own legacy plan for the list (hooks.listed_legacy_plan), fail closed."""
+        try:
+            code = await self.d.hooks.listed_legacy_plan(int(telegram_id))
+        except Exception as e:  # noqa: BLE001 - fail closed: the menu plans only
+            logger.warning(f"checkout.plan_options: legacy lookup failed user={telegram_id} ({type(e).__name__})")
+            return None
+        return code if code in LEGACY_PLAN_CODES else None
 
-        Legacy plans (basic, premium) are never listed, not even for their owners
-        (owner decision 27.09.2026: legacy users are asked to move to the new
-        plans). An owner can still renew a legacy plan through the explicit
-        renewal entry points only: the «Продлить подписку» button under
-        reminders / grace notices (worker.panel_events.renew_target ->
-        Period(c=<legacy>, m)) and old 2.x buttons that carry the plan code;
-        ``quote`` keeps selling it to the owner there."""
+    async def plan_options(self, telegram_id: int, *, gift: bool = False) -> list[tuple[str, str, tuple, int]]:
+        """[(code, name, features, 1-month price)] of the plan list: the menu plans,
+        then the user's own legacy plan (basic/premium) only while it is their
+        current paid subscription (tariffs stage 1, ``legacy_plan_for_list``).
+        Hidden for everyone else, lifetime users and friends included, and never
+        in the gift list. The explicit renewal entry points (reminder / grace
+        «Продлить подписку», old 2.x buttons with the plan code) keep selling the
+        legacy plan to its owner through ``quote`` as before."""
         from app.domain.plans import MENU_PLAN_CODES, get_plan_features, get_plan_name
 
+        codes = list(MENU_PLAN_CODES)
+        if not gift:
+            legacy = await self._listed_legacy(telegram_id)
+            if legacy:
+                codes.append(legacy)
         out = []
-        for code in MENU_PLAN_CODES:
+        for code in codes:
             periods = await self.period_options(telegram_id, code, gift=gift)
             if periods:
                 out.append((code, get_plan_name(code), tuple(get_plan_features(code)), min(p[1] for p in periods)))

@@ -321,6 +321,10 @@ class FakeHooks:
         self.blocked_users: dict[int, str] = {}
         self.blocked_cards: dict[str, str] = {}
         self.last_plans: dict[int, str] = {}
+        # listed_legacy_plan: the real rule over a fake panel user and paid plans
+        self.panel_users: dict[int, object] = {}
+        self.paid_plans: dict[int, set] = {}
+        self.now = None
 
     obhod_live = True
 
@@ -345,6 +349,16 @@ class FakeHooks:
 
     async def last_plan(self, telegram_id):
         return self.last_plans.get(telegram_id)
+
+    async def listed_legacy_plan(self, telegram_id):
+        from datetime import datetime, timezone
+
+        from app.services.checkout import legacy_plan_for_list
+
+        return legacy_plan_for_list(
+            self.panel_users.get(telegram_id), last_plan=self.last_plans.get(telegram_id),
+            paid_plans=self.paid_plans.get(telegram_id, set()), now=self.now or datetime.now(timezone.utc),
+        )
 
     async def suppress_expiry_notices(self, telegram_id, expires_at) -> None:
         return None
