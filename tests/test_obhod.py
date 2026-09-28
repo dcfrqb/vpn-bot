@@ -255,6 +255,8 @@ async def test_ensure_obhod_extends_existing_user():
     mock_client.update_user.assert_awaited()
     upd_kwargs = mock_client.update_user.await_args.kwargs
     assert upd_kwargs["traffic_limit_bytes"] == plans.obhod_base_limit_bytes()
+    # tariffs stage 1: a Pro renewal without a live package sets the new 150 GB base
+    assert upd_kwargs["traffic_limit_bytes"] == 150 * 1024**3
     assert existing.valid_until == valid_until
 
 

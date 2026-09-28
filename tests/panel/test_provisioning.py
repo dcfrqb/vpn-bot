@@ -160,6 +160,25 @@ async def test_device_limit_policy(svc, fake, limit, foreign, expected):
     assert fake.users[501]["hwidDeviceLimit"] == expected
 
 
+@pytest.mark.parametrize("limit,expected", [
+    (2, 3),      # tariffs stage 1: a Lite renewal lifts the old limit 2 to 3
+    (3, 3),
+    (5, 5),      # never lowered (ex-basic, admin raise)
+    (None, 3),   # NULL of a bot-created user: plan limit
+    (0, 0),      # unlimited, set by hand
+])
+async def test_lite_purchase_gets_three_devices_never_lower(svc, fake, limit, expected):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=limit, expire=iso(NOW + timedelta(days=2)))
+    await svc.grant(7, Entitlement(plan_code="lite", source=Src.PAYMENT, payment_id=1), trace_id="t", months=1)
+    assert fake.users[501]["hwidDeviceLimit"] == expected
+
+
+async def test_new_lite_account_is_created_with_three_devices(svc, fake):
+    await svc.grant(7, Entitlement(plan_code="lite", source=Src.PAYMENT, payment_id=1), trace_id="t", months=1)
+    uid = fake.created[-1]["id"]
+    assert fake.users[uid]["hwidDeviceLimit"] == 3
+
+
 async def test_disabled_user_is_refused_with_one_alert(svc, fake, notifier):
     fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, status="DISABLED")
     for i in range(2):
