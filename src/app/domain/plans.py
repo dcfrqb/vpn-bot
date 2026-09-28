@@ -18,6 +18,7 @@ Cohort:
 - "trial" — служебный, всегда provisions через standard squad
   (см. services/remna_service.py TARIFF_TO_DAYS::trial_standard_5d, 5 дней).
 """
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -57,17 +58,40 @@ def countries_line(countries) -> str:
     return ", ".join(f"{COUNTRIES[c][0]} {COUNTRIES[c][1]}" for c in countries)
 
 
+def country_flags(countries) -> tuple[str, ...]:
+    """Флаги стран тарифа в порядке каталога: ("🇫🇮", "🇳🇱")."""
+    return tuple(COUNTRIES[c][0] for c in countries)
+
+
 def build_plan_features(meta: dict) -> list[str]:
-    """Строки описания тарифа из данных каталога: трафик, серверы, обход, устройства."""
-    obhod_gb = meta.get("obhod_gb")
-    lines = ["Неограниченный трафик и скорость" + (" (не считая обхода)" if obhod_gb else "")]
-    countries = meta.get("countries") or ()
-    if countries:
-        lines.append(("Сервер: " if len(countries) == 1 else "Серверы: ") + countries_line(countries))
-    if obhod_gb:
-        lines.append(f"Обход блокировок: {int(obhod_gb)} ГБ в месяц")
-    lines.append(f"Подключение до {int(meta['device_limit'])} устройств")
+    """Строки описания тарифа (экран выбора срока) из данных каталога: страны по одной
+    в строке, устройства, трафик. Обход описывается отдельным блоком (obhod_gb)."""
+    lines = [f"{COUNTRIES[c][0]} {COUNTRIES[c][1]}" for c in meta.get("countries") or ()]
+    n = int(meta["device_limit"])
+    lines.append(f"📱 До {n} " + ("устройства" if n % 10 == 1 and n % 100 != 11 else "устройств"))
+    lines.append("♾ Безлимитный трафик и скорость")
     return lines
+
+
+def saving_percent(amount: int, base_month: int, months: int) -> int:
+    """Выгода срока против помесячной оплаты, в процентах (как в period_options)."""
+    if not base_month or months <= 1:
+        return 0
+    return max(0, int(round((1 - amount / (base_month * months)) * 100)))
+
+
+def yearly_saving_percent(plan_code: Optional[str]) -> int:
+    """Выгода годовой оплаты тарифа по ценам каталога; 0 без цены на 1 или 12 месяцев."""
+    meta = _lookup(plan_code)
+    prices = (meta or {}).get("prices") or {}
+    if 1 not in prices or 12 not in prices:
+        return 0
+    return saving_percent(int(prices[12]), int(prices[1]), 12)
+
+
+def max_yearly_saving_percent(plan_codes) -> int:
+    """Наибольшая выгода за год среди тарифов списка («За год дешевле до N%»)."""
+    return max((yearly_saving_percent(c) for c in plan_codes), default=0)
 
 
 # =============================================================================
@@ -80,6 +104,7 @@ def build_plan_features(meta: dict) -> list[str]:
 #   prices        — RUB по периодам {months: amount}
 #   countries     — ключи COUNTRIES в порядке показа (что обещаем в описании)
 #   obhod_gb      — базовый месячный кап обхода, если тариф его дает
+#   popular       — метка «выбирают чаще» в списке тарифов
 #   features      — строки для экрана выбора/деталей; собираются из полей выше
 #                   (build_plan_features), руками не пишутся
 PLAN_CATALOG: dict[str, dict] = {
@@ -114,6 +139,7 @@ PLAN_CATALOG: dict[str, dict] = {
         "display": "Standard",
         "prices": {1: 249, 3: 649, 6: 1199, 12: 2199},
         "countries": ("nl", "fi", "de"),  # nl-0, nl-1, fi-1, de-1
+        "popular": True,
     },
     "pro": {
         "squad": "pro",
@@ -292,6 +318,37 @@ def get_plan_price(plan_code: Optional[str], months: int) -> int:
     if not meta:
         return 0
     return int(meta["prices"].get(int(months), 0))
+
+
+@dataclass(frozen=True)
+class PlanCard:
+    """Данные карточки тарифа в списке (docs/SCREENS.md, choice): только отличия тарифов."""
+
+    code: str
+    flags: tuple[str, ...]
+    device_limit: int
+    obhod_gb: int = 0
+    popular: bool = False
+
+
+def get_plan_card(plan_code: Optional[str]) -> Optional[PlanCard]:
+    """Карточка тарифа из каталога, или None для неизвестного кода."""
+    meta = _lookup(plan_code)
+    if not meta:
+        return None
+    return PlanCard(
+        code=str(plan_code).lower().strip(),
+        flags=country_flags(meta.get("countries") or ()),
+        device_limit=int(meta["device_limit"]),
+        obhod_gb=int(meta.get("obhod_gb") or 0),
+        popular=bool(meta.get("popular")),
+    )
+
+
+def get_plan_obhod_gb(plan_code: Optional[str]) -> int:
+    """Базовый месячный кап обхода тарифа в ГБ; 0, если тариф обход не дает."""
+    meta = _lookup(plan_code)
+    return int((meta or {}).get("obhod_gb") or 0)
 
 
 def get_plan_features(plan_code: Optional[str]) -> list[str]:

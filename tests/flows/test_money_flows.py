@@ -47,7 +47,7 @@ async def test_buy_subscription_alias_opens_plans_and_periods(money_flow):
     screen = _last_screen(f)
     datas = [b["data"] for b in _buttons(screen)]
     assert [d for d in datas if d and d.startswith("pl:")] == ["pl:lite", "pl:standard", "pl:pro"]
-    assert "Выбери тариф" in screen.text
+    assert "Тарифы CRS VPN" in screen.text and "Во всех тарифах" in screen.text
     await f.press(Plan(c="pro").pack())
     periods = [b for b in _buttons(_last_screen(f)) if (b["data"] or "").startswith("pe:")]
     assert [b["data"] for b in periods] == ["pe:pro:1", "pe:pro:3", "pe:pro:6", "pe:pro:12"]

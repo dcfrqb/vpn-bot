@@ -12,6 +12,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.callbacks import AdmRefund, AdmReview, AutoPay, Gift, Nav, PayCheck, PayStars, Period, Plan, RefundReq
 from app.bot.views import kit
+from app.domain.plans import get_plan_card, get_plan_obhod_gb, max_yearly_saving_percent
 from app.domain.texts import checkout as T
 from app.domain.texts.common import OFFER_URL, PRIVACY_URL
 from app.domain.texts.ui import B, Screen
@@ -45,20 +46,26 @@ def support_url(settings: Any) -> Optional[str]:
 
 
 def plans_view(plans: Sequence[PlanOption], *, gifts: bool, gift: bool = False) -> kit.View:
-    screen = T.plans_screen_of([(p.name, p.features, p.code) for p in plans], gift=gift)
+    """Plan list: compact cards (only the differences, from the catalog), the common
+    features once in the hint, plan buttons two per row, [🎁 Подарить] [🏠 В меню]."""
+    screen = T.plans_screen_of([(p.code, p.name, p.from_rub, get_plan_card(p.code)) for p in plans], gift=gift,
+                               max_saving=max_yearly_saving_percent([p.code for p in plans]))
+    buttons = [kit.action(T.btn_plan(p.name, p.from_rub, p.code), Gift(a="plan", id=p.code) if gift else Plan(c=p.code))
+               for p in plans]
+    gift_btn = kit.action(T.BTN_GIFT, Gift(a="buy")) if gifts and not gift else None
     return kit.view(
         screen,
-        options=[kit.action(T.btn_plan(p.name, p.from_rub), Gift(a="plan", id=p.code) if gift else Plan(c=p.code))
-                 for p in plans],
-        secondary=[kit.action(T.BTN_GIFT, Gift(a="buy")) if gifts and not gift else None],
-        footer=kit.Footer.back_menu(Nav(s="plans")) if gift else kit.Footer.to_menu(),
+        options=kit.grid(buttons, per_row=2),
+        footer=kit.Footer.back_menu(Nav(s="plans")) if gift else kit.Footer.to_menu(lead=gift_btn),
     )
 
 
 def periods_view(plan_code: str, name: str, features: Sequence[str], options: Sequence[PeriodOption], *,
                  gift: bool = False) -> kit.View:
+    """Plan detail: the full description (servers with names, devices, traffic, obhod)
+    and one period per row «{months} · {price} (−N%)»."""
     return kit.view(
-        T.periods_screen_of(name, features, gift=gift, code=plan_code),
+        T.periods_screen_of(name, features, gift=gift, code=plan_code, obhod_gb=get_plan_obhod_gb(plan_code)),
         options=[kit.action(T.btn_period(o.months, o.amount_rub, o.saving_percent),
                             Gift(a="period", id=f"{plan_code}.{o.months}") if gift else Period(c=plan_code, m=o.months))
                  for o in options],

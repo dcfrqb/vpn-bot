@@ -202,7 +202,7 @@ class CheckoutServiceImpl:
 
     async def period_options(self, telegram_id: int, plan_code: str, *, gift: bool = False) -> list[tuple[int, int, int]]:
         """[(months, price, saving %)] sellable periods of a plan for this user."""
-        from app.domain.plans import PLAN_CATALOG
+        from app.domain.plans import PLAN_CATALOG, saving_percent
 
         meta = PLAN_CATALOG.get((plan_code or "").lower().strip())
         if not meta:
@@ -215,9 +215,7 @@ class CheckoutServiceImpl:
                 continue
             if months == 1:
                 base = q.amount_rub
-            saving = 0
-            if base and months > 1:
-                saving = max(0, int(round((1 - q.amount_rub / (base * months)) * 100)))
+            saving = saving_percent(q.amount_rub, base, months) if base else 0
             out.append((months, q.amount_rub, saving))
         return out
 

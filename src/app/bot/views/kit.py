@@ -51,15 +51,17 @@ class Footer:
     back_label: str = B.BACK
     cancel: Optional[Union[CallbackData, str]] = None
     cancel_label: str = B.CANCEL
+    lead: Optional[Button] = None
 
     @staticmethod
     def none() -> "Footer":
         return Footer()
 
     @staticmethod
-    def to_menu() -> "Footer":
-        """First-level screen (opened from the main menu): [🏠 В меню]."""
-        return Footer(menu=True)
+    def to_menu(lead: Optional[Button] = None) -> "Footer":
+        """First-level screen (opened from the main menu): [🏠 В меню]. ``lead`` is one
+        secondary action put before it in the same row: [🎁 Подарить] [🏠 В меню]."""
+        return Footer(menu=True, lead=lead)
 
     @staticmethod
     def back_menu(back: Union[CallbackData, str]) -> "Footer":
@@ -101,6 +103,8 @@ class Footer:
     def row(self) -> list[Button]:
         """The single footer row (a wizard footer has two rows: use ``rows``)."""
         out: list[Button] = []
+        if self.lead is not None:
+            out.append(self.lead)
         if self.back is not None:
             out.append(btn(self.back_label, self.back))
         if self.menu:

@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Optional, Sequence, Union
 
-from app.domain.texts import fmt_date_msk, fmt_rub, h, months_ru, ui
+from app.domain.texts import devices_ru, fmt_date_msk, fmt_rub, h, months_ru, ui
 from app.domain.texts import common as _c
 from app.domain.texts.ui import B, E
 
@@ -47,12 +47,15 @@ def btn_pay_stars(stars: int) -> str:
 
 
 def btn_period(months: int, amount: Money, saving_percent: int = 0) -> str:
-    tail = f" (выгода {saving_percent}%)" if saving_percent > 0 else ""
+    """«3 месяца · 329 ₽ (−15%)»: the minus is U+2212, not a dash."""
+    tail = f" (\u2212{saving_percent}%)" if saving_percent > 0 else ""
     return f"{months_ru(months)} · {fmt_rub(amount)}{tail}"
 
 
-def btn_plan(name: str, from_amount: Optional[Money]) -> str:
-    return f"{name} · от {fmt_rub(from_amount)}/мес" if from_amount else name
+def btn_plan(name: str, from_amount: Optional[Money], code: Optional[str] = None) -> str:
+    """«🟢 Lite · 129 ₽» (the 1-month price) under the plan list."""
+    head = f"{plan_emoji(code)} {name}" if code else name
+    return f"{head} · {fmt_rub(from_amount)}" if from_amount else head
 
 
 def btn_obhod_package(name: str, price: Money) -> str:
@@ -70,36 +73,68 @@ def plan_emoji(code: Optional[str]) -> str:
 
 
 def _features(features: Iterable[str]) -> list[str]:
-    return [f"· {h(f)}" for f in features]
+    return [h(f) for f in features]
 
 
-def plans_screen_of(plans: Sequence[tuple], *, gift: bool = False) -> ui.Screen:
-    """plans: [(display name, features)] or [(display name, features, code)] in menu order."""
-    options = [ui.block(*_features(p[1]), title=h(p[0]), emoji=plan_emoji(p[2] if len(p) > 2 else None))
-               for p in plans]
+POPULAR_BADGE = "⭐ выбирают чаще"
+
+
+def plan_card_block(code: str, name: str, from_amount: Optional[Money], card) -> Optional[ui.Block]:
+    """One compact card of the plan list: only what differs between plans.
+
+    ``card``: app.domain.plans.PlanCard (flags in catalog order, device limit, obhod GB,
+    popular flag). Header ``{emoji} <b>{name}</b> · от {price}/мес[ · ⭐ выбирают чаще]``."""
+    tail = f" · от {fmt_rub(from_amount)}/мес" if from_amount else ""
+    if card is not None and card.popular:
+        tail += f" · {POPULAR_BADGE}"
+    lines: list[str] = []
+    if card is not None:
+        lines.append(" · ".join(x for x in (" ".join(card.flags), devices_ru(card.device_limit)) if x))
+        if card.obhod_gb:
+            lines.append(f"{E.OBHOD} Обход блокировок {int(card.obhod_gb)} ГБ/мес")
+    return ui.block(*lines, title=h(name), emoji=plan_emoji(code), tail=tail)
+
+
+def plans_common_line(max_saving: int) -> str:
+    """The list footer: what every plan has, once."""
+    tail = f" За год дешевле до {int(max_saving)}%." if max_saving > 0 else ""
+    return f"Во всех тарифах: безлимитный трафик и скорость.{tail}"
+
+
+def plans_screen_of(plans: Sequence[tuple], *, gift: bool = False, max_saving: int = 0) -> ui.Screen:
+    """plans: [(code, display name, 1-month price, PlanCard | None)] in menu order."""
+    options = [plan_card_block(code, name, price, card) for code, name, price, card in plans]
+    hint = plans_common_line(max_saving)
     if gift:
         return ui.choice("Подарок другу", emoji=E.GIFT, options=options,
                          intro=["Выбери тариф, который подаришь. После оплаты пришлем ссылку, "
                                 "ее нужно отправить другу."],
-                         hint="Выбери тариф кнопкой ниже.")
-    return ui.choice("Тарифы CRS VPN", emoji=E.SUBSCRIPTION, options=options, hint="Выбери тариф кнопкой ниже.")
+                         hint=hint)
+    return ui.choice("Тарифы CRS VPN", emoji=E.SUBSCRIPTION, options=options, hint=hint)
 
 
-def plans_screen(plans: Sequence[tuple], *, gift: bool = False) -> str:
-    return plans_screen_of(plans, gift=gift).html()
+def plans_screen(plans: Sequence[tuple], *, gift: bool = False, max_saving: int = 0) -> str:
+    return plans_screen_of(plans, gift=gift, max_saving=max_saving).html()
+
+
+def obhod_detail_line(obhod_gb: int) -> str:
+    return (f"Отдельная ссылка через российский вход для мобильного интернета с белыми списками, "
+            f"{int(obhod_gb)} ГБ в месяц.")
 
 
 def periods_screen_of(name: str, features: Iterable[str], *, gift: bool = False,
-                      code: Optional[str] = None) -> ui.Screen:
+                      code: Optional[str] = None, obhod_gb: int = 0) -> ui.Screen:
+    """The plan in full (servers with names, devices, traffic, obhod for Pro) and its periods."""
     title = f"Подарок: {h(name)}" if gift else h(name)
-    feats = _features(features)
-    return ui.choice(title, emoji=E.GIFT if gift else plan_emoji(code),
-                     options=[ui.block(*feats, title="Что входит", emoji="📋") if feats else None],
+    return ui.choice(title, emoji=E.GIFT if gift else plan_emoji(code), intro=_features(features),
+                     options=[ui.block(obhod_detail_line(obhod_gb), title="Обход блокировок", emoji=E.OBHOD)
+                              if obhod_gb else None],
                      hint="Выбери срок кнопкой ниже.")
 
 
-def periods_screen(name: str, features: Iterable[str], *, gift: bool = False, code: Optional[str] = None) -> str:
-    return periods_screen_of(name, features, gift=gift, code=code).html()
+def periods_screen(name: str, features: Iterable[str], *, gift: bool = False, code: Optional[str] = None,
+                   obhod_gb: int = 0) -> str:
+    return periods_screen_of(name, features, gift=gift, code=code, obhod_gb=obhod_gb).html()
 
 
 def obhod_packages_screen_of(base_gb: int, packages: Sequence[tuple[str, Money]]) -> ui.Screen:

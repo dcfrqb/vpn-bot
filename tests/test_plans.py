@@ -192,14 +192,26 @@ class TestTariffsStage1Catalog:
 
     def test_features_are_rendered_from_data(self):
         assert get_plan_features("lite") == [
-            "Неограниченный трафик и скорость",
-            "Серверы: 🇫🇮 Финляндия, 🇳🇱 Нидерланды",
-            "Подключение до 3 устройств",
+            "🇫🇮 Финляндия",
+            "🇳🇱 Нидерланды",
+            "📱 До 3 устройств",
+            "♾ Безлимитный трафик и скорость",
         ]
         pro = get_plan_features("pro")
-        assert "Обход блокировок: 150 ГБ в месяц" in pro
-        assert "Серверы: 🇳🇱 Нидерланды, 🇫🇮 Финляндия, 🇩🇪 Германия, 🇺🇸 США" in pro
-        assert "Подключение до 10 устройств" in pro
+        assert pro[:4] == ["🇳🇱 Нидерланды", "🇫🇮 Финляндия", "🇩🇪 Германия", "🇺🇸 США"]
+        assert "📱 До 10 устройств" in pro
+
+    def test_plan_cards_and_yearly_saving_come_from_the_catalog(self):
+        from app.domain.plans import MENU_PLAN_CODES, get_plan_card, max_yearly_saving_percent, yearly_saving_percent
+
+        lite, standard, pro = (get_plan_card(c) for c in ("lite", "standard", "pro"))
+        assert lite.flags == ("🇫🇮", "🇳🇱") and lite.device_limit == 3 and not lite.popular
+        assert standard.flags == ("🇳🇱", "🇫🇮", "🇩🇪") and standard.popular
+        assert pro.flags == ("🇳🇱", "🇫🇮", "🇩🇪", "🇺🇸") and pro.obhod_gb == 150 and lite.obhod_gb == 0
+        assert get_plan_card("unknown") is None
+        assert [yearly_saving_percent(c) for c in MENU_PLAN_CODES] == [29, 26, 26]
+        assert max_yearly_saving_percent(MENU_PLAN_CODES) == 29
+        assert yearly_saving_percent("trial") == 0
 
     @pytest.mark.parametrize("code", sorted(PLAN_CATALOG))
     def test_no_france_spain_or_stale_limits_in_any_plan_text(self, code):

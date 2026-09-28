@@ -87,7 +87,7 @@ class B:
     OFFER = "📄 Оферта"
     PRIVACY = "🔒 Политика конфиденциальности"
     TRIAL = "🎁 Попробовать 5 дней бесплатно"
-    GIFT = "🎁 Подарить подписку"
+    GIFT = "🎁 Подарить"  # next to «🏠 В меню» under the plan list
     REFUND = "↩️ Не смог подключиться"
     REFRESH = "🔄 Обновить"
     HELP = "ℹ️ Помощь"
@@ -155,11 +155,11 @@ def link(text: str, url: str) -> str:
     return f'<a href="{h(url)}">{text}</a>'
 
 
-def title_line(emoji: str, title: str) -> str:
-    """``{emoji} <b>{title}</b>``; emoji is outside the bold."""
+def title_line(emoji: str, title: str, tail: str = "") -> str:
+    """``{emoji} <b>{title}</b>{tail}``; emoji and tail (`` · от 129 ₽/мес``) are outside the bold."""
     if not title:
         return ""
-    return f"{emoji} <b>{title}</b>" if emoji else f"<b>{title}</b>"
+    return (f"{emoji} <b>{title}</b>" if emoji else f"<b>{title}</b>") + tail
 
 
 Line = Union[str, None]
@@ -178,21 +178,23 @@ class Block:
     title: str = ""
     emoji: str = ""
     quote: bool = True
+    tail: str = ""
 
     def html(self) -> str:
-        head = title_line(self.emoji, self.title)
+        head = title_line(self.emoji, self.title, self.tail)
         body = "\n".join(self.lines)
         if body and self.quote:
             body = f"<blockquote>{body}</blockquote>"
         return "\n".join(x for x in (head, body) if x)
 
 
-def block(*lines: Line, title: str = "", emoji: str = "", quote: bool = True) -> Optional[Block]:
-    """A block of non-empty lines; None when there is nothing to show."""
+def block(*lines: Line, title: str = "", emoji: str = "", quote: bool = True, tail: str = "") -> Optional[Block]:
+    """A block of non-empty lines; None when there is nothing to show. ``tail`` goes
+    after the bold title on the same line (option price and badge in a ``choice``)."""
     ls = _lines(lines)
     if not ls and not title:
         return None
-    return Block(ls, title=title, emoji=emoji, quote=quote)
+    return Block(ls, title=title, emoji=emoji, quote=quote, tail=tail)
 
 
 def plain(*lines: Line) -> Optional[Block]:
