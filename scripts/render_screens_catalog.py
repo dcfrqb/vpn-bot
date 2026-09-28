@@ -140,7 +140,7 @@ GLOSSARY = {
     "article_url": "ссылка на статью-инструкцию (CONNECT_ARTICLE_URL)",
     "pay_url": "ссылка на оплату ЮKassa",
     "link": "ссылка-подарок t.me/<бот>?start=g_...",
-    "features": "список особенностей тарифа, строки «· ...» из каталога тарифов",
+    "features": "описание тарифа из каталога: страны с флагами по одной в строке, «📱 До N устройств», «♾ Безлимитный трафик и скорость»",
     "payment_id": "номер платежа в БД бота",
     "external_id": "ID платежа в ЮKassa",
     "request_id": "номер запроса на возврат",
@@ -626,7 +626,7 @@ def _period_options(code: str) -> list:
 
 
 def _features_sub(code: str) -> list:
-    lines = "\n".join(f"· {h(f)}" for f in P.get_plan_features(code))
+    lines = "\n".join(h(f) for f in P.get_plan_features(code))
     return [(lines, "{features}")]
 
 
@@ -638,10 +638,14 @@ def section_payments() -> None:
     text, mk = VMo.plans_view(_plan_options(), gifts=True)
     add("pay.plans", sec, "src/app/domain/texts/checkout.py:plans_screen + btn_plan; views/money.py:plans_view",
         "«💳 Подписка»: список тарифов", text, mk, code=money_code,
-        note="блоки тарифов и кнопки строятся кодом из каталога src/app/domain/plans.py (PLAN_CATALOG: display, "
-             "prices, countries, device_limit, obhod_gb; строки описания собирает build_plan_features); шаблон "
-             "кнопки: «{plan} · от {price}/мес». Кнопка «Подарить подписку» только при GIFTS_ENABLED",
-        layout="views/money.py:plans_view: one row per plan (btn_plan), gift row (GIFTS_ENABLED), back")
+        note="компактные карточки строятся кодом из каталога src/app/domain/plans.py (PLAN_CATALOG: display, "
+             "prices, countries, device_limit, obhod_gb, popular; get_plan_card): в заголовке цена за 1 месяц "
+             "и метка «⭐ выбирают чаще» (флаг popular), в цитате флаги стран в порядке тарифа, устройства и "
+             "обход; общее для всех тарифов одной строкой внизу, «до N%» = наибольшая выгода за год по ценам "
+             "каталога (max_yearly_saving_percent). Шаблон кнопки: «{emoji} {plan} · {price}». Кнопка "
+             "«🎁 Подарить» только при GIFTS_ENABLED",
+        layout="views/money.py:plans_view: plan buttons two per row (kit.grid per_row=2, btn_plan), "
+               "footer [🎁 Подарить (GIFTS_ENABLED)] [🏠 В меню]")
     text, mk = VMo.plans_view(_plan_options(legacy="basic"), gifts=True)
     add("pay.plans.legacy_owner", sec, "src/app/services/checkout.py:plan_options + legacy_plan_for_list",
         "«💳 Подписка» у текущего платящего подписчика старого тарифа (пример: Базовый)", text, mk,
@@ -653,8 +657,9 @@ def section_payments() -> None:
     add("pay.periods", sec, "src/app/domain/texts/checkout.py:periods_screen + btn_period; views/money.py:periods_view",
         "выбрал тариф: выбор срока (пример для Pro)", text, mk, subs=_features_sub("pro") + [("<b>Pro</b>", "<b>{plan}</b>")],
         code=money_code,
-        note="кнопки сроков строятся из цен тарифа; шаблон кнопки: «{months} · {price} (выгода N%)», выгода "
-             "считается от цены за 1 месяц",
+        note="описание тарифа целиком (build_plan_features: страны с названиями, устройства, трафик), для "
+             "Pro блок «Обход блокировок» с лимитом из каталога (obhod_gb); кнопки сроков строятся из цен "
+             "тарифа; шаблон кнопки: «{months} · {price} (−N%)», выгода считается от цены за 1 месяц",
         layout="views/money.py:periods_view: one row per period (btn_period), back to plans")
     sub_checkout = [(PAY_URL, "{pay_url}"), (fmt_rub(pro_1), "{price}"), ("Тариф: Pro", "Тариф: {plan}"),
                     (f"Срок: {months_ru(1)}", "Срок: {months}")]
@@ -971,7 +976,7 @@ def section_promo() -> None:
     # gifts (buyer side)
     text, mk = VMo.plans_view(_plan_options(gift=True), gifts=True, gift=True)
     add("gift.plans", sec, "src/app/domain/texts/checkout.py:plans_screen(gift=True); views/money.py:plans_view",
-        "«Подарить подписку» в списке тарифов (GIFTS_ENABLED)", text, mk, code="src/app/domain/texts/checkout.py plans_screen",
+        "«🎁 Подарить» в списке тарифов (GIFTS_ENABLED)", text, mk, code="src/app/domain/texts/checkout.py plans_screen",
         note="блоки тарифов строятся из каталога, как в pay.plans", layout="views/money.py:plans_view(gift=True)")
     text, mk = VMo.periods_view("standard", "Standard", P.get_plan_features("standard"), _period_options("standard"),
                                 gift=True)
@@ -1849,11 +1854,13 @@ TYPE_DOCS = {
     "choice": ("""{эмодзи} <b>{заголовок}</b>
 <blockquote>{вводная}</blockquote>
 
-{эмодзи варианта} <b>{вариант}</b>
-<blockquote>· {особенность}</blockquote>
+{эмодзи варианта} <b>{вариант}</b> · {цена} · {метка}
+<blockquote>{только отличия варианта}</blockquote>
 
-<i>{Выбери ... кнопкой ниже}</i>""", "Варианты кнопками, по одному в ряд («Название · цена»), затем доп. действие (подарить), "
-     "футер: из меню [🏠 В меню], глубже [⬅️ Назад] [🏠 В меню].", "pay.plans"),
+<i>{общее для всех вариантов | Выбери ... кнопкой ниже}</i>""",
+     "Варианты кнопками («Название · цена»): сроки и пакеты по одному в ряд, тарифы по два в ряд. "
+     "Футер: из меню [🏠 В меню], в списке тарифов перед ним доп. действие [🎁 Подарить], "
+     "глубже [⬅️ Назад] [🏠 В меню].", "pay.plans"),
     "checkout": ("""💳 <b>{заголовок}</b>
 <blockquote>Тариф: {plan}
 Срок: {months}
@@ -1979,7 +1986,7 @@ def _content_md(e: Entry) -> list[str]:
             out.append("")  # two quotes in a row (item cards): keep them apart
         prev = bl
         if bl.title:
-            out.append(f"раздел: {bl.emoji} {t(bl.title)}".replace(":  ", ": "))
+            out.append(f"раздел: {bl.emoji} {t(bl.title)}{t(bl.tail)}".replace(":  ", ": "))
         for line in bl.lines:
             for part in t(line).split("\n"):
                 out.append(("> " if bl.quote else "текст: ") + part if part else ">")
@@ -2146,7 +2153,7 @@ def write_mapping(path: Path, head: str, unknown_old: list[str]) -> None:
             out.append(f"- `{e.id}`: repeated/conditional lines, see its `примечание` in the catalog")
     out.append("""
 Placeholders produced by the generator itself (not code variables):
-- `{features}`: `· <feature>` lines joined by newlines from `PLAN_CATALOG[plan]["features"]`.
+- `{features}`: feature lines joined by newlines from `PLAN_CATALOG[plan]["features"]` (build_plan_features).
 - `{icon}`: device icon from `texts/devices.py:_device_icon`.
 - `{client_line}` (admin.alert.paid): the `count` expression in `admin_paid`.
 - `{alert}` (review/refund results): the original alert text, `msg.html_text` in `routers/admin/payments.py:_close`.
