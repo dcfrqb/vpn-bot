@@ -69,5 +69,5 @@ async def cb_obhod(callback: CallbackQuery, callback_data: Adm) -> None:
         return
     elif a == "offok":
         ok = await obhod.deactivate(tg)
-        await callback.answer(T.DONE if ok else "Обход и так не активен", show_alert=True)
+        await callback.answer(T.DONE if ok else "Обход уже выключен", show_alert=True)
     await _card(callback, tg, answered=a in ("pkg", "base", "offok"))

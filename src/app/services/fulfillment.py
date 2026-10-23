@@ -53,7 +53,7 @@ from app.services.payments.store import (
 
 ALERT_TTL_S = 6 * 3600
 DISABLED_REVIEW_REASON = (
-    "пользователь отключен вручную в панели (DISABLED), оплата получена, реши вручную: "
+    "пользователь отключен вручную в панели (DISABLED), оплата получена, решите вручную: "
     "«Одобрить и выдать» включит юзера и выдаст оплаченный срок"
 )
 RECOVERY_PENDING_AGE = timedelta(minutes=15)
@@ -229,7 +229,7 @@ class Fulfillment(FulfillmentNotices):
                 # Paid although stop-listed (blocked between invoice and payment):
                 # the money is recorded and an admin decides (security m-6).
                 await self._hold(rec, f"оплата звездами от заблокированного пользователя ({blocked}): "
-                                      "верни звезды или одобри выдачу", f"stars-{rec.id}")
+                                      "верните звезды или одобрите выдачу", f"stars-{rec.id}")
                 return FulfilResult(Outcome.HELD, rec)
         elif rec.telegram_charge_id and rec.telegram_charge_id != charge_id:
             logger.error(f"stars: second charge {charge_id} for payment {rec.id}")

@@ -4,13 +4,13 @@
       "keyboard": null,
       "method": "SendMessage",
       "parse_mode": null,
-      "text": "сайт сейчас недоступен, попробуйте войти чуть позже."
+      "text": "Сайт сейчас недоступен. Попробуйте войти чуть позже."
     },
     {
       "keyboard": null,
       "method": "AnswerCallbackQuery",
       "parse_mode": null,
-      "text": "сайт недоступен, попробуйте позже"
+      "text": "Сайт недоступен. Попробуйте позже."
     }
   ]
 }

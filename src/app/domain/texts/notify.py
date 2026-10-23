@@ -56,7 +56,7 @@ def grace_started_screen(days: int, until, daily_gb: int) -> ui.Screen:
     return ui.push(E.GRACE, "Льготный период",
                    f"Подписка закончилась, но мы оставили доступ еще на {days_ru(days)}, чтобы вы успели продлить.",
                    ui.field("Доступ до", fmt_date_msk(until, with_time=True)) + " (МСК)",
-                   f"Работает часть серверов и до {int(daily_gb)} ГБ трафика в сутки.",
+                   f"Доступна часть серверов. Лимит трафика: до {int(daily_gb)} ГБ в сутки.",
                    hint="Продлите, чтобы VPN не отключился.")
 
 

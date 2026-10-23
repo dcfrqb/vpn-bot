@@ -28,9 +28,9 @@ ANSWER_PATH = "/api/internal/tg-login/answer"
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
-FEATURE_OFF_TEXT = "вход на сайт временно недоступен."
-SITE_UNAVAILABLE_TEXT = "сайт сейчас недоступен, попробуйте войти чуть позже."
-SITE_UNAVAILABLE_CALLBACK_TEXT = "сайт недоступен, попробуйте позже"
+FEATURE_OFF_TEXT = "Вход на сайт временно недоступен."
+SITE_UNAVAILABLE_TEXT = "Сайт сейчас недоступен. Попробуйте войти чуть позже."
+SITE_UNAVAILABLE_CALLBACK_TEXT = "Сайт недоступен. Попробуйте позже."
 
 _session: aiohttp.ClientSession | None = None
 

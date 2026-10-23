@@ -398,7 +398,7 @@ def broadcast_progress_screen(info: Any, credited: Optional[int], state_title: s
         f"Прогресс: {processed}/{info.total} ({pct}%)",
     ]
     if info.credit_days:
-        lines.append(f"Подарок начислено: {credited if credited is not None else '—'}")
+        lines.append(f"Начислено подарков: {credited if credited is not None else '—'}")
     if info.started_at:
         lines.append(field("Старт", fmt_date_msk(info.started_at, with_time=True)))
     if info.finished_at:

@@ -178,7 +178,7 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
             f"\n📦 Оплатил Pro {period_months} мес\n\n"
             f"📊 <b>Текущий пул:</b>\n"
             f"  • Pro-месяцев: <b>{earned_after}</b>  (было {earned_before})\n"
-            f"  • Бонус заработано: <b>{bonus_after:.2f}</b>  (целых: {earned_after // 5})\n"
+            f"  • Бонусов заработано: <b>{bonus_after:.2f}</b>  (целых: {earned_after // 5})\n"
             f"  • Уже выплачено: <b>{paid_out}</b>\n"
             f"  • <b>Доступно к выдаче: {available_after}</b>"
         )

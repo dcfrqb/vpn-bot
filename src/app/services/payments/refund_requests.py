@@ -114,7 +114,7 @@ class RefundRequests:
             return "failed:платеж не в статусе succeeded"
         if not rec.fulfilled:
             await store.transition_refund_request(request_id, ("approved",), "failed")
-            return "failed:доступ по платежу еще не выдан, реши вручную"
+            return "failed:доступ по платежу еще не выдан, решите вручную"
         now = _naive(self.d.clock())
         # Persist the queue before money issuance. A crash after the provider
         # accepted the request is recovered by READS, never another refund().

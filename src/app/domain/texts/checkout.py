@@ -212,7 +212,7 @@ PAYMENT_BLOCKED_SCREEN = ui.result("error", "Оплата недоступна",
                                    hint="Если это ошибка, напишите в поддержку.")
 PAYMENT_CREATE_FAILED_SCREEN = ui.result("error", "Не получилось создать платеж",
                                          hint="Попробуйте еще раз через минуту.")
-STARS_UNAVAILABLE_SCREEN = ui.result("warn", "Оплата звездами недоступна", hint="Оплати картой или попробуйте позже.")
+STARS_UNAVAILABLE_SCREEN = ui.result("warn", "Оплата звездами недоступна", hint="Оплатите картой или попробуйте позже.")
 
 
 # --- payment check (type: result) ------------------------------------------------------------
@@ -357,7 +357,7 @@ def admin_obhod_manual(*, telegram_id: int, package: str, external_id: str) -> s
         "Пакет обхода оплачен, но НЕ применен", emoji="⚠️",
         who=ui.who_block(name=None, username=None, telegram_id=telegram_id),
         lines=[ui.field("Пакет", package), ui.field("Payment", external_id)],
-        hint="Скорее всего нет активного обхода (Pro истек). Примените кап вручную или оформите возврат.",
+        hint="Скорее всего, нет активного обхода (Pro истек). Примените кап вручную или оформите возврат.",
     ).html()
 
 
@@ -477,7 +477,7 @@ def autopay_notice_screen(name: str, months: int, amount: Money, charge_on: Opti
                    ui.field("Сумма", fmt_rub(amount)),
                    ui.field("Тариф", f"{name}, {months_ru(months)}"),
                    "Карта уже сохранена.",
-                   hint="Если продление не нужно, отключи автопродление.")
+                   hint="Если продление не нужно, отключите автопродление.")
 
 
 def autopay_notice(name: str, months: int, amount: Money, charge_on: Optional[datetime] = None) -> str:
@@ -503,7 +503,7 @@ def autopay_stopped(expires_at: Optional[datetime]) -> str:
     return autopay_stopped_screen(expires_at).html()
 
 
-AUTOPAY_NOTHING_TO_STOP_SCREEN = ui.result("info", "Автопродление и так выключено")
+AUTOPAY_NOTHING_TO_STOP_SCREEN = ui.result("info", "Автопродление уже выключено")
 AUTOPAY_NOTHING_TO_STOP = AUTOPAY_NOTHING_TO_STOP_SCREEN.html()
 
 
