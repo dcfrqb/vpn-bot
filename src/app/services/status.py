@@ -125,9 +125,14 @@ def build_state(
         plan = (main_row.plan_code or None) or plan
         is_lifetime = False
     cfg = (main_row.config_data if main_row else None) or {}
-    obhod_active = bool(obhod_row and obhod_row.active)
-    if obhod_user is not None:
-        obhod_active = obhod_active and _is_live(obhod_user, now)
+    # An active local row alone does not establish live bypass access.
+    obhod_active = bool(obhod_row and obhod_row.active and _is_live(obhod_user, now))
+    obhod_provisioning_state = "unknown"
+    if obhod_row and obhod_row.provisioning_state == "failed":
+        obhod_provisioning_state = "failed"
+    elif (obhod_row and obhod_row.provisioning_state == "pending"
+          and obhod_row.last_provisioning_attempt_at is not None):
+        obhod_provisioning_state = "pending"
     return SubscriptionState(
         telegram_id=int(telegram_id),
         has_panel_user=user is not None,
@@ -143,6 +148,7 @@ def build_state(
         grace_until=main_row.grace_until if in_grace else None,
         is_trial=bool(cfg.get("last_source") == "trial" or (plan == "trial")),
         obhod_active=obhod_active,
+        obhod_provisioning_state=obhod_provisioning_state,
         obhod_used_bytes=obhod_user.used_traffic_bytes if obhod_user else None,
         obhod_limit_bytes=obhod_user.traffic_limit_bytes if obhod_user else None,
         subscription_url=url,

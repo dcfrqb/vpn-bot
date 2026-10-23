@@ -14,6 +14,14 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from app.domain.models import Entitlement, SubKind, SubscriptionState
 from app.services.payments.store import (
+    M_REFUND_24H,
+    claim_refund_marker,
+    claim_refund_notice_marker,
+    finish_refund_notice_marker,
+    finish_refund_marker,
+    merge_refund_marker,
+    refund_access_due,
+    refund_notice_due,
     M_CREATED_V3,
     M_FULFILLED_AT,
     M_NEEDS_PROVISIONING,
@@ -205,6 +213,59 @@ class InMemoryPaymentStore:
             rr.decided_at = self._now()
         return replace(rr)
 
+    async def refund_access_candidates(self, now, *, limit=20):
+        return [self._copy(r) for r in sorted(self.payments.values(),
+                 key=lambda r: (not refund_access_due(r.meta, now), r.id))
+                if refund_access_due(r.meta, now) or refund_notice_due(r.meta, now)][:limit]
+
+    async def update_refund_marker(self, payment_id, patch, *, access_patch=None):
+        rec = self.payments.get(int(payment_id))
+        if rec is None:
+            return False
+        rec.meta[M_REFUND_24H] = merge_refund_marker(rec.meta, patch, access_patch)
+        return True
+
+    async def claim_refund_access(self, payment_id, *, owner, now, lease_for):
+        rec = self.payments.get(int(payment_id))
+        if rec is None:
+            return None
+        marker = claim_refund_marker(rec.meta, owner=owner, now=now, lease_for=lease_for)
+        if marker is None:
+            return None
+        rec.meta[M_REFUND_24H] = marker
+        return self._copy(rec)
+
+    async def finish_refund_access(self, payment_id, *, owner, state, now, error="", action=None, reason_class=None):
+        rec = self.payments.get(int(payment_id))
+        if rec is None:
+            return None
+        marker = finish_refund_marker(rec.meta, owner=owner, state=state, now=now, error=error, action=action, reason_class=reason_class)
+        if marker is None:
+            return None
+        rec.meta[M_REFUND_24H] = marker
+        return self._copy(rec)
+
+    async def claim_refund_notice(self, payment_id, *, owner, now, lease_for):
+        rec = self.payments.get(int(payment_id))
+        if rec is None:
+            return None
+        marker = claim_refund_notice_marker(rec.meta, owner=owner, now=now, lease_for=lease_for)
+        if marker is None:
+            return None
+        rec.meta[M_REFUND_24H] = marker
+        return self._copy(rec)
+
+    async def finish_refund_notice(self, payment_id, *, owner, phase, user_delivered, admin_delivered, now):
+        rec = self.payments.get(int(payment_id))
+        if rec is None:
+            return False
+        marker = finish_refund_notice_marker(rec.meta, owner=owner, phase=phase, user_delivered=user_delivered,
+                                            admin_delivered=admin_delivered, now=now)
+        if marker is None:
+            return False
+        rec.meta[M_REFUND_24H] = marker
+        return True
+
     async def save_method(self, telegram_id, *, provider, external_id, title, card_fingerprint) -> int:
         for m in self.methods.values():
             if m.provider == provider and m.external_id == external_id:
@@ -260,6 +321,12 @@ class FakeProvisioning:
         self.fail_times = 0
         self.fail_with: Exception = RuntimeError("panel down")
         self.revoke_result = True
+        self.rollback_action = None
+        self.rollback_fail_times = 0
+        self.rollback_calls = []
+        self.rollback_applied = {}
+        self.rollback_response_fail_times = 0
+        self.rollback_sync_fail_times = 0
         self.calls: list[dict] = []
 
     async def grant(self, telegram_id: int, entitlement: Entitlement, *, trace_id: str,
@@ -293,10 +360,32 @@ class FakeProvisioning:
         return state
 
     async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str,
-                     months: Optional[int] = None) -> bool:
+                     months: Optional[int] = None, payment_id: Optional[int] = None) -> bool:
         self.revokes.append((telegram_id, reason))
         self.revoke_months.append(months)
+        self.revoke_payment_ids = getattr(self, "revoke_payment_ids", []) + [payment_id]
         return self.revoke_result
+
+    async def rollback(self, telegram_id, *, months, reason, trace_id, payment_id=None):
+        from app.services.credits import RollbackResult
+        self.rollback_calls.append((telegram_id, months, payment_id, trace_id))
+        if self.rollback_fail_times:
+            self.rollback_fail_times -= 1
+            raise RuntimeError("panel unavailable")
+        result = self.rollback_applied.get(payment_id)
+        if result is None:
+            changed = await self.revoke(telegram_id, reason=reason, trace_id=trace_id,
+                                        months=months, payment_id=payment_id)
+            result = RollbackResult(self.rollback_action or ("shortened" if changed else "skipped"),
+                                   self.clock() + timedelta(days=10) if changed else None)
+            self.rollback_applied[payment_id] = result
+        if self.rollback_response_fail_times:
+            self.rollback_response_fail_times -= 1
+            raise RuntimeError("PATCH response lost")
+        if self.rollback_sync_fail_times:
+            self.rollback_sync_fail_times -= 1
+            raise RuntimeError("bypass synchronization unconfirmed")
+        return result
 
 
 class FakePromo:

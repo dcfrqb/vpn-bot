@@ -61,9 +61,23 @@ def _setup(expire_in_days: float, amount=129.0, refunded=129.0, period=1, plan="
 
     fake = FakeRemna()
     until = datetime.now(timezone.utc) + timedelta(days=expire_in_days)
-    fake.add_user(9, "tg_a", telegram_id=555, squads=["lite"], expire=_iso(until))
+    from app.domain.plans import get_plan_device_limit, get_plan_squad
+
+    effective_plan = plan if get_plan_squad(plan) else "lite"
+    limit = get_plan_device_limit(effective_plan)
+    fake.add_user(9, "tg_a", telegram_id=555, squads=[effective_plan], limit=limit, expire=_iso(until))
     fake.repo = InMemoryAccountsRepo()
-    fake.repo.add_row(555, plan=plan, panel_id=9, until=until.replace(microsecond=0))
+    target = until.replace(microsecond=0)
+    base = target - timedelta(days=30)
+    at = min(base, datetime.now(timezone.utc) - timedelta(days=1))
+    fake.repo.add_row(555, plan=plan, panel_id=9, until=target, config_data={"rights_seq": 1, "grants": {"pay:1": {
+        "state": "applied", "source": "payment", "base": base.isoformat(),
+        "target": target.isoformat(), "at": at.isoformat(), "payment_id": 1,
+        "rights_seq": 1, "rights_before": {"managed": [effective_plan], "plan": effective_plan, "device_limit": limit},
+        "rights_after": {"managed": [effective_plan], "plan": effective_plan, "device_limit": limit},
+        "rights_op": {"plan": effective_plan, "squad": effective_plan, "device_limit": limit, "foreign": False},
+        "rights_refunds_before": [],
+    }}})
     fake.obhod = _RecordingObhod()
     payment = SimpleNamespace(
         id=1, external_id="pay-1", telegram_user_id=555, amount=amount, currency="RUB",
@@ -253,3 +267,28 @@ async def test_full_refund_of_an_unused_gift_switches_the_code_off():
     assert fake.patches == []
     admin = [c.kwargs["text"] for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 900][0]
     assert "код отключен" in admin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason,expected", [("money_unconfirmed", "pending"), ("access_policy", "manual_review")])
+async def test_verified_24h_webhook_rearms_only_unconfirmed_money(reason, expected):
+    fake, payment, sub, session, refund, api_payment = _setup(expire_in_days=70)
+    payment.payment_metadata["refund_24h"] = {"rid": 3, "state": "done", "revoked": False,
+        "access": {"state": "manual_review", "reason_class": reason}}
+    assert await _call(fake, session, refund, api_payment, AsyncMock())
+    marker = payment.payment_metadata["refund_24h"]
+    assert marker["money_status"] == "succeeded" and marker["provider_refund_id"] == refund["id"]
+    assert marker["access"]["state"] == expected
+    assert not fake.patches and not fake.obhod.granted
+
+
+@pytest.mark.asyncio
+async def test_verified_24h_webhook_preserves_active_access_lease_and_applied_marker():
+    for state in ("processing", "applied"):
+        fake, payment, sub, session, refund, api_payment = _setup(expire_in_days=70)
+        payment.payment_metadata["refund_24h"] = {"rid": 3, "state": "done", "revoked": state == "applied",
+            "access": {"state": state, "lease_owner": "other-worker", "lease_until": "2099-01-01T00:00:00"}}
+        assert await _call(fake, session, refund, api_payment, AsyncMock())
+        marker = payment.payment_metadata["refund_24h"]
+        assert marker["access"]["state"] == state and marker["access"]["lease_owner"] == "other-worker"
+        assert marker["money_status"] == "succeeded" and not fake.patches

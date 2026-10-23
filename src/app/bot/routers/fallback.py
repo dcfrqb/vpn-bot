@@ -7,13 +7,27 @@ Owner: D (User UI).
 """
 from __future__ import annotations
 
-from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.types import CallbackQuery, Message
 
-from app.domain.texts.common import STALE_BUTTON
+from app.bot.callbacks import Nav
+from app.bot.views import kit, render
+from app.domain.texts.common import STALE_BUTTON, UNKNOWN_MESSAGE_SCREEN
+from app.domain.texts.ui import B
 from app.logger import logger
 
 router = Router(name="r3_fallback")
+
+
+@router.message(F.chat.type == "private", StateFilter(None))
+async def unknown_message(message: Message) -> None:
+    text, markup = kit.view(
+        UNKNOWN_MESSAGE_SCREEN,
+        primary=[kit.action(B.HELP, Nav(s="help"))],
+        footer=kit.Footer.to_menu(),
+    )
+    await render(message, text, markup)
 
 
 @router.callback_query()

@@ -14,4 +14,7 @@ from app.services.money import money
 
 
 async def run(ctx) -> dict:
-    return await money(ctx.container).fulfillment.recover()
+    services = money(ctx.container)
+    result = await services.fulfillment.recover()
+    result["refund_access"] = await services.refunds.recover_access()
+    return result

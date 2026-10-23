@@ -18,6 +18,7 @@ class FakePaymentGateway:
         self.payments: dict[str, dict] = {}
         self.by_key: dict[str, str] = {}
         self.refunds: list[dict] = []
+        self.refund_reads: list[str] = []
         self.charges: list[dict] = []
         self.fail_create = False
         self._seq = itertools.count(1)
@@ -68,3 +69,7 @@ class FakePaymentGateway:
         r = {"payment_id": external_id, "amount": amount, "key": idempotence_key, "status": "succeeded"}
         self.refunds.append(r)
         return r
+
+    async def get_refund(self, refund_id: str) -> Optional[dict]:
+        self.refund_reads.append(refund_id)
+        return next((dict(r) for r in self.refunds if r.get("id") == refund_id), {"error": "not_found"})

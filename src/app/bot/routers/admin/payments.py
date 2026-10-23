@@ -70,6 +70,12 @@ async def on_refund_decision(cb: CallbackQuery, callback_data: AdmRefund, contai
     logger.info(f"refund decision: request={callback_data.rid} admin={cb.from_user.id} result={code}")
     if code == "done":
         text = T.ADMIN_REFUND_DONE
+    elif code == "pending_money":
+        text = T.ADMIN_REFUND_PENDING_MONEY
+    elif code == "retry_access":
+        text = T.ADMIN_REFUND_RETRY_ACCESS
+    elif code == "unknown_money":
+        text = T.ADMIN_REFUND_UNKNOWN_MONEY
     elif code == "done_no_revoke":
         text = T.ADMIN_REFUND_DONE_NO_REVOKE
     elif code == "rejected":

@@ -189,8 +189,10 @@ def checkout_screen(name: str, months: int, amount: Money, *, autorenew: Optiona
 # --- errors on the way to a payment -----------------------------------------------------------
 # Plain strings are toasts and Stars pre-checkout errors; *_SCREEN are result screens.
 
-OBHOD_NEEDS_PRO = ("Пакеты обхода доступны только при активном тарифе Pro. Оформи или продли Pro, "
-                   "потом возьми пакет.")
+OBHOD_INACTIVE = ("Не удалось подтвердить активный обход. Для покупки пакета нужен работающий обход "
+                  "в тарифе Pro. Обнови подключение или напиши в поддержку.")
+# Compatibility alias for old callers.
+OBHOD_NEEDS_PRO = OBHOD_INACTIVE
 PLAN_UNAVAILABLE = "Этот тариф сейчас недоступен для покупки. Выбери тариф из списка."
 PAYMENT_BLOCKED = "Оплата для этого аккаунта недоступна. Если это ошибка, напиши в поддержку."
 PAYMENT_CREATE_FAILED = "Не получилось создать платеж. Попробуй еще раз через минуту."
@@ -198,9 +200,10 @@ PAYMENT_BUSY = ui.toast("⏳ Платеж уже создается, подож�
 STARS_UNAVAILABLE = ui.toast("Оплата звездами сейчас недоступна.")
 GIFTS_UNAVAILABLE = ui.toast("Подарки сейчас недоступны.")
 
-OBHOD_NEEDS_PRO_SCREEN = ui.result("warn", "Нужен тариф Pro",
-                                   "Пакеты обхода доступны только при активном тарифе Pro.",
-                                   hint="Оформи или продли Pro, потом возьми пакет.")
+OBHOD_INACTIVE_SCREEN = ui.result("warn", "Обход пока недоступен",
+                                  "Для покупки пакета нужен работающий обход в тарифе Pro.",
+                                  hint="Обнови подключение или напиши в поддержку.")
+OBHOD_NEEDS_PRO_SCREEN = OBHOD_INACTIVE_SCREEN
 PLAN_UNAVAILABLE_SCREEN = ui.result("warn", "Тариф недоступен", "Этот тариф сейчас нельзя купить.",
                                     hint="Выбери тариф из списка.")
 PAYMENT_BLOCKED_SCREEN = ui.result("error", "Оплата недоступна", "Оплата для этого аккаунта недоступна.",
@@ -387,10 +390,15 @@ REFUND_NOT_ELIGIBLE = REFUND_NOT_ELIGIBLE_SCREEN.html()
 
 REFUND_APPROVED_CARD_SCREEN = ui.push(E.REFUND, "Возврат одобрен",
                                       "Деньги вернутся на карту в течение нескольких дней, сроки зависят от банка.",
-                                      "Доступ к VPN по этой оплате отключен.")
+                                      "Из срока подписки снято время, добавленное этой оплатой.")
 REFUND_APPROVED_STARS_SCREEN = ui.push(E.REFUND, "Возврат одобрен",
                                        "Звезды вернулись на твой баланс в Telegram.",
-                                       "Доступ к VPN по этой оплате отключен.")
+                                       "Из срока подписки снято время, добавленное этой оплатой.")
+REFUND_APPROVED_CARD_REVIEW = ui.push(E.REFUND, "Возврат одобрен",
+    "Деньги вернутся на карту в течение нескольких дней, сроки зависят от банка.",
+    "Срок доступа проверит поддержка.").html()
+REFUND_APPROVED_STARS_REVIEW = ui.push(E.REFUND, "Возврат одобрен",
+    "Звезды вернулись на твой баланс в Telegram.", "Срок доступа проверит поддержка.").html()
 REFUND_APPROVED_CARD = REFUND_APPROVED_CARD_SCREEN.html()
 REFUND_APPROVED_STARS = REFUND_APPROVED_STARS_SCREEN.html()
 
@@ -428,7 +436,10 @@ def admin_refund_request(*, request_id: int, full_name: str, username: str, tele
     ).html()
 
 
-ADMIN_REFUND_DONE = "✅ Возврат оформлен, доступ по оплате отключен."
+ADMIN_REFUND_DONE = "✅ Деньги возвращены, доступ по этой оплате скорректирован."
+ADMIN_REFUND_PENDING_MONEY = "⏳ Платежный сервис обрабатывает возврат. После подтверждения бот скорректирует доступ по этой оплате."
+ADMIN_REFUND_RETRY_ACCESS = "⏳ Деньги возвращены. Изменение доступа пока не подтверждено, бот повторит попытку автоматически."
+ADMIN_REFUND_UNKNOWN_MONEY = "⚠️ Результат возврата денег требует проверки. Бот проверит подтверждение, повторный возврат заблокирован."
 ADMIN_REFUND_DONE_NO_REVOKE = "⚠️ Деньги вернули, но доступ отключить не удалось. Проверь юзера в панели вручную."
 ADMIN_REFUND_REJECTED = "❌ Отклонено, клиенту отправлен ответ."
 ADMIN_REFUND_BUSY = "⏳ Этот запрос уже обрабатывается."

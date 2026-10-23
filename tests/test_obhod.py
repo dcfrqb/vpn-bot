@@ -147,6 +147,7 @@ def _patch_remna_for_obhod(create_uuid="obhod-uuid-new", sub_url="https://sub/ob
     mock_client.get_user_subscription_url = AsyncMock(return_value=sub_url)
     # По умолчанию обходного юзера в Remnawave ещё нет (предрезолв пуст).
     mock_client.get_user_by_username = AsyncMock(return_value=None)
+    mock_client.get_user_traffic_info = AsyncMock(return_value={"status": "ACTIVE"})
     mock_client.close = AsyncMock()
     return mock_client
 

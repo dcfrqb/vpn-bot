@@ -172,8 +172,18 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         if res.error == "busy":
             await cb.answer(T.PAYMENT_BUSY)
             return
-        text, markup = message_view(_START_ERROR_SCREENS.get(res.error or "", T.PAYMENT_CREATE_FAILED_SCREEN),
-                                    support=support_url(container.settings))
+        if res.error == "obhod_inactive":
+            from app.bot.views import kit
+            from app.domain.texts.ui import B
+
+            text, markup = kit.view(
+                T.OBHOD_INACTIVE_SCREEN,
+                primary=[kit.action(B.REFRESH, Nav(s="connect", p="refresh"))],
+                links=[kit.link(B.SUPPORT, support_url(container.settings))], footer=kit.Footer.to_menu(),
+            )
+        else:
+            text, markup = message_view(_START_ERROR_SCREENS.get(res.error or "", T.PAYMENT_CREATE_FAILED_SCREEN),
+                                        support=support_url(container.settings))
         await render(cb, text, markup)
         return
     await _save_ctx(tg, quote.plan_code, quote.months, kind)

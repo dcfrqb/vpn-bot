@@ -187,3 +187,61 @@ async def test_connect_refresh_button_forces_a_panel_read(flow):
     await flow.press(Nav(s="connect", p="refresh").pack())
     assert flow.status.calls[-1] == (flow.user.id, True)
     assert "<code>https://sub.example/tok</code>" in _last_text(flow)
+
+
+async def test_unrecognized_messages_offer_menu_and_help(flow):
+    for text in ("Привет", "/unknown_command"):
+        flow.session.reset()
+        await flow.send(text)
+        screen = flow.session.calls_of("SendMessage")[-1]
+        assert "Не понял сообщение" in screen.text
+        callbacks = [b["data"] for row in screen.keyboard for b in row]
+        assert Nav(s="main").pack() in callbacks
+        assert Nav(s="help").pack() in callbacks
+
+
+async def test_fallback_does_not_intercept_commands_or_promo_input(flow, monkeypatch):
+    monkeypatch.setattr("app.config.settings.PROMO_CODES_ENABLED", True)
+    monkeypatch.setattr("app.bot.routers.trial_promo.get_promo", lambda c: c.promo)
+    for text in ("/help", "/promo", "NO_SUCH_PROMO"):
+        flow.session.reset()
+        await flow.send(text)
+        texts = flow.session.texts()
+        assert texts and not any("Не понял сообщение" in t for t in texts)
+    assert ("redeem", flow.user.id) in flow.promo.calls
+
+
+async def test_fallback_does_not_answer_groups_or_active_wizards(flow):
+    from tests.fakes.bot import message_update
+
+    update = message_update(flow.user, "hello")
+    group = update.message.chat.model_copy(update={"id": -10001, "type": "group"})
+    update = update.model_copy(update={"message": update.message.model_copy(update={"chat": group})})
+    await flow.dp.feed_update(flow.bot, update)
+    assert not flow.session.calls_of("SendMessage")
+    state = flow.dp.fsm.get_context(flow.bot, flow.user.id, flow.user.id)
+    await state.set_state("some_wizard:input")
+    try:
+        await flow.send("hello")
+        assert not flow.session.calls_of("SendMessage")
+        assert await state.get_state() == "some_wizard:input"
+    finally:
+        await state.clear()
+
+
+async def test_disabled_connect_overrides_future_grace_and_trial_offer(flow):
+    from datetime import timedelta
+
+    flow.promo.available = True
+    flow.status.states[flow.user.id] = SubscriptionState(
+        telegram_id=flow.user.id, panel_status="DISABLED", expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        grace_until=datetime.now(timezone.utc) + timedelta(days=2), subscription_url="https://sub.example/old",
+    )
+    await flow.press("get_subscription_link")
+    text = _last_text(flow)
+    assert "Подписка отключена" in text and "поддержку" in text
+    assert "https://sub.example/old" not in text and "Подписка не активна" not in text
+    buttons = [b for row in flow.session.calls_of("EditMessageText")[-1].keyboard for b in row]
+    assert any(b["data"] == "n:connect:refresh" for b in buttons)
+    assert any(b["url"] and "Поддержка" in b["text"] for b in buttons)
+    assert not any(b["data"] in ("n:connect:trial", "n:plans:") for b in buttons)

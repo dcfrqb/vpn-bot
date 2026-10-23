@@ -49,6 +49,153 @@ def stuck_is_recoverable(meta: Mapping[str, Any], since: Optional[datetime], now
         return True
     return bool(meta.get(M_CREATED_V3)) and since is not None and since < now - stuck_age
 
+REFUND_ACCESS_TERMINAL = frozenset({"applied", "manual_review"})
+
+
+def refund_notice_due(meta, now):
+    marker = meta.get(M_REFUND_24H) or {}
+    access = marker.get("access") or {}
+    if not access.get("notice_pending"):
+        return False
+    stamp = access.get("notice_lease_until") or access.get("notice_due_at")
+    return not stamp or _naive(datetime.fromisoformat(stamp)) <= _naive(now)
+
+
+def queue_refund_notice(marker, phase):
+    access = dict(marker.get("access") or {})
+    if phase == "pending":
+        phase = "retry" if marker.get("money_status") == "succeeded" else "pending_money"
+    if phase == "awaiting_money" or (phase == "retry" and marker.get("money_status") != "succeeded"):
+        phase = "pending_money"
+    if phase != access.get("notice_phase"):
+        access.update(notice_phase=phase, notice_pending=True, notice_user_delivered=False,
+                      notice_admin_delivered=phase not in ("retry", "manual_review"))
+        access.pop("notice_due_at", None)
+    marker["access"] = access
+    return marker
+
+
+def claim_refund_notice_marker(meta, *, owner, now, lease_for):
+    if not refund_notice_due(meta, now):
+        return None
+    marker = dict(meta[M_REFUND_24H])
+    access = dict(marker["access"])
+    access.update(notice_owner=owner, notice_lease_until=(_naive(now) + lease_for).isoformat())
+    marker["access"] = access
+    return marker
+
+
+def finish_refund_notice_marker(meta, *, owner, phase, user_delivered, admin_delivered, now):
+    marker = dict(meta.get(M_REFUND_24H) or {})
+    access = dict(marker.get("access") or {})
+    if access.get("notice_owner") != owner or access.get("notice_phase") != phase:
+        return None
+    access["notice_user_delivered"] = bool(access.get("notice_user_delivered") or user_delivered)
+    access["notice_admin_delivered"] = bool(access.get("notice_admin_delivered") or admin_delivered)
+    access["notice_pending"] = not (access["notice_user_delivered"] and access["notice_admin_delivered"])
+    access.pop("notice_owner", None)
+    access.pop("notice_lease_until", None)
+    if access["notice_pending"]:
+        access["notice_due_at"] = (_naive(now) + timedelta(minutes=5)).isoformat()
+    marker["access"] = access
+    return marker
+
+
+def confirmed_refund_marker(meta, *, refund_id, now):
+    """Only the verified provider webhook calls this, inside its existing lock."""
+    marker = merge_refund_marker(meta, {"money_status": "succeeded", "provider_refund_id": refund_id, "state": "done"})
+    access = dict(marker.get("access") or {})
+    rearm = (access.get("state") == "manual_review" and access.get("reason_class") == "money_unconfirmed")
+    if (not marker.get("revoked") and (rearm or access.get("state") in (None, "pending", "awaiting_money", "retry"))):
+        access.update(state="pending", due_at=_naive(now).isoformat())
+        marker["access"] = access
+    return marker
+
+
+def refund_access_due(meta: Mapping[str, Any], now: datetime) -> bool:
+    marker = meta.get(M_REFUND_24H)
+    if not isinstance(marker, dict) or marker.get("revoked") is True:
+        return False
+    access = marker.get("access") or {}
+    if not isinstance(access, dict):
+        return False
+    state = access.get("state")
+    if state in REFUND_ACCESS_TERMINAL:
+        return False
+    if state is None and marker.get("state") not in ("done", "refunding", "pending_money"):
+        return False
+    if state not in (None, "pending", "retry", "awaiting_money", "processing"):
+        return False
+    value = access.get("lease_until") if state == "processing" else access.get("due_at")
+    if value:
+        try:
+            return _naive(datetime.fromisoformat(value)) <= _naive(now)
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def merge_refund_marker(meta, patch, access_patch=None):
+    """Merge under the payment row lock; never overwrite another owner's work."""
+    marker = dict(meta.get(M_REFUND_24H) or {})
+    updates = dict(patch)
+    if marker.get("money_status") == "succeeded":
+        updates.pop("money_status", None)
+    marker.update(updates)
+    access = dict(marker.get("access") or {})
+    can_rearm = (marker.get("money_status") == "succeeded" and access.get("state") == "manual_review"
+                 and access.get("reason_class") == "money_unconfirmed")
+    if access_patch and (access.get("state") not in (*REFUND_ACCESS_TERMINAL, "processing") or can_rearm):
+        access.update(access_patch)
+        marker["access"] = access
+        if access.get("state") == "awaiting_money":
+            marker = queue_refund_notice(marker, "pending_money")
+            access = marker["access"]
+    if marker.get("money_status") == "succeeded":
+        marker["state"] = "done"
+    if access.get("state") == "applied":
+        marker["revoked"] = True
+    return marker
+
+
+def claim_refund_marker(meta, *, owner, now, lease_for):
+    if not refund_access_due(meta, now):
+        return None
+    marker = dict(meta[M_REFUND_24H])
+    access = dict(marker.get("access") or {})
+    access.update(state="processing", lease_owner=owner,
+                  lease_until=(_naive(now) + lease_for).isoformat(),
+                  attempts=int(access.get("attempts") or 0) + 1)
+    marker["access"] = access
+    return marker
+
+
+def finish_refund_marker(meta, *, owner, state, now, error="", action=None, reason_class=None):
+    marker = dict(meta.get(M_REFUND_24H) or {})
+    access = dict(marker.get("access") or {})
+    if access.get("state") != "processing" or access.get("lease_owner") != owner:
+        return None
+    # A verified webhook/direct response can confirm money while this owner
+    # awaits an older provider read. Its stale snapshot cannot close the queue.
+    rearmed = state == "manual_review" and reason_class == "money_unconfirmed" and marker.get("money_status") == "succeeded"
+    if rearmed:
+        state, error, reason_class = "pending", "", None
+    access.update(state=state, last_error=error[:200], action=action, reason_class=reason_class)
+    access.pop("lease_owner", None)
+    access.pop("lease_until", None)
+    if state not in REFUND_ACCESS_TERMINAL:
+        minutes = min(360, 5 * 2 ** min(int(access.get("attempts") or 1) - 1, 7))
+        access["due_at"] = (_naive(now) if rearmed else _naive(now) + timedelta(minutes=minutes)).isoformat()
+    else:
+        access.pop("due_at", None)
+        access["completed_at"] = _naive(now).isoformat()
+    marker["access"] = access
+    if marker.get("money_status") == "succeeded":
+        marker["state"] = "done"
+    marker["revoked"] = state == "applied"
+    return queue_refund_notice(marker, state)
+
+
 PENDING_STATUSES = ("pending", "waiting_for_capture")
 
 
@@ -176,6 +323,18 @@ class PaymentStore(Protocol):
     async def refund_request_for_payment(self, payment_id: int) -> Optional[RefundRequestRecord]: ...
     async def transition_refund_request(self, request_id: int, from_statuses: Iterable[str], to_status: str, *,
                                         decided_by: Optional[int] = None) -> Optional[RefundRequestRecord]: ...
+    async def refund_access_candidates(self, now: datetime, *, limit: int = 20) -> list[PaymentRecord]: ...
+    async def update_refund_marker(self, payment_id: int, patch: Mapping[str, Any], *,
+                                   access_patch: Optional[Mapping[str, Any]] = None) -> bool: ...
+    async def claim_refund_access(self, payment_id: int, *, owner: str, now: datetime,
+                                  lease_for: timedelta) -> Optional[PaymentRecord]: ...
+    async def finish_refund_access(self, payment_id: int, *, owner: str, state: str, now: datetime,
+                                   error: str = "", action: Optional[str] = None,
+                                   reason_class: Optional[str] = None) -> Optional[PaymentRecord]: ...
+    async def claim_refund_notice(self, payment_id: int, *, owner: str, now: datetime,
+                                  lease_for: timedelta) -> Optional[PaymentRecord]: ...
+    async def finish_refund_notice(self, payment_id: int, *, owner: str, phase: str,
+                                   user_delivered: bool, admin_delivered: bool, now: datetime) -> bool: ...
     async def save_method(self, telegram_id: int, *, provider: str, external_id: str, title: Optional[str],
                           card_fingerprint: Optional[str]) -> int: ...
     async def get_method(self, method_id: int) -> Optional[SavedMethodRecord]: ...

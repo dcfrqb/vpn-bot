@@ -4,7 +4,9 @@ The only adapter new code uses to talk to the panel. It enforces the panel
 invariants on every write (tests/invariants run against it):
   - manual squads (*-m, *-friend, arcadia) already on a user are kept and are
     never written by the bot (ValueError);
-  - hwidDeviceLimit is never lowered; 0/None on the panel is left alone.
+  - hwidDeviceLimit is never lowered by default; only a journal-backed refund
+    may restore a positive limit when the recorded current cap matches;
+    unlimited (0) remains protected.
 
 ``update_user(squads=...)`` takes the FULL target list of non-manual squad
 names (the port contract): callers that want "replace only the tariff squad"
@@ -200,9 +202,11 @@ class HttpRemnaGateway:
         traffic_limit_bytes: Optional[int] = None,
         traffic_limit_strategy: Optional[str] = None,
         current: Optional[PanelUser] = None,
+        refund_device_limit_from: Optional[int] = None,
     ) -> PanelUser:
         """One PATCH with only the changed fields. ``current`` (already read)
-        saves a GET. Manual squads on the user are kept; the limit never drops."""
+        saves a GET. Manual squads are kept. Limits never drop unless a refund
+        supplies its journal-proven current cap via ``refund_device_limit_from``."""
         if current is None:
             current = await self.get_user(panel_id)
         if current is None:
@@ -220,7 +224,12 @@ class HttpRemnaGateway:
         if device_limit is not None:
             cur = current.device_limit
             # Never lower; 0 = unlimited and set by hand, leave it.
-            if cur is None or (int(cur) != 0 and int(cur) < int(device_limit)):
+            if refund_device_limit_from is not None and cur != refund_device_limit_from:
+                raise ValueError("refund device cap no longer matches recorded rights")
+            refund_restore = (refund_device_limit_from is not None
+                              and cur == refund_device_limit_from and cur not in (None, 0)
+                              and int(device_limit) > 0)
+            if refund_restore or cur is None or (int(cur) != 0 and int(cur) < int(device_limit)):
                 kwargs["hwid_device_limit"] = int(device_limit)
         if traffic_limit_bytes is not None and traffic_limit_bytes != current.traffic_limit_bytes:
             kwargs["traffic_limit_bytes"] = int(traffic_limit_bytes)

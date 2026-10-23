@@ -299,7 +299,12 @@ async def test_obhod_package_refused_without_live_obhod(money_flow):
     f.money.deps.hooks.obhod_live = False
     await f.press("pe:obhod_500:1")
     assert not f.store.payments
-    assert "только при активном тарифе Pro" in _last_screen(f).text
+    screen = _last_screen(f)
+    assert "Обход пока недоступен" in screen.text
+    assert "Оформи или продли" not in screen.text and "Нужен тариф Pro" not in screen.text
+    assert "n:connect:refresh" in [b["data"] for b in _buttons(screen)]
+    assert "n:plans:" not in [b["data"] for b in _buttons(screen)]
+    assert any(b["url"] == "https://t.me/crs_support" for b in _buttons(screen))
 
 
 @pytest.mark.parametrize("legacy,kind", [

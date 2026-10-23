@@ -129,4 +129,4 @@ async def test_refund_of_pro_renewal_shortens_obhod_too():
     assert fake.obhod.granted == [(TG_ID, "pro", new_exp)]  # obhod gets the same shortened date
     assert fake.obhod.revoked == []
     admin = [c.kwargs["text"] for c in bot.send_message.await_args_list if c.kwargs["chat_id"] == 900][0]
-    assert "Срок откатан на 1 мес." in admin
+    assert "вычтено время, добавленное возвращенным платежом" in admin

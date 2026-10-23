@@ -12,7 +12,7 @@
    - payments.status = 'refunded' (выпадает из выручки/статистики, где фильтр
      status='succeeded');
    - оплата тарифа, по которой выдавалась подписка: откатываем ровно
-     оплаченный период от текущего expireAt в Remnawave. С 3.0 это делает
+     фактически добавленное платежом время от текущего expireAt в Remnawave. С 3.0 это делает
      ProvisioningService.rollback под тем же локом, что и выдача. Подписка у юзера одна,
      поэтому возврат старого платежа тоже вычитается из текущей даты.
      Если после отката срок уже в прошлом, юзер НЕ отключается (disable), а
@@ -146,7 +146,14 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
         meta = dict(payment.payment_metadata or {}) if isinstance(payment.payment_metadata, dict) else {}
         refunds = dict(meta.get("refunds") or {})
         entry = dict(refunds.get(refund_id) or {})
+        if is_full and isinstance(meta.get("refund_24h"), dict):
+            from app.services.payments.store import confirmed_refund_marker
+
+            # Same locked row, no nested store session or access call here.
+            meta["refund_24h"] = confirmed_refund_marker(meta, refund_id=str(refund_id), now=datetime.utcnow())
+            payment.payment_metadata = meta
         if entry.get("state") == "done":
+            await session.commit()
             logger.info(f"refund {refund_id}: already processed")
             return True
 
@@ -191,7 +198,7 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             try:
                 result = await _provisioning().rollback(
                     payment.telegram_user_id, months=period_months,
-                    reason=f"refund {refund_id}", trace_id=f"refund:{refund_id}",
+                    reason=f"refund {refund_id}", trace_id=f"refund:{refund_id}", payment_id=payment.id,
                 )
             except Exception as e:
                 raise WebhookRetryableError(f"revoke through provisioning failed: {type(e).__name__}: {e}") from e
@@ -212,7 +219,7 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
                 new_expire_for_notices = new_dt
                 action = "shortened"
                 action_note = (
-                    f"Срок откатан на {period_months} мес. от текущей даты окончания "
+                    f"Из срока вычтено время, добавленное возвращенным платежом "
                     f"(подписка одна на юзера): до {naive:%d.%m.%Y}." if naive else ""
                 )
                 from app.domain.texts.checkout import refund_done_screen
@@ -221,16 +228,16 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
             else:
                 action = result.action
                 action_note = (
-                    "Доступ НЕ менялся: подписка навсегда или ручной сквад. Решите вручную."
+                    "Доступ НЕ менялся: ручная/бессрочная подписка или нет точной записи выдачи платежа. Проверьте вручную."
                     if result.action == "skipped" else
                     "Доступ НЕ менялся: аккаунт в панели не найден. Проверьте вручную."
                 )
         elif by_request:
             action = "by_request"
             action_note = (
-                "Возврат по запросу клиента (24 часа): доступ уже отключен при одобрении"
+                "Возврат по запросу клиента (24 часа): доступ уже скорректирован"
                 if meta["refund_24h"].get("revoked") else
-                "Возврат по запросу клиента (24 часа): доступ отключить НЕ удалось, проверь вручную"
+                "Возврат по запросу клиента (24 часа): корректировка доступа находится в очереди или требует ручной проверки"
             )
         elif is_full and meta.get("gift_code"):
             action = "gift"

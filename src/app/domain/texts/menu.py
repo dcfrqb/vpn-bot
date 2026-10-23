@@ -36,7 +36,15 @@ def profile_section(telegram_id: int, name: str) -> ui.Block:
 
 
 def subscription_section(state: SubscriptionState) -> ui.Block:
-    """Status: active / grace / expired / none, with plan, days left, devices."""
+    """Panel status, with disabled and unverified states before expiry or trial."""
+    if state.disabled:
+        return ui.block(
+            "Доступ отключен. Напиши в поддержку, чтобы уточнить причину и восстановить подключение.",
+            title="Подписка отключена", emoji=E.WARN,
+        )
+    if state.stale and not state.active:
+        return ui.block("Нажми «Обновить» или напиши в поддержку.",
+                        title="Статус подписки не подтвержден", emoji=E.WARN)
     if state.active:
         plan = plan_display(state.plan_code) + (" (пробный)" if state.is_trial else "")
         lines = [ui.field("Тариф", plan)]
@@ -65,13 +73,16 @@ def subscription_section(state: SubscriptionState) -> ui.Block:
             title="Льготный период", emoji=E.GRACE,
         )
 
-    if state.expires_at is not None:
+    if state.expires_at is not None and state.expires_at <= datetime.now(timezone.utc):
         return ui.block(
             f"{E.DATE} " + ui.field("Истекла", fmt_date_msk(state.expires_at)),
             "Нажми «Подписка», чтобы продлить доступ.",
             title="Подписка истекла", emoji=E.EXPIRED,
         )
 
+    if state.has_panel_user or state.expires_at is not None:
+        return ui.block("Нажми «Обновить» или напиши в поддержку.",
+                        title="Статус подписки не подтвержден", emoji=E.WARN)
     return ui.block("Нажми «Подписка», чтобы подключить VPN.", title="Подписка не оформлена", emoji=E.NONE)
 
 
@@ -79,8 +90,10 @@ def obhod_section(state: SubscriptionState) -> Optional[ui.Block]:
     """Pro only, while the subscription is active."""
     if not state.active or (state.plan_code or "").lower() != "pro":
         return None
-    if not state.obhod_active:
-        return ui.block("Ссылка готовится, загляни чуть позже или нажми «Обновить».",
+    if state.obhod_readiness != "ready":
+        from app.domain.texts.connect import obhod_unavailable_text
+
+        return ui.block(obhod_unavailable_text(state),
                         title="Обход блокировок", emoji=E.OBHOD)
     used = fmt_gb(state.obhod_used_bytes)
     limit = fmt_gb(state.obhod_limit_bytes) if state.obhod_limit_bytes else "без лимита"
@@ -94,7 +107,7 @@ STALE_NOTE = f"{E.WARN} Не удалось обновить данные с п�
 
 def main_menu_screen(telegram_id: int, name: str, state: SubscriptionState, *,
                      trial_available: bool = False) -> ui.Screen:
-    hints = [STALE_NOTE if state.stale else "", TRIAL_OFFER if trial_available else ""]
+    hints = [STALE_NOTE if state.stale else "", TRIAL_OFFER if trial_available and not state.disabled and not state.stale else ""]
     return ui.status(
         [profile_section(telegram_id, name), subscription_section(state), obhod_section(state)],
         hint="\n".join(x for x in hints if x),

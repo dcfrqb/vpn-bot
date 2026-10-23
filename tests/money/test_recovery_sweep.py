@@ -85,3 +85,39 @@ async def test_already_granted_2x_rows_are_not_touched():
                            meta={"obhod_package_applied": True},
                            created_at=deps.clock().replace(tzinfo=None) - timedelta(hours=2))
     assert (await m.fulfillment.recover())["checked"] == 0
+
+
+async def test_existing_worker_recovery_job_drains_access_queue():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from app.worker.jobs.recovery import run
+    from tests.money.test_refund_requests import _requested
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    deps.provisioning.rollback_fail_times = 1
+    assert await m.refunds.decide(rid, 111, approve=True) == "retry_access"
+    deps.clock.advance(minutes=5)
+    with patch("app.worker.jobs.recovery.money", return_value=m):
+        stats = await run(SimpleNamespace(container=object()))
+    assert stats["refund_access"]["applied"] == 1 and len(deps.payments.refunds) == 1
+
+
+async def test_old_failed_notices_cannot_starve_new_access_queue_item():
+    from tests.money.test_refund_requests import _requested
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    for index in range(25):
+        deps.store.add_payment(TG + index, status="refunded", meta={"refund_24h": {
+            "rid": 100 + index, "state": "done", "money_status": "succeeded", "revoked": True,
+            "access": {"state": "applied", "notice_pending": True, "notice_phase": "applied",
+                       "notice_admin_delivered": True, "notice_user_delivered": False}}})
+    rec, rid = await _requested(m, deps)
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.update_refund_marker(rec.id, {"rid": rid, "state": "done", "money_status": "succeeded"},
+                                         access_patch={"state": "pending"})
+    async def blocked(*a, **kw):
+        return False
+    deps.notifier.notify_user = blocked
+    stats = await m.refunds.recover_access(limit=20)
+    assert stats["applied"] == 1 and stats["checked"] == 20
+    assert (await deps.store.get(rec.id)).meta["refund_24h"]["access"]["state"] == "applied"
+    assert len(deps.provisioning.revokes) == 1 and not deps.payments.refunds

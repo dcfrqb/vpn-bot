@@ -23,6 +23,11 @@ NO_SUBSCRIPTION_NO_TRIAL_SCREEN = ui.result(
     "info", "Подписка не активна", "Для подключения к VPN нужна активная подписка.",
     hint="Выбери тариф ниже, чтобы оформить доступ.",
 )
+DISABLED_SCREEN = ui.result(
+    "warn", "Подписка отключена",
+    "Доступ отключен. Напиши в поддержку, чтобы уточнить причину и восстановить подключение.",
+    hint="Если статус уже изменился, нажми «Обновить».",
+)
 ERROR_SCREEN = ui.result(
     "error", "Не удалось получить ссылку подключения",
     "Сервис временно недоступен.",
@@ -50,7 +55,16 @@ OBHOD_ABOUT = (
 OBHOD_HOWTO = ("Добавляется так же, как основная. Включай обход, когда сайт заблокирован "
                "по мобильному интернету, и выключай, когда все работает штатно.")
 OBHOD_PRO_ONLY = f"Есть в тарифе Pro. {OBHOD_ABOUT}"
-OBHOD_PREPARING = "Готовим твою ссылку обхода. Загляни чуть позже или нажми «Обновить»."
+OBHOD_PREPARING = ("Готовим твою ссылку обхода. Подожди минуту и нажми «Обновить». "
+                   "Если ссылка не появилась, напиши в поддержку.")
+OBHOD_FAILED = ("Не удалось подготовить обход. Нажми «Обновить», чтобы проверить состояние, "
+                "или напиши в поддержку.")
+OBHOD_UNKNOWN = ("Не удалось подтвердить готовность обхода. Нажми «Обновить» "
+                 "или напиши в поддержку.")
+
+
+def obhod_unavailable_text(state: SubscriptionState) -> str:
+    return {"pending": OBHOD_PREPARING, "failed": OBHOD_FAILED}.get(state.obhod_readiness, OBHOD_UNKNOWN)
 
 
 def _obhod_title() -> dict:
@@ -58,12 +72,12 @@ def _obhod_title() -> dict:
 
 
 def obhod_sections(state: SubscriptionState) -> list[Optional[ui.Block]]:
-    """Pro and ready: about + usage + the link; Pro, not ready: preparing; others: the Pro teaser.
-    Never an empty «использовано 0 ГБ» block with an empty link."""
+    """Show a verified bypass link or the recorded provisioning state for Pro.
+    Never an empty usage block with an empty link."""
     if (state.plan_code or "").lower() != "pro":
         return [ui.block(OBHOD_PRO_ONLY, **_obhod_title())]
-    if not state.obhod_active or not state.obhod_subscription_url:
-        return [ui.block(OBHOD_PREPARING, **_obhod_title())]
+    if state.obhod_readiness != "ready":
+        return [ui.block(obhod_unavailable_text(state), **_obhod_title())]
     used = fmt_gb(state.obhod_used_bytes)
     usage = (f"Использовано: {h(used)} из {h(fmt_gb(state.obhod_limit_bytes))}" if state.obhod_limit_bytes
              else f"Использовано: {h(used)}")

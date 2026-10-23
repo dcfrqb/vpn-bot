@@ -60,7 +60,7 @@ from app.domain.models import AdminTopic, Entitlement, PanelUser, SubKind, Subsc
 from app.domain.plans import get_plan_device_limit, get_plan_name, get_plan_squad
 from app.logger import logger
 from app.services.accounts import AccountsRepo, PanelAccounts, SqlAccountsRepo, SubRow
-from app.services.credits import CreditsMixin, RevokeMixin
+from app.services.credits import CreditsMixin, RevokeMixin, rights_snapshot, settle_landed_rollbacks
 from app.services.provisioning_rules import (  # noqa: F401 (re-exported)
     CREDIT_MARKER_TTL_S,
     DISABLED_ALERT_TTL_S,
@@ -302,6 +302,8 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
             current = row.valid_until  # never the grace end: grace is not paid time
         if current is not None and current.year < 2020:
             current = None  # 2000-01-01 sentinel of 2.x /start users
+        observed_rights = rights_snapshot(user, await self._squad_names(user) if user else [])
+        row = settle_landed_rollbacks(row, current, observed_rights)
         grants_before = ((row.config_data if row else {}) or {}).get("grants", {})
         if record and record.get("target"):
             target = retry_target(record, ent, current, now, months=months)
@@ -312,7 +314,9 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
 
         # Phase A: the intent is recorded before the panel is touched.
         row = self._phase_a(row, tg, ent, key, target, now, base=current,
-                            landed=landed_pending_keys(grants_before, key, current))
+                            landed=landed_pending_keys(grants_before, key, current),
+                            observed_rights=observed_rights, plan_squad=plan_squad,
+                            foreign=bool(user and any(n not in managed_tariff_squad_names() for n in await self._squad_names(user))))
         row = await self.repo.save_subscription(row)
 
         try:
@@ -352,7 +356,8 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
         return build_state(tg, user=verified, main_row=row, now=self.clock())
 
     def _phase_a(self, row: Optional[SubRow], tg: int, ent: Entitlement, key: str, target: datetime,
-                 now: datetime, *, base: Optional[datetime] = None, landed: tuple[str, ...] = ()) -> SubRow:
+                 now: datetime, *, base: Optional[datetime] = None, landed: tuple[str, ...] = (),
+                 observed_rights=None, plan_squad=None, foreign=False) -> SubRow:
         if row is None:
             row = SubRow(telegram_user_id=tg, sub_kind=SubKind.MAIN.value, plan_code=ent.plan_code)
         cfg = dict(row.config_data or {})
@@ -360,7 +365,8 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
         for other in landed:
             # An earlier pending grant whose PATCH did land (the panel sits on its
             # target): it is done, a later retry must not add its period again.
-            grants[other] = {**grants[other], "state": "applied", "landed_seen_by": key}
+            grants[other] = {**grants[other], "state": "applied", "landed_seen_by": key,
+                             "rights_after": observed_rights}
         for other, orec in list(grants.items()):
             # Review round 2, N-1: another pending grant computed from the same
             # panel date did not land (the panel still sits on its base). If THIS
@@ -370,10 +376,34 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
                     and orec.get("state") == "pending" and "base" in orec and not orec.get("moved")
                     and _same_instant(_parse(orec.get("base")), base)):
                 grants[other] = {**orec, "moved": True}
-        grants[key] = {"target": target.isoformat(), "state": "pending", "plan": ent.plan_code,
+        previous = grants.get(key) or {}
+        # Remnawave writes whole seconds. Journal the effective wire interval,
+        # not fractional Python clock values that the PATCH cannot represent.
+        credited_seconds = (target.replace(microsecond=0)
+                            - max(base or now, now).replace(microsecond=0)).total_seconds()
+        if previous.get("target") == target.isoformat():
+            # A timed-out grant may already be at its target on retry. Keep
+            # its original contribution, not the zero interval observed now.
+            credited_seconds = previous.get("credited_seconds", credited_seconds)
+        same_attempt = previous.get("target") == target.isoformat() and previous.get("rights_seq") is not None
+        if not same_attempt:
+            cfg["rights_seq"] = int(cfg.get("rights_seq", 0)) + 1
+        rights_evidence = {"rights_seq": previous["rights_seq"] if same_attempt else cfg["rights_seq"],
+                           "rights_before": previous.get("rights_before") if same_attempt else (
+                               None if previous and _same_instant(base, _parse(previous.get("target")))
+                               else observed_rights),
+                           "rights_op": {"plan": ent.plan_code, "squad": plan_squad,
+                                         "device_limit": int(ent.device_limit or get_plan_device_limit(ent.plan_code)),
+                                         "foreign": foreign}, "payment_id": ent.payment_id,
+                           "rights_checkpoint_before": previous.get("rights_checkpoint_before") if same_attempt
+                               else cfg.get("rights_checkpoint")}
+        cfg.pop("rights_checkpoint", None)
+        grants[key] = {**rights_evidence, "target": target.isoformat(), "state": "pending", "plan": ent.plan_code,
                        "source": ent.source.value, "at": now.isoformat(),
+                       "credited_seconds": credited_seconds,
                        "base": base.isoformat() if base is not None else None}
         if len(grants) > MAX_GRANT_RECORDS:
+            cfg["rights_history_truncated"] = True
             for old in sorted(grants, key=lambda k: grants[k].get("at", ""))[: len(grants) - MAX_GRANT_RECORDS]:
                 grants.pop(old, None)
         cfg["grants"] = grants
@@ -398,6 +428,7 @@ class PanelProvisioningService(RevokeMixin, CreditsMixin):
         grants = dict(cfg.get("grants") or {})
         rec = dict(grants.get(key) or {})
         rec["state"] = "applied"
+        rec["rights_after"] = rights_snapshot(user, await self._squad_names(user))
         grants[key] = rec
         for other, orec in list(grants.items()):
             if other != key and isinstance(orec, dict) and orec.get("state") == "pending":

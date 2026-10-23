@@ -757,36 +757,38 @@ async def test_credit_sweep_alerts_admins_on_failures(monkeypatch):
 
 async def test_refund_of_one_month_keeps_earlier_paid_months(svc, fake, repo, obhod):
     until = datetime(2027, 3, 1, tzinfo=timezone.utc)  # 5 paid months + 1 renewal
-    fake.add_user(501, "u", telegram_id=7, squads=["pro"], limit=10, expire=iso(until))
-    repo.add_row(7, plan="pro", panel_id=501, until=until)
-    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1) is True
+    base = datetime(2027, 2, 1, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], limit=10, expire=iso(base))
+    await svc.grant(7, _pay(1, "pro"), trace_id="pay1", months=1)
+    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1, payment_id=1) is True
     assert fake.users[501]["expireAt"] == iso(datetime(2027, 2, 1, tzinfo=timezone.utc))
     row = await repo.get_subscription(7)
     assert row.active and row.valid_until == datetime(2027, 2, 1, tzinfo=timezone.utc)
     assert obhod.revoked == [] and obhod.granted[-1][2] == datetime(2027, 2, 1, tzinfo=timezone.utc)
     # idempotent per trace
     patches = len(fake.patches)
-    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1) is True
+    assert await svc.revoke(7, reason="refund_24h:1", trace_id="rr:1", months=1, payment_id=1) is True
     assert len(fake.patches) == patches
 
 
 async def test_refund_of_the_only_month_is_a_full_cut(svc, fake, repo, obhod):
-    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(NOW + timedelta(days=30)))
-    repo.add_row(7, plan="lite", panel_id=501, until=NOW + timedelta(days=30))
-    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-1")
-    assert res.action == "expired" and fake.users[501]["expireAt"] == iso(NOW + timedelta(minutes=5))
+    await svc.grant(7, _pay(1), trace_id="pay1", months=1)
+    uid = fake.created[-1]["id"]
+    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-1", payment_id=1)
+    assert res.action == "expired" and fake.users[uid]["expireAt"] == iso(NOW + timedelta(minutes=5))
     assert not (await repo.get_subscription(7)).active and obhod.revoked == [7]
 
 
 async def test_rollback_retry_after_a_new_grant_does_not_erase_it(svc, fake, repo):
     until = datetime(2027, 1, 1, tzinfo=timezone.utc)
-    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=2, expire=iso(until))
-    repo.add_row(7, plan="lite", panel_id=501, until=until)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3,
+                  expire=iso(datetime(2026, 12, 1, tzinfo=timezone.utc)))
+    await svc.grant(7, _pay(1), trace_id="pay1", months=1)
     _fail_next_patch(fake)
     with pytest.raises(httpx.ReadTimeout):
-        await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2")  # target 01.12 pending
+        await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2", payment_id=1)  # target 01.12 pending
     await svc.grant(7, _pay(9), trace_id="p9", months=1)  # 01.01 -> 01.02
-    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2")
+    res = await svc.rollback(7, months=1, reason="refund", trace_id="refund:rf-2", payment_id=1)
     assert res.action == "shortened"
     assert fake.users[501]["expireAt"] == iso(until)  # 01.02 - 1 month, the new payment survives
 
@@ -910,3 +912,362 @@ async def test_broadcast_credit_unknown_then_sweep_credits_once(svc, fake):
     assert await credit_one(ledger, add, 9, 7, 3) == "applied"
     assert await credit_one(ledger, add, 9, 7, 3) == "dup"
     assert fake.users[501]["expireAt"] == iso(NOW + timedelta(days=4))
+
+
+@pytest.mark.parametrize("base,months", [
+    (datetime(2027, 1, 31, tzinfo=timezone.utc), 1),
+    (datetime(2028, 1, 31, tzinfo=timezone.utc), 1),
+    (datetime(2027, 8, 31, tzinfo=timezone.utc), 1),
+    (datetime(2027, 1, 31, tzinfo=timezone.utc), 3),
+])
+async def test_refund_restores_exact_previous_expiry_at_month_end(svc, fake, repo, base, months):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    await svc.grant(7, _pay(41), trace_id="pay41", months=months)
+    result = await svc.rollback(7, months=months, payment_id=41, reason="refund", trace_id="rf41")
+    assert result.expire_at == base
+    assert fake.users[501]["expireAt"] == iso(base)
+    count = len(fake.patches)
+    # Same payment, different event id: still no second subtraction.
+    again = await svc.rollback(7, months=months, payment_id=41, reason="refund", trace_id="another41")
+    assert again.expire_at == base and len(fake.patches) == count
+
+
+async def test_refund_keeps_later_payment_and_compensation(svc, fake, repo):
+    base = datetime(2027, 1, 31, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    await svc.grant(7, _pay(41), trace_id="pay41", months=1)  # exactly 28 days credited
+    await svc.grant(7, _pay(42), trace_id="pay42", months=1)
+    await svc.add_days(7, 10, trace_id="compensation")
+    before = datetime.fromisoformat(fake.users[501]["expireAt"].replace("Z", "+00:00"))
+    result = await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert result.expire_at == before - timedelta(days=28)
+    # Refunding both purchases leaves the original term plus the compensation.
+    result = await svc.rollback(7, months=1, payment_id=42, reason="refund", trace_id="rf42")
+    assert result.expire_at == base + timedelta(days=10)
+
+
+@pytest.mark.parametrize("next_action", ["payment", "credit"])
+async def test_landed_refund_then_new_credit_is_not_subtracted_again(svc, fake, repo, next_action):
+    base = datetime(2027, 1, 31, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    await svc.grant(7, _pay(41), trace_id="pay41", months=1)
+    _land_then_timeout(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert fake.users[501]["expireAt"] == iso(base)
+    if next_action == "payment":
+        await svc.grant(7, _pay(42), trace_id="pay42", months=1)
+    else:
+        await svc.add_days(7, 10, trace_id="compensation")
+    before = fake.users[501]["expireAt"]
+    count = len(fake.patches)
+    await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert fake.users[501]["expireAt"] == before and len(fake.patches) == count
+
+
+async def test_refund_without_exact_grant_evidence_preserves_access(svc, fake, repo, notifier):
+    base = datetime(2027, 2, 28, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    repo.add_row(7, plan="lite", panel_id=501, until=base)
+    result = await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert result.action == "skipped" and result.expire_at == base
+    assert not fake.patches and notifier.to_admins()
+    assert "нет точной записи" in notifier.to_admins()[-1].text
+
+
+async def test_refund_of_reactivated_subscription_does_not_remove_old_expired_time(svc, fake):
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(NOW - timedelta(days=50)))
+    await svc.grant(7, _pay(41), trace_id="pay41", months=1)
+    await svc.grant(7, _pay(42), trace_id="pay42", months=1)
+    before = datetime.fromisoformat(fake.users[501]["expireAt"].replace("Z", "+00:00"))
+    result = await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert result.expire_at == before - (datetime(2026, 10, 23, 12, tzinfo=timezone.utc) - NOW)
+
+
+async def test_refund_after_retry_of_landed_payment_keeps_its_original_duration(svc, fake):
+    base = datetime(2027, 1, 31, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    _land_then_timeout(fake, blind_reread=True)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(41), trace_id="pay41", months=1)
+    fake.fail_get_user = False
+    await svc.grant(7, _pay(41), trace_id="pay41", months=1)
+    result = await svc.rollback(7, months=1, payment_id=41, reason="refund", trace_id="rf41")
+    assert result.expire_at == base
+
+
+@pytest.mark.parametrize("first,second,cap", [("lite", "pro", 3), ("pro", "lite", 10)])
+async def test_refund_restores_previous_effective_tariff(svc, fake, repo, obhod, first, second, cap):
+    await svc.grant(7, _pay(101, first), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    before = fake.users[uid]["expireAt"]
+    await svc.grant(7, _pay(102, second), trace_id="second", months=1)
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    row = await repo.get_subscription(7)
+    assert res.action == "shortened" and res.expire_at == datetime.fromisoformat(before.replace("Z", "+00:00"))
+    assert fake.squad_names(uid) == [first] and row.plan_code == first
+    assert fake.users[uid]["hwidDeviceLimit"] == cap
+    assert row.config_data["rollbacks"]["refund"]["sync_state"] == "applied"
+    if first == "pro":
+        assert obhod.granted[-1][1:] == ("pro", res.expire_at)
+    else:
+        assert obhod.revoked[-1] == 7
+
+
+@pytest.mark.parametrize("later_source", [Src.PAYMENT, Src.GIFT, Src.ADMIN])
+async def test_refund_older_upgrade_replays_newer_rights_and_compensation(svc, fake, repo, later_source):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="upgrade", months=1)
+    await svc.grant(7, Entitlement(plan_code="standard", source=later_source,
+                                  payment_id=103 if later_source == Src.PAYMENT else None, days=30), trace_id="later")
+    await svc.add_days(7, 7, trace_id="comp")
+    before = datetime.fromisoformat(fake.users[uid]["expireAt"].replace("Z", "+00:00"))
+    grant = (await repo.get_subscription(7)).config_data["grants"]["pay:102"]
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert res.expire_at == before - timedelta(seconds=grant["credited_seconds"])
+    assert fake.squad_names(uid) == ["standard"] and fake.users[uid]["hwidDeviceLimit"] == 5
+    assert (await repo.get_subscription(7)).plan_code == "standard"
+
+
+@pytest.mark.parametrize("custom,foreign", [(20, []), (0, []), (None, ["esp"]), (7, ["esp"])])
+async def test_refund_preserves_prior_custom_caps_and_foreign_squads(svc, fake, custom, foreign):
+    base = NOW + timedelta(days=40)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite", *foreign], limit=custom, expire=iso(base))
+    await svc.grant(7, _pay(101, "pro"), trace_id="upgrade", months=1)
+    await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="refund")
+    assert fake.squad_names(501) == [*foreign, "lite"]
+    assert fake.users[501]["hwidDeviceLimit"] == custom and fake.users[501]["expireAt"] == iso(base)
+
+
+async def test_refund_preserves_device_compensation_and_new_foreign_squad(svc, fake):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="upgrade", months=1)
+    await svc.add_devices(7, 3, trace_id="comp-devices")
+    fake.users[uid]["activeInternalSquads"].append({"uuid": SQUADS["esp"], "name": "esp"})
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert set(fake.squad_names(uid)) == {"lite", "esp"}
+    assert fake.users[uid]["hwidDeviceLimit"] == 13
+
+
+async def test_refund_autorenew_uses_exact_paid_interval(svc, fake):
+    base = datetime(2027, 1, 31, tzinfo=timezone.utc)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    await svc.grant(7, Entitlement(plan_code="pro", source=Src.AUTORENEW, payment_id=101),
+                    trace_id="renew", months=1)
+    res = await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="refund")
+    assert res.expire_at == base and fake.squad_names(501) == ["lite"]
+    assert fake.users[501]["hwidDeviceLimit"] == 3
+
+
+@pytest.mark.parametrize("next_action", ["payment", "credit", "devices", "retry"])
+async def test_combined_refund_lost_response_is_settled_once(svc, fake, repo, next_action):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="upgrade", months=1)
+    _land_then_timeout(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert fake.squad_names(uid) == ["lite"] and fake.users[uid]["hwidDeviceLimit"] == 3
+    if next_action == "payment":
+        await svc.grant(7, _pay(103, "standard"), trace_id="later", months=1)
+    elif next_action == "credit":
+        await svc.add_days(7, 7, trace_id="comp")
+    elif next_action == "devices":
+        await svc.add_devices(7, 2, trace_id="comp-devices")
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="different-trace")
+    assert fake.users[uid] == before and len(fake.patches) == count
+    row = await repo.get_subscription(7)
+    assert row.plan_code == ("standard" if next_action == "payment" else "lite")
+
+
+async def test_date_only_partial_refund_blocks_new_mutations_until_rights_resolved(svc, fake, gw):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="upgrade", months=1)
+    real = gw.update_user
+    async def partial(pid, **kw):
+        await real(pid, expire_at=kw["expire_at"], current=kw["current"])
+        raise httpx.ReadTimeout("partial")
+    gw.update_user = partial
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    gw.update_user = real
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(103), trace_id="later", months=1)
+    with pytest.raises(ProvisioningError):
+        await svc.add_days(7, 2, trace_id="comp")
+    before = fake.users[uid]["expireAt"]
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="retry")
+    assert fake.users[uid]["expireAt"] == before
+    assert fake.squad_names(uid) == ["lite"] and fake.users[uid]["hwidDeviceLimit"] == 3
+
+
+async def test_legacy_duration_without_rights_requires_review(svc, fake, repo, notifier):
+    base = NOW + timedelta(days=60)
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], limit=10, expire=iso(base))
+    repo.add_row(7, plan="pro", panel_id=501, until=base, config_data={"grants": {"pay:101": {
+        "state": "applied", "source": "payment", "credited_seconds": 30 * 86400}}})
+    res = await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="refund")
+    assert res.action == "skipped" and not fake.patches and notifier.to_admins()
+
+
+async def test_refunding_several_plan_changes_does_not_revive_refunded_rights(svc, fake):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="upgrade", months=1)
+    await svc.grant(7, _pay(103, "standard"), trace_id="third", months=1)
+    await svc.rollback(7, months=1, payment_id=103, reason="refund", trace_id="refund-third")
+    await svc.grant(7, _pay(104), trace_id="fourth", months=1)
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund-upgrade")
+    assert fake.squad_names(uid) == ["lite"] and fake.users[uid]["hwidDeviceLimit"] == 3
+
+
+async def test_second_refund_settles_previous_lost_combined_patch(svc, fake, repo):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    await svc.grant(7, _pay(103, "standard"), trace_id="third", months=1)
+    _land_then_timeout(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, payment_id=103, reason="refund", trace_id="refund-third")
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund-second")
+    assert fake.squad_names(uid) == ["lite"] and fake.users[uid]["hwidDeviceLimit"] == 3
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    await svc.rollback(7, months=1, payment_id=103, reason="refund", trace_id="retry-third")
+    assert fake.users[uid] == before and len(fake.patches) == count
+
+
+async def test_bypass_sync_failure_retries_without_repeating_refund(svc, fake, repo, obhod):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    calls = []
+    async def strict(tg, plan, expiry, trace):
+        calls.append((tg, plan, expiry))
+        return len(calls) > 1
+    obhod.on_main_refunded = strict
+    with pytest.raises(ProvisioningError):
+        await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert (await repo.get_subscription(7)).config_data["rollbacks"]["refund"]["sync_state"] == "pending"
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="retry")
+    assert fake.users[uid] == before and len(fake.patches) == count and len(calls) == 2
+    assert calls[-1][1] == "lite"
+    assert (await repo.get_subscription(7)).config_data["rollbacks"]["refund"]["sync_state"] == "applied"
+
+
+async def test_truncated_rights_journal_needs_manual_review(svc, fake, repo):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    for i in range(30):
+        await svc.grant(7, Entitlement(plan_code="pro", source=Src.GIFT, days=1), trace_id=f"gift:{i}")
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert res.action == "skipped" and fake.users[uid] == before and len(fake.patches) == count
+
+
+async def test_refund_bypass_retry_ignores_optimistic_failed_newer_grant_row(svc, fake, repo, obhod):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    calls = []
+    async def strict(tg, plan, expiry, trace):
+        calls.append((plan, expiry))
+        return len(calls) > 1
+    obhod.on_main_refunded = strict
+    with pytest.raises(ProvisioningError):
+        await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    _fail_next_patch(fake)
+    with pytest.raises(ProvisioningError):
+        await svc.grant(7, _pay(103, "pro"), trace_id="failed", months=1)
+    assert (await repo.get_subscription(7)).plan_code == "pro"  # optimistic Phase A
+    await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="retry")
+    assert calls[-1][0] == "lite"
+
+
+async def test_full_refund_fractional_clock_verifies_and_retries_once(svc, fake, repo, clock):
+    clock.now = NOW.replace(microsecond=123456)
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    res = await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="refund")
+    assert res.action == "expired" and res.expire_at.microsecond == 0
+    assert fake.users[uid]["expireAt"] == iso((clock.now + timedelta(minutes=5)).replace(microsecond=0))
+    count = len(fake.patches)
+    again = await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="retry")
+    assert again == res and len(fake.patches) == count
+
+
+async def test_old_refund_checkpoint_cannot_authorize_overwriting_later_manual_tariff(svc, fake, repo):
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    await svc.grant(7, _pay(103, "standard"), trace_id="third", months=1)
+    await svc.rollback(7, months=1, payment_id=103, reason="refund", trace_id="refund-third")
+    await svc.grant(7, _pay(104), trace_id="fourth", months=1)
+    fake.users[uid]["activeInternalSquads"] = [{"uuid": SQUADS["pro"], "name": "pro"}]
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund-second")
+    assert res.action == "skipped" and fake.users[uid] == before and len(fake.patches) == count
+
+
+async def test_fractional_exact_until_refund_keeps_original_panel_second(svc, fake):
+    base = NOW + timedelta(days=20)
+    fake.add_user(501, "u", telegram_id=7, squads=["lite"], limit=3, expire=iso(base))
+    await svc.grant(7, Entitlement(plan_code="pro", source=Src.PAYMENT, payment_id=101,
+                                  until=base + timedelta(days=30, microseconds=654321)), trace_id="until")
+    res = await svc.rollback(7, months=1, payment_id=101, reason="refund", trace_id="refund")
+    assert res.expire_at == base and fake.users[501]["expireAt"] == iso(base)
+
+
+@pytest.mark.parametrize("damage", ["sequence", "snapshot", "operation", "missing_cap", "bad_cap", "missing_foreign"])
+async def test_malformed_rights_evidence_requires_review(svc, fake, repo, damage):
+    from dataclasses import replace
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    row = await repo.get_subscription(7)
+    cfg = dict(row.config_data)
+    grants = dict(cfg["grants"])
+    damaged = dict(grants["pay:102"])
+    if damage == "sequence":
+        damaged["rights_seq"] = "unknown"
+    elif damage == "snapshot":
+        damaged["rights_after"] = ["pro"]
+    elif damage == "missing_cap":
+        damaged["rights_before"] = {"managed": ["lite"], "plan": "lite"}
+    elif damage == "bad_cap":
+        damaged["rights_before"] = {"managed": ["lite"], "plan": "lite", "device_limit": "three"}
+    elif damage == "missing_foreign":
+        damaged["rights_op"] = {"plan": "pro", "squad": "pro", "device_limit": 10}
+    else:
+        damaged["rights_op"] = {}
+    grants["pay:102"] = damaged
+    cfg["grants"] = grants
+    await repo.save_subscription(replace(row, config_data=cfg))
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    assert res.action == "skipped" and fake.users[uid] == before and len(fake.patches) == count
+
+
+async def test_malformed_pending_refund_target_requires_manual_review(svc, fake, repo):
+    from dataclasses import replace
+    await svc.grant(7, _pay(101), trace_id="first", months=1)
+    uid = fake.created[-1]["id"]
+    await svc.grant(7, _pay(102, "pro"), trace_id="second", months=1)
+    _land_then_timeout(fake)
+    with pytest.raises(httpx.ReadTimeout):
+        await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="refund")
+    row = await repo.get_subscription(7)
+    cfg = dict(row.config_data)
+    rollbacks = dict(cfg["rollbacks"])
+    pending = dict(rollbacks["refund"])
+    pending["rights_target"] = {"managed": ["lite"], "plan": "lite"}
+    rollbacks["refund"] = pending
+    cfg["rollbacks"] = rollbacks
+    await repo.save_subscription(replace(row, config_data=cfg))
+    before, count = dict(fake.users[uid]), len(fake.patches)
+    res = await svc.rollback(7, months=1, payment_id=102, reason="refund", trace_id="retry")
+    assert res.action == "skipped" and fake.users[uid] == before and len(fake.patches) == count

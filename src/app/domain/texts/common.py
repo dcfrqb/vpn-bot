@@ -102,6 +102,9 @@ HELP_TEXT = help_text(False)
 
 # --- fallback router (unknown or retired buttons) and small commands ---
 STALE_BUTTON = ui.toast("Эта кнопка устарела, открыл главное меню")
+UNKNOWN_MESSAGE_SCREEN = ui.result(
+    "info", "Не понял сообщение", "Выбери действие кнопкой ниже или открой помощь.",
+)
 
 
 def myid_screen(user_id: int, is_admin: bool) -> ui.Screen:

@@ -90,3 +90,56 @@ def test_json_roundtrip():
     st = build_state(7, user=None, main_row=None, now=NOW)
     assert state_from_json(state_to_json(st)) == st
     assert state_from_json({"telegram_id": "x", "fetched_at": "bad"}) is None
+
+
+@pytest.mark.parametrize("recorded,attempt,expected", [
+    ("pending", NOW, "pending"),
+    ("pending", None, "unknown"),
+    ("failed", NOW, "failed"),
+    ("synced", NOW, "unknown"),
+])
+def test_bypass_readiness_requires_provisioning_evidence(recorded, attempt, expected):
+    from app.services.accounts import SubRow
+
+    row = SubRow(7, sub_kind="obhod", active=True, provisioning_state=recorded,
+                 last_provisioning_attempt_at=attempt)
+    state = build_state(7, user=None, main_row=None, obhod_row=row, now=NOW)
+    assert not state.obhod_active
+    assert state.obhod_readiness == expected
+    assert state_from_json(state_to_json(state)) == state
+
+
+async def test_bypass_panel_read_failure_does_not_trust_active_local_row(svc, fake, repo, monkeypatch):
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], expire=iso(NOW + timedelta(days=5)))
+    repo.add_row(7, plan="pro", panel_id=501)
+    repo.add_row(7, kind="obhod", plan="obhod", panel_id=600)
+    original = svc.remna.get_user
+
+    async def unavailable(pid):
+        if pid == 600:
+            raise RuntimeError("bypass read unavailable")
+        return await original(pid)
+
+    monkeypatch.setattr(svc.remna, "get_user", unavailable)
+    state = await svc.get_state(7, force=True)
+    assert state.active and not state.obhod_active
+    assert state.obhod_readiness == "unknown"
+    assert not fake.created and repo.saves == 0
+
+
+async def test_bypass_ready_after_refresh_reads_recovered_account(svc, fake, repo):
+    fake.add_user(501, "u", telegram_id=7, squads=["pro"], expire=iso(NOW + timedelta(days=5)))
+    repo.add_row(7, plan="pro", panel_id=501)
+    row = repo.add_row(7, kind="obhod", plan="obhod", panel_id=600, state="failed")
+    initial = await svc.get_state(7)
+    assert initial.obhod_readiness == "failed"
+    fake.add_user(600, "tg_7_obhod", squads=["obhod"], expire=iso(NOW + timedelta(days=5)))
+    recovered = await svc.get_state(7, force=True)
+    assert recovered.obhod_readiness == "ready"
+    assert repo.subs[row.id].provisioning_state == "failed"  # viewing never provisions
+    assert repo.saves == 0 and not fake.created
+
+
+def test_old_cache_payload_defaults_to_unknown():
+    state = state_from_json({"telegram_id": 7, "obhod_active": False})
+    assert state is not None and state.obhod_readiness == "unknown"

@@ -100,6 +100,24 @@ class LegacyObhodSync:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{trace_id}] obhod revoke soft-fail tg={telegram_id} ({type(e).__name__})")
 
+    async def on_main_refunded(self, telegram_id: int, plan_code: Optional[str],
+                               valid_until: datetime, trace_id: str) -> bool:
+        """Refund completion needs confirmed access, unlike best-effort grants."""
+        from app.services import obhod_service
+
+        factory = await self._session()
+        if factory is None:
+            return False
+        try:
+            async with factory as session:
+                return await obhod_service.sync_obhod_after_refund(
+                    session, int(telegram_id), plan_code,
+                    valid_until.astimezone(timezone.utc).replace(tzinfo=None), trace_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{trace_id}] obhod refund unconfirmed tg={telegram_id} ({type(exc).__name__})")
+            return False
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)

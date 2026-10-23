@@ -15,7 +15,7 @@
 Жизненный цикл обхода привязан к main: обновление/истечение Pro синкает обход.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from dateutil.relativedelta import relativedelta
@@ -362,6 +362,68 @@ async def deactivate_obhod(
     await session.commit()
     logger.info(f"[{trace_id}] obhod deactivated: tg_id={telegram_user_id}")
     return True
+
+
+async def sync_obhod_after_refund(session, telegram_user_id: int,
+                                 plan_code: Optional[str], valid_until: datetime,
+                                 trace_id: str) -> bool:
+    """Confirm refund access changes before completing the durable rollback.
+
+    Inactive local rows must still be checked: an older best-effort disable
+    could have failed remotely. Also resolve an owned orphan left by a DB error.
+    Exceptions deliberately propagate to the refund adapter for retry.
+    """
+    from app.infra.remnawave.dto import unwrap
+
+    pro = is_obhod_eligible_plan(plan_code)
+    if pro:
+        url = await ensure_obhod_for_pro(
+            session, telegram_user_id, plan_code, valid_until, trace_id,
+        )
+        if not url:
+            return False
+    sub = await get_obhod_subscription(session, telegram_user_id)
+    client = RemnaClient()
+    try:
+        uid = sub.remna_user_id if sub else None
+        if not uid:
+            username = build_obhod_username(telegram_user_id)
+            orphan = await client.get_user_by_username(username)
+            if orphan is None:
+                return not pro
+            if not _is_own_obhod_orphan(orphan, username):
+                return False
+            uid = orphan.get("uuid") or orphan.get("id")
+            if not uid:
+                return False
+        raw = unwrap(await client.get_user_by_id(str(uid)))
+        if not isinstance(raw, dict):
+            return False
+        if pro:
+            squad = await _get_obhod_squad_uuid(client)
+            actual = datetime.fromisoformat(str(raw.get("expireAt", "")).replace("Z", "+00:00"))
+            expected = valid_until.replace(tzinfo=timezone.utc)
+            squads = [item.get("uuid") if isinstance(item, dict) else item
+                      for item in raw.get("activeInternalSquads", [])]
+            return bool(
+                raw.get("status") in ("ACTIVE", "LIMITED") and bool(squad) and squad in squads
+                and abs((actual - expected).total_seconds()) <= 1
+            )
+        if raw.get("status") != "DISABLED":
+            try:
+                await client.disable_user(str(uid))
+            except Exception:
+                # A response can be lost after a successful disable.
+                pass
+            raw = unwrap(await client.get_user_by_id(str(uid)))
+            if not isinstance(raw, dict) or raw.get("status") != "DISABLED":
+                return False
+        if sub:
+            sub.active = False
+            await session.commit()
+        return True
+    finally:
+        await client.close()
 
 
 async def apply_obhod_package(

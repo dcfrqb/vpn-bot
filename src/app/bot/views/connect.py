@@ -32,6 +32,11 @@ def error(support_handle: Optional[str] = None) -> kit.View:
                     footer=kit.Footer.to_menu())
 
 
+def disabled(support_handle: Optional[str] = None) -> kit.View:
+    return kit.view(t.DISABLED_SCREEN, primary=[kit.action(B.REFRESH, REFRESH)],
+                    links=[_support(support_handle)], footer=kit.Footer.to_menu())
+
+
 def no_subscription(*, trial_available: bool, support_handle: Optional[str] = None) -> kit.View:
     screen = t.NO_SUBSCRIPTION_SCREEN if trial_available else t.NO_SUBSCRIPTION_NO_TRIAL_SCREEN
     return kit.view(
@@ -43,19 +48,21 @@ def no_subscription(*, trial_available: bool, support_handle: Optional[str] = No
     )
 
 
-def success(state: SubscriptionState, *, article_url: Optional[str] = None) -> kit.View:
+def success(state: SubscriptionState, *, article_url: Optional[str] = None,
+            support_handle: Optional[str] = None) -> kit.View:
     url = state.subscription_url or ""
-    is_pro = state.plan_code == "pro"
-    obhod_ready = bool(state.obhod_active and state.obhod_subscription_url)
+    is_pro = (state.plan_code or "").lower() == "pro"
+    obhod_ready = state.obhod_readiness == "ready"
     return kit.view(
         t.success_screen(state),
         primary=[kit.link(B.OPEN_LINK, url) if url else None],
         secondary=[
             kit.link(B.OPEN_OBHOD, state.obhod_subscription_url) if is_pro and obhod_ready else None,
             kit.action(B.OBHOD_MORE, Nav(s="plans", p="obhod"))
-            if is_pro and any(is_obhod_package_purchasable(c) for c in OBHOD_PACKAGE_CODES) else None,
+            if is_pro and obhod_ready and any(is_obhod_package_purchasable(c) for c in OBHOD_PACKAGE_CODES) else None,
             kit.action(B.REFRESH, REFRESH) if is_pro and not obhod_ready else None,  # «нажми «Обновить»»
         ],
-        links=[kit.link(B.ARTICLE, article_url) if article_url else None],
+        links=[kit.link(B.ARTICLE, article_url) if article_url else None,
+               _support(support_handle) if is_pro and not obhod_ready else None],
         footer=kit.Footer.to_menu(),
     )

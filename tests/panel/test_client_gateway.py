@@ -116,7 +116,16 @@ def test_plan_from_squads():
     assert plan_from_squad_names(["arcadia", "esp"]) is None
 
 
-async def test_status_logic_uses_status_not_revoked_at(raw_client):
+async def test_status_logic_uses_status_not_revoked_at(raw_client, monkeypatch):
+    from app.infra.remnawave import legacy
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime(2026, 9, 23, tzinfo=timezone.utc)
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(legacy, "datetime", FrozenDatetime)
     users = [dict(USER_3_4_3, status="DISABLED")]
     raw_client.find_users_by_telegram_id = AsyncMock(return_value=users)
     _, sub = await raw_client.get_user_with_subscription_by_telegram_id(42)
@@ -267,3 +276,16 @@ async def test_old_import_path_is_the_same_module():
     assert old is client_mod and old.RemnaClient is RemnaClient
     with patch("app.remnawave.client.LIFETIME_EXPIRE_AT", "X"):
         assert client_mod.LIFETIME_EXPIRE_AT == "X"
+
+
+async def test_refund_only_device_restore_requires_matching_previous_cap():
+    fake = FakeRemna()
+    fake.add_user(1, "u", squads=["pro"], limit=10)
+    gw = FakeRemnaGateway(fake)
+    await gw.update_user(1, device_limit=3)
+    assert fake.users[1]["hwidDeviceLimit"] == 10 and not fake.patches
+    with pytest.raises(ValueError):
+        await gw.update_user(1, device_limit=3, refund_device_limit_from=5)
+    assert fake.users[1]["hwidDeviceLimit"] == 10 and not fake.patches
+    await gw.update_user(1, device_limit=3, refund_device_limit_from=10)
+    assert fake.users[1]["hwidDeviceLimit"] == 3 and len(fake.patches) == 1

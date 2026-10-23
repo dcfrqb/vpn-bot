@@ -10,8 +10,8 @@ from aiogram.types import CallbackQuery
 from app.bot.callbacks import Nav
 from app.bot.views import menu as menu_view
 from app.bot.views import render
-from app.config import is_admin
-from app.domain.texts.common import REFRESHED
+from app.config import is_admin, settings
+from app.domain.texts.common import REFRESHED, support_handle
 from app.utils.html import safe_format_user_name
 
 router = Router(name="r3_menu")
@@ -30,7 +30,7 @@ async def show_main_screen(event, *, force: bool = False, answer_callback: bool 
     state = await status_service.get_state(user.id, force=force)
 
     trial_available = False
-    if not state.active:
+    if not state.active and not state.disabled and not state.stale:
         try:
             trial_available = bool(promo and await promo.trial_available(user.id))
         except Exception:  # noqa: BLE001 - PromoService may not be shipped yet (owner: E)
@@ -39,6 +39,7 @@ async def show_main_screen(event, *, force: bool = False, answer_callback: bool 
     name = safe_format_user_name(user.first_name, user.last_name, user.username, user.id)
     text, markup = menu_view.render(
         user.id, name, state, is_admin=is_admin(user.id), trial_available=trial_available,
+        support_handle=support_handle(settings),
     )
     await render(event, text, markup, answer_callback=answer_callback)
     if notice and isinstance(event, CallbackQuery):

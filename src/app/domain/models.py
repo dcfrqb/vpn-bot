@@ -154,6 +154,23 @@ class SubscriptionState:
     fetched_at: Optional[datetime] = None
     stale: bool = False  # True when the panel was unreachable and data is cached/DB-only
 
+    # Provisioning evidence only; subscription access remains panel-authoritative.
+    obhod_provisioning_state: str = "unknown"  # pending / failed / unknown
+
+    @property
+    def disabled(self) -> bool:
+        return (self.panel_status or "").upper() == "DISABLED"
+
+    @property
+    def obhod_readiness(self) -> str:
+        if self.stale:
+            return "unknown"
+        if self.obhod_active and self.obhod_subscription_url:
+            return "ready"
+        if self.obhod_provisioning_state in ("pending", "failed"):
+            return self.obhod_provisioning_state
+        return "unknown"
+
     def days_left(self, now: Optional[datetime] = None) -> Optional[int]:
         """Whole days left (ceil), 0 when expired, None when lifetime/unknown."""
         if self.is_lifetime or self.expires_at is None:

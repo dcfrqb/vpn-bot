@@ -49,7 +49,7 @@ def test_menu_pro_active_with_obhod():
         telegram_id=1, has_panel_user=True, active=True, plan_code="pro",
         expires_at=NOW + timedelta(days=7), device_limit=10, devices_used=3,
         obhod_active=True, obhod_used_bytes=12_884_901_888, obhod_limit_bytes=107_374_182_400,
-        subscription_url="https://sub.example/abc",
+        subscription_url="https://sub.example/abc", obhod_subscription_url="https://sub.example/obhod",
     )
     text, kb = menu_view.render(555, "Test User", state, is_admin=False, trial_available=False)
 
@@ -147,7 +147,7 @@ def test_connect_success_non_pro_shows_obhod_upsell():
 def test_connect_success_pro_obhod_not_ready_yet():
     state = SubscriptionState(telegram_id=1, active=True, plan_code="pro", subscription_url="https://sub.example/x")
     text, kb = connect_view.success(state)
-    assert "Готовим твою ссылку обхода" in text
+    assert "Не удалось подтвердить готовность обхода" in text
     assert text.count("Обход блокировок") == 1 and "<code></code>" not in text
     # the text says «нажми «Обновить»», so the button is there (review UX M2)
     assert ["🔄 Обновить"] in _keyboard_texts(kb)
@@ -303,3 +303,52 @@ def test_menu_last_day_by_moscow_calendar_says_expires_today():
                                  expires_at=NOW + timedelta(hours=22), device_limit=2, devices_used=1)
     text, _ = menu_view.render(1, "X", tomorrow)  # 01:00 MSK next day
     assert "⏳ Осталось: 1\xa0день" in text
+
+
+@pytest.mark.parametrize("provisioning,phrase", [
+    ("pending", "Подожди минуту"),
+    ("failed", "Не удалось подготовить обход"),
+    ("unknown", "Не удалось подтвердить готовность обхода"),
+])
+def test_pro_bypass_unavailable_has_truthful_state_and_recovery_actions(provisioning, phrase):
+    state = SubscriptionState(1, active=True, plan_code="Pro", subscription_url="https://sub.example/main",
+                              obhod_provisioning_state=provisioning)
+    text, markup = connect_view.success(state, support_handle="support_test")
+    assert phrase in text
+    buttons = [b for row in markup.inline_keyboard for b in row]
+    assert any(b.callback_data == "n:connect:refresh" for b in buttons)
+    assert any(b.url == "https://t.me/support_test" for b in buttons)
+    assert not any(b.callback_data == "n:plans:obhod" for b in buttons)
+    menu_text, menu_markup = menu_view.render(1, "X", state, support_handle="support_test")
+    assert phrase in menu_text
+    assert any(b.url == "https://t.me/support_test" for row in menu_markup.inline_keyboard for b in row)
+
+
+def test_stale_bypass_link_is_not_offered_for_package_purchase():
+    state = SubscriptionState(1, active=True, plan_code="pro", subscription_url="https://sub.example/main",
+                              obhod_active=True, obhod_subscription_url="https://sub.example/obhod", stale=True)
+    text, markup = connect_view.success(state)
+    assert "Не удалось подтвердить готовность обхода" in text
+    assert not any(b.callback_data == "n:plans:obhod" for row in markup.inline_keyboard for b in row)
+
+
+def test_disabled_with_future_expiry_is_not_expired_or_offered_trial_or_purchase():
+    from app.domain.models import PanelUser
+    from app.services.status import build_state
+
+    state = build_state(1, user=PanelUser(501, status="DISABLED", expire_at=NOW + timedelta(days=30)),
+                        main_row=None, now=NOW)
+    text, markup = menu_view.render(1, "X", state, trial_available=True)
+    assert "Подписка отключена" in text and "поддержку" in text
+    assert "Истекла" not in text and "продлить" not in text and "пробный" not in text
+    callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "n:connect:trial" not in callbacks and "n:plans:" not in callbacks
+    assert any(b.url for row in markup.inline_keyboard for b in row if "Поддержка" in b.text)
+
+
+@pytest.mark.parametrize("stale,expires", [(True, NOW - timedelta(days=1)), (False, NOW + timedelta(days=1))])
+def test_unverified_inactive_subscription_does_not_claim_expiry(stale, expires):
+    state = SubscriptionState(1, has_panel_user=True, expires_at=expires, stale=stale)
+    text, _ = menu_view.render(1, "X", state)
+    assert "Подписка истекла" not in text and "Истекла:" not in text
+    assert "Статус подписки не подтвержден" in text

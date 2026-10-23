@@ -11,6 +11,12 @@ from typing import Any, Iterable, Optional
 
 from app.logger import logger
 from app.services.payments.store import (
+    M_REFUND_24H,
+    claim_refund_marker,
+    claim_refund_notice_marker,
+    finish_refund_notice_marker,
+    finish_refund_marker,
+    merge_refund_marker,
     PaymentRecord,
     RefundRequestRecord,
     SavedMethodRecord,
@@ -135,6 +141,100 @@ class SqlRefundsAutorenewMixin:
                 row.decided_at = datetime.utcnow()
             await s.commit()
             return _refund_record(row)
+
+    async def refund_access_candidates(self, now: datetime, *, limit: int = 20) -> list[PaymentRecord]:
+        from sqlalchemy import and_, case, or_, select
+        from app.db.models import Payment
+
+        marker = Payment.payment_metadata.op("->")(M_REFUND_24H)
+        access = marker.op("->")("access")
+        state = access.op("->>")("state")
+        due, lease = access.op("->>")("due_at"), access.op("->>")("lease_until")
+        stamp = _naive(now).isoformat()
+        ready = and_(or_(state.in_(("pending", "retry", "awaiting_money")),
+                         and_(state.is_(None), marker.op("->>")("state").in_(("done", "refunding", "pending_money")))),
+                     or_(due.is_(None), due <= stamp))
+        expired = and_(state == "processing", or_(lease.is_(None), lease <= stamp))
+        notice_due = access.op("->>")("notice_due_at")
+        notice_lease = access.op("->>")("notice_lease_until")
+        notices = and_(access.op("->>")("notice_pending") == "true",
+                       or_(notice_due.is_(None), notice_due <= stamp),
+                       or_(notice_lease.is_(None), notice_lease <= stamp))
+        main = and_(or_(marker.op("->>")("revoked").is_(None), marker.op("->>")("revoked") != "true"),
+                    or_(ready, expired))
+        async with self._session() as s:
+            rows = (await s.execute(select(Payment).where(
+                marker.isnot(None), or_(main, notices),
+            ).order_by(case((main, 0), else_=1), Payment.id).limit(limit))).scalars().all()
+            return [_record(r) for r in rows]
+
+    async def update_refund_marker(self, payment_id, patch, *, access_patch=None):
+        async with self._session() as s:
+            row = await self._locked(s, payment_id)
+            if row is None:
+                return False
+            meta = dict(row.payment_metadata or {})
+            meta[M_REFUND_24H] = merge_refund_marker(meta, patch, access_patch)
+            row.payment_metadata = meta
+            await s.commit()
+            return True
+
+    async def claim_refund_access(self, payment_id, *, owner, now, lease_for):
+        async with self._session() as s:
+            row = await self._locked(s, payment_id)
+            if row is None:
+                return None
+            meta = dict(row.payment_metadata or {})
+            marker = claim_refund_marker(meta, owner=owner, now=now, lease_for=lease_for)
+            if marker is None:
+                return None
+            meta[M_REFUND_24H] = marker
+            row.payment_metadata = meta
+            await s.commit()
+            return _record(row)
+
+    async def finish_refund_access(self, payment_id, *, owner, state, now, error="", action=None, reason_class=None):
+        async with self._session() as s:
+            row = await self._locked(s, payment_id)
+            if row is None:
+                return None
+            meta = dict(row.payment_metadata or {})
+            marker = finish_refund_marker(meta, owner=owner, state=state, now=now, error=error, action=action, reason_class=reason_class)
+            if marker is None:
+                return None
+            meta[M_REFUND_24H] = marker
+            row.payment_metadata = meta
+            await s.commit()
+            return _record(row)
+
+    async def claim_refund_notice(self, payment_id, *, owner, now, lease_for):
+        async with self._session() as s:
+            row = await self._locked(s, payment_id)
+            if row is None:
+                return None
+            meta = dict(row.payment_metadata or {})
+            marker = claim_refund_notice_marker(meta, owner=owner, now=now, lease_for=lease_for)
+            if marker is None:
+                return None
+            meta[M_REFUND_24H] = marker
+            row.payment_metadata = meta
+            await s.commit()
+            return _record(row)
+
+    async def finish_refund_notice(self, payment_id, *, owner, phase, user_delivered, admin_delivered, now):
+        async with self._session() as s:
+            row = await self._locked(s, payment_id)
+            if row is None:
+                return False
+            meta = dict(row.payment_metadata or {})
+            marker = finish_refund_notice_marker(meta, owner=owner, phase=phase, user_delivered=user_delivered,
+                                                admin_delivered=admin_delivered, now=now)
+            if marker is None:
+                return False
+            meta[M_REFUND_24H] = marker
+            row.payment_metadata = meta
+            await s.commit()
+            return True
 
     # --- saved methods and autorenew --------------------------------------------------------
 

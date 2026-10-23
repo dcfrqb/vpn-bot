@@ -34,13 +34,19 @@ async def show_connect_screen(event, *, answer_callback: bool = True, force: boo
     promo = data.get("promo")
     user = event.from_user
     state = await (status_service.get_state(user.id, force=True) if force else status_service.get_state(user.id))
+    if state.disabled:
+        text, markup = connect_view.disabled(support_handle(settings))
+        await render(event, text, markup, answer_callback=answer_callback)
+        return
     live = state.active or _in_grace(state)  # grace: the link still works (review UX M5)
 
     if live and state.subscription_url:
-        text, markup = connect_view.success(state, article_url=settings.CONNECT_ARTICLE_URL)
+        text, markup = connect_view.success(state, article_url=settings.CONNECT_ARTICLE_URL,
+                                            support_handle=support_handle(settings))
         await render(event, text, markup, answer_callback=answer_callback)
         return
-    if live or state.stale:
+    if live or state.stale or (state.has_panel_user and state.expires_at is not None
+                              and ensure_utc(state.expires_at) > datetime.now(timezone.utc)):
         # Review UX M1: a paying user whose link we cannot show right now (panel
         # down, no URL) gets «try again», never «not active, buy».
         text, markup = connect_view.error(support_handle(settings))

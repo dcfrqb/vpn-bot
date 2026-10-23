@@ -50,6 +50,7 @@ async def test_approve_refunds_money_revokes_access_once():
     assert deps.payments.refunds == [{"payment_id": rec.external_id, "amount": float(rec.amount),
                                       "key": f"rr:{rid}", "status": "succeeded"}]
     assert deps.provisioning.revokes == [(TG, f"refund_24h:{rid}")]
+    assert deps.provisioning.revoke_payment_ids == [rec.id]
     assert (await deps.store.main_subscription(TG)).autorenew is False
     assert deps.store.requests[rid].status == "refunded"
     marker = (await deps.store.get(rec.id)).meta["refund_24h"]
@@ -71,21 +72,18 @@ async def test_reject_tells_user_and_blocks_approval():
     assert any("@crs_support" in s.text for s in deps.notifier.sent if s.kind == "user")
 
 
-async def test_failed_money_refund_can_be_retried():
+async def test_unknown_money_result_blocks_second_approval_and_requires_review():
     m, deps = make_money(REFUND_24H_ENABLED=True)
-    rec = await _paid(m, deps)
-    await m.refunds.request(TG, rec.id)
-    rid = next(iter(deps.store.requests))
-    real_refund = deps.payments.refund
-
+    rec, rid = await _requested(m, deps)
+    calls = []
     async def broken(*a, **kw):
+        calls.append(a)
         return None
-
     deps.payments.refund = broken
-    assert (await m.refunds.decide(rid, 111, approve=True)).startswith("failed:")
-    assert deps.store.requests[rid].status == "failed" and not deps.provisioning.revokes
-    deps.payments.refund = real_refund
-    assert await m.refunds.decide(rid, 111, approve=True) == "done"
+    assert await m.refunds.decide(rid, 111, approve=True) == "unknown_money"
+    assert deps.store.requests[rid].status == "approved" and not deps.provisioning.revokes
+    assert await m.refunds.decide(rid, 111, approve=True) == "already:approved"
+    assert len(calls) == 1
 
 
 async def test_revoke_failure_is_reported_to_admin():
@@ -158,3 +156,297 @@ async def test_approval_of_a_request_whose_payment_is_not_delivered_fails_safely
     row.meta.pop("fulfilled_at", None)
     assert (await m.refunds.decide(rid, 111, approve=True)).startswith("failed:")
     assert not deps.payments.refunds and not deps.provisioning.revokes
+
+
+async def test_refund_without_automatic_access_change_tells_user_about_manual_review():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec = await _paid(m, deps)
+    await m.refunds.request(TG, rec.id)
+    rid = next(iter(deps.store.requests))
+    deps.provisioning.revoke_result = False
+    assert await m.refunds.decide(rid, 42, approve=True) == "done_no_revoke"
+    message = [s for s in deps.notifier.sent if s.kind == "user" and s.target == TG][-1].text
+    assert "проверит поддержка" in message
+    assert "отключен" not in message
+
+
+async def _requested(m, deps):
+    rec = await _paid(m, deps)
+    await m.refunds.request(TG, rec.id)
+    return rec, next(iter(deps.store.requests))
+
+
+def _restart(deps):
+    from app.services.money import build_money
+    return build_money(deps)
+
+
+async def test_failed_access_is_durable_and_restart_never_refunds_money_again():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    deps.provisioning.rollback_fail_times = 1
+    assert await m.refunds.decide(rid, 111, approve=True) == "retry_access"
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["money_status"] == "succeeded" and marker["access"]["state"] == "retry"
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0  # backoff
+    deps.clock.advance(minutes=5)
+    stats = await _restart(deps).refunds.recover_access()
+    assert stats["applied"] == 1 and len(deps.payments.refunds) == 1
+    assert deps.provisioning.rollback_calls == [(TG, 1, rec.id, f"rr:{rid}")] * 2
+    assert (await deps.store.get(rec.id)).meta["refund_24h"]["revoked"] is True
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+
+
+async def test_crash_after_money_confirmation_before_access_call_recovers_from_metadata():
+    import pytest
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    async def crash(pid):
+        raise RuntimeError("process stopped before access")
+    m.refunds.recover_one_access = crash
+    with pytest.raises(RuntimeError):
+        await m.refunds.decide(rid, 111, approve=True)
+    assert len(deps.payments.refunds) == 1 and not deps.provisioning.rollback_calls
+    stats = await _restart(deps).refunds.recover_access()
+    assert stats["applied"] == 1 and len(deps.payments.refunds) == 1
+
+
+async def test_lost_access_response_and_failed_bypass_retry_debit_only_once():
+    for failure in ("rollback_response_fail_times", "rollback_sync_fail_times"):
+        m, deps = make_money(REFUND_24H_ENABLED=True)
+        rec, rid = await _requested(m, deps)
+        setattr(deps.provisioning, failure, 1)
+        assert await m.refunds.decide(rid, 111, approve=True) == "retry_access"
+        deps.clock.advance(minutes=5)
+        assert (await _restart(deps).refunds.recover_access())["applied"] == 1
+        assert len(deps.provisioning.revokes) == 1 and len(deps.payments.refunds) == 1
+        assert len(deps.provisioning.rollback_calls) == 2
+        notices = [s for s in deps.notifier.sent if s.kind == "user" and (s.dedup_key or "").startswith("rr_notice:")]
+        assert len(notices) == 2 and "автоматически" in notices[0].text
+
+
+async def test_pending_provider_refund_does_not_revoke_until_confirmed():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    original = deps.payments.refund
+    async def pending(*a, **kw):
+        result = await original(*a, **kw)
+        result.update(id="pending-refund", status="pending")
+        return result
+    deps.payments.refund = pending
+    assert await m.refunds.decide(rid, 111, approve=True) == "pending_money"
+    assert not deps.provisioning.rollback_calls and deps.store.requests[rid].status == "approved"
+    assert not any("возврат денег подтвержден" in s.text.lower() for s in deps.notifier.sent)
+    deps.clock.advance(minutes=5)
+    assert (await _restart(deps).refunds.recover_access())["awaiting_money"] == 1
+    assert not deps.provisioning.rollback_calls
+    deps.payments.refunds[0]["status"] = "succeeded"
+    deps.clock.advance(minutes=10)
+    assert (await _restart(deps).refunds.recover_access())["applied"] == 1
+    assert deps.store.requests[rid].status == "refunded" and len(deps.payments.refunds) == 1
+    assert deps.payments.refund_reads == ["pending-refund"] * 2
+
+
+async def test_canceled_pending_refund_goes_to_manual_without_access_debit():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    original = deps.payments.refund
+    async def pending(*a, **kw):
+        result = await original(*a, **kw)
+        result.update(id="pending-refund", status="pending")
+        return result
+    deps.payments.refund = pending
+    await m.refunds.decide(rid, 111, approve=True)
+    deps.payments.refunds[0]["status"] = "canceled"
+    deps.clock.advance(minutes=5)
+    assert (await _restart(deps).refunds.recover_access())["manual_review"] == 1
+    assert not deps.provisioning.rollback_calls and len(deps.payments.refunds) == 1
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+
+
+async def test_manual_skip_and_no_account_are_terminal_and_alert_once():
+    for action in ("skipped", "no_account"):
+        m, deps = make_money(REFUND_24H_ENABLED=True)
+        rec, rid = await _requested(m, deps)
+        deps.provisioning.revoke_result = False
+        deps.provisioning.rollback_action = action
+        assert await m.refunds.decide(rid, 111, approve=True) == "done_no_revoke"
+        assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+        alerts = [s for s in deps.notifier.to_admins() if s.dedup_key == f"rr_alert:{rid}:manual_review"]
+        assert len(alerts) == 1 and len(deps.payments.refunds) == 1
+
+
+async def test_legacy_failed_access_requires_verified_money_evidence():
+    for confirmed in (False, True):
+        m, deps = make_money(REFUND_24H_ENABLED=True)
+        rec, rid = await _requested(m, deps)
+        await deps.store.transition_refund_request(rid, ("pending",), "refunded")
+        await deps.store.patch_meta(rec.id, {"refund_24h": {"rid": rid, "state": "done", "revoked": False}})
+        if confirmed:
+            deps.payments.payments[rec.external_id]["refunded_amount"] = float(rec.amount)
+        stats = await _restart(deps).refunds.recover_access()
+        assert stats["applied" if confirmed else "manual_review"] == 1
+        assert bool(deps.provisioning.rollback_calls) is confirmed and not deps.payments.refunds
+
+
+async def test_legacy_stars_approved_marker_does_not_infer_money_success():
+    m, deps = make_money(REFUND_24H_ENABLED=True, STARS_ENABLED=True, STARS_RATE=1.0)
+    rec = await _paid(m, deps, method="stars")
+    await m.refunds.request(TG, rec.id)
+    rid = next(iter(deps.store.requests))
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.patch_meta(rec.id, {"refund_24h": {"rid": rid, "state": "refunding"}})
+    assert (await _restart(deps).refunds.recover_access())["manual_review"] == 1
+    assert not deps.stars.refunds and not deps.provisioning.rollback_calls
+
+
+async def test_missing_paid_period_never_becomes_full_cut_during_recovery():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    deps.store.payments[rec.id].period_months = None
+    assert await m.refunds.decide(rid, 111, approve=True) == "done_no_revoke"
+    assert not deps.provisioning.rollback_calls
+
+
+async def test_access_lease_survives_restart_and_stale_owner_cannot_finish():
+    from datetime import timedelta
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.update_refund_marker(rec.id, {"rid": rid, "state": "done", "money_status": "succeeded"},
+                                         access_patch={"state": "pending"})
+    assert await deps.store.claim_refund_access(rec.id, owner="crashed", now=deps.clock(), lease_for=timedelta(minutes=10))
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+    deps.clock.advance(minutes=11)
+    assert (await _restart(deps).refunds.recover_access())["applied"] == 1
+    assert await deps.store.finish_refund_access(rec.id, owner="crashed", state="retry", now=deps.clock()) is None
+    assert (await deps.store.get(rec.id)).meta["refund_24h"]["access"]["state"] == "applied"
+
+
+async def test_concurrent_workers_and_stale_money_patch_preserve_completed_access():
+    import asyncio
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.update_refund_marker(rec.id, {"rid": rid, "state": "done", "money_status": "succeeded"},
+                                         access_patch={"state": "pending"})
+    states = await asyncio.gather(*[_restart(deps).refunds.recover_one_access(rec.id) for _ in range(4)])
+    assert states.count("applied") == 1 and len(deps.provisioning.revokes) == 1
+    await deps.store.update_refund_marker(rec.id, {"state": "pending_money", "money_status": "pending"},
+                                         access_patch={"state": "awaiting_money"})
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["money_status"] == "succeeded" and marker["access"]["state"] == "applied"
+    assert marker["revoked"] is True and marker["state"] == "done"
+
+
+async def test_unknown_stars_response_never_calls_money_refund_twice():
+    m, deps = make_money(REFUND_24H_ENABLED=True, STARS_ENABLED=True, STARS_RATE=1.0)
+    rec = await _paid(m, deps, method="stars")
+    await m.refunds.request(TG, rec.id)
+    rid = next(iter(deps.store.requests))
+    original = deps.stars.refund
+    async def lost(*a):
+        await original(*a)
+        raise TimeoutError("Telegram reply lost")
+    deps.stars.refund = lost
+    assert await m.refunds.decide(rid, 111, approve=True) == "unknown_money"
+    assert await m.refunds.decide(rid, 111, approve=True) == "already:approved"
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["access"]["reason_class"] == "money_unconfirmed"
+    assert len(deps.stars.refunds) == 1 and not deps.provisioning.rollback_calls
+
+
+async def test_lost_yookassa_refund_response_is_verified_without_second_money_call():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    original = deps.payments.refund
+    async def lost(*a, **kw):
+        await original(*a, **kw)
+        raise TimeoutError("provider reply lost")
+    deps.payments.refund = lost
+    assert await m.refunds.decide(rid, 111, approve=True) == "done"
+    assert len(deps.payments.refunds) == 1 and len(deps.provisioning.revokes) == 1
+
+
+async def test_unavailable_money_read_never_says_money_is_confirmed():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.update_refund_marker(rec.id, {"rid": rid, "state": "done", "revoked": False})
+    async def unavailable(*a):
+        return None
+    deps.payments.get_payment = unavailable
+    assert (await _restart(deps).refunds.recover_access())["retry"] == 1
+    notices = [s.text.lower() for s in deps.notifier.sent if (s.dedup_key or "").startswith("rr_notice:")]
+    assert notices and not any("денег подтвержден" in text for text in notices)
+    assert not deps.provisioning.rollback_calls and not deps.payments.refunds
+
+
+async def test_applied_access_notice_false_delivery_retries_only_notice_after_restart():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    original = deps.notifier.notify_user
+    async def unavailable(*a, **kw):
+        return False
+    deps.notifier.notify_user = unavailable
+    assert await m.refunds.decide(rid, 111, approve=True) == "done"
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["access"]["state"] == "applied" and marker["access"]["notice_pending"]
+    deps.notifier.notify_user = original
+    deps.clock.advance(minutes=5)
+    assert (await _restart(deps).refunds.recover_access())["notified"] == 1
+    assert len(deps.payments.refunds) == 1 and len(deps.provisioning.rollback_calls) == 1
+    assert (await _restart(deps).refunds.recover_access())["checked"] == 0
+    assert len([s for s in deps.notifier.sent if s.dedup_key == f"rr_notice:{rid}:applied"]) == 1
+
+
+async def test_manual_alert_delivery_retries_without_new_access_or_user_notice():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    deps.provisioning.revoke_result = False
+    original = deps.notifier.notify_admins
+    async def unavailable(*a, **kw):
+        return 0
+    deps.notifier.notify_admins = unavailable
+    assert await m.refunds.decide(rid, 111, approve=True) == "done_no_revoke"
+    deps.notifier.notify_admins = original
+    deps.clock.advance(minutes=5)
+    assert (await _restart(deps).refunds.recover_access())["notified"] == 1
+    assert len(deps.payments.refunds) == 1 and len(deps.provisioning.rollback_calls) == 1
+    assert len([s for s in deps.notifier.sent if s.dedup_key == f"rr_notice:{rid}:manual_review"]) == 1
+    assert len([s for s in deps.notifier.sent if s.dedup_key == f"rr_alert:{rid}:manual_review"]) == 1
+
+
+async def test_verified_money_racing_stale_provider_read_cannot_close_queue():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    await deps.store.transition_refund_request(rid, ("pending",), "approved")
+    await deps.store.update_refund_marker(rec.id, {"rid": rid, "state": "refunding", "money_status": "unknown"},
+                                         access_patch={"state": "pending"})
+    original = m.refunds._money_confirmed
+    async def stale(read):
+        await deps.store.update_refund_marker(rec.id, {"money_status": "succeeded", "state": "done"})
+        return "manual_review"
+    m.refunds._money_confirmed = stale
+    assert await m.refunds.recover_one_access(rec.id) == "retry"
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["money_status"] == "succeeded" and marker["access"]["state"] == "pending"
+    m.refunds._money_confirmed = original
+    assert (await _restart(deps).refunds.recover_access())["applied"] == 1
+    assert len(deps.provisioning.revokes) == 1 and not deps.payments.refunds
+
+
+async def test_delayed_successful_money_response_rearms_worker_money_review():
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec, rid = await _requested(m, deps)
+    original = deps.payments.refund
+    async def delayed(*a, **kw):
+        deps.clock.advance(minutes=6)
+        assert (await _restart(deps).refunds.recover_access())["manual_review"] == 1
+        return await original(*a, **kw)
+    deps.payments.refund = delayed
+    assert await m.refunds.decide(rid, 111, approve=True) == "done"
+    marker = (await deps.store.get(rec.id)).meta["refund_24h"]
+    assert marker["access"]["state"] == "applied" and len(deps.provisioning.revokes) == 1
+    assert len(deps.payments.refunds) == 1

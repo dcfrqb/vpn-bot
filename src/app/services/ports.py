@@ -91,6 +91,7 @@ class RemnaGateway(Protocol):
         device_limit: Optional[int] = None,
         traffic_limit_bytes: Optional[int] = None,
         traffic_limit_strategy: Optional[str] = None,
+        refund_device_limit_from: Optional[int] = None,
     ) -> PanelUser:
         """PATCH only the given fields. ``squads`` = full target list of NAMES;
         manual squads already on the user are preserved by the adapter."""
@@ -145,6 +146,9 @@ class PaymentGateway(Protocol):
     ) -> PaymentIntent:
         """Autopay: charge a saved card without user interaction."""
 
+    async def get_refund(self, refund_id: str) -> Optional[dict]:
+        """Read provider refund status without issuing money."""
+
     async def refund(
         self,
         external_id: str,
@@ -180,11 +184,11 @@ class ProvisioningService(Protocol):
         Idempotent per (entitlement.payment_id or trace_id)."""
 
     async def revoke(self, telegram_id: int, *, sub_kind: SubKind = SubKind.MAIN, reason: str, trace_id: str,
-                     months: Optional[int] = None) -> bool:
-        """Take access back for a refund: exactly ``months`` paid months from the
-        current expiry, or a full cut when ``months`` is None or nothing would
+                     months: Optional[int] = None, payment_id: Optional[int] = None) -> bool:
+        """Take access back for a refund: the exact duration credited by
+        ``payment_id``, or a full cut when ``months`` is None or nothing would
         be left. Never touches a lifetime/manual subscription. Idempotent per
-        trace_id; runs under the same per-user lock as ``grant``."""
+        payment_id (or trace_id for a full cut); runs under the same per-user lock as ``grant``."""
 
 
 @runtime_checkable
