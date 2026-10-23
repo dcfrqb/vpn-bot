@@ -123,13 +123,13 @@ async def cmd_site_login(message: types.Message, command: CommandObject) -> None
 async def cb_site_login(callback: types.CallbackQuery) -> None:
     """Handler 2: нажатие кнопки подтверждения/отмены."""
     if not settings.SITE_INTERNAL_TOKEN:
-        await callback.answer(FEATURE_OFF_TEXT, show_alert=False)
+        await callback.answer(FEATURE_OFF_TEXT, show_alert=True)
         return
 
     body = {"data": callback.data, "user_id": callback.from_user.id}
     data = await _post(ANSWER_PATH, body)
     if data is None:
-        await callback.answer(SITE_UNAVAILABLE_CALLBACK_TEXT, show_alert=False)
+        await callback.answer(SITE_UNAVAILABLE_CALLBACK_TEXT, show_alert=True)
         return
 
     text = data.get("text", "")

@@ -36,7 +36,7 @@ async def stale_callback(callback: CallbackQuery, **data) -> None:
 
     logger.info(f"fallback: unhandled callback data={str(callback.data)[:64]!r} tg_id={callback.from_user.id}")
     try:
-        await callback.answer(STALE_BUTTON)
+        await callback.answer(STALE_BUTTON, show_alert=True)
     except Exception:  # noqa: BLE001 - query too old
         pass
     await show_main_screen(callback, answer_callback=False, **data)

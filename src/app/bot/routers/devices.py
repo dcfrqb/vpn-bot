@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery
 
 from app.bot.callbacks import Dev
 from app.bot.views import devices as devices_view
-from app.bot.views import render
+from app.bot.views import render, show_result
 from app.config import settings
 from app.domain.texts import devices as t
 from app.domain.texts.common import support_handle
@@ -56,7 +56,8 @@ async def ask_unlink(callback: CallbackQuery, callback_data: Dev, **data) -> Non
     found = t.number_of(devices, callback_data.id)
     if found is None:
         text, markup = devices_view.not_found()
-        await render(callback, text, markup)
+        if await show_result(callback, text, markup):
+            await show_devices_screen(callback, answer_callback=False, **data)
         return
     n, dev = found
     text, markup = devices_view.ask_unlink(dev, n)
@@ -70,5 +71,5 @@ async def unlink_device(callback: CallbackQuery, callback_data: Dev, **data) -> 
         await show_devices_screen(callback, **data)
         return
     ok = await devices_service.unlink(callback.from_user.id, callback_data.id)
-    await callback.answer(t.UNLINKED if ok else t.UNLINK_LIMIT, show_alert=not ok)
+    await callback.answer(t.UNLINKED if ok else t.UNLINK_LIMIT, show_alert=True)
     await show_devices_screen(callback, answer_callback=False, **data)

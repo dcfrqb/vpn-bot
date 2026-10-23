@@ -53,7 +53,7 @@ async def cmd_stop(message: Message) -> None:
 @user_router.callback_query(Bc.filter(F.a == "unsub"))
 async def cb_unsub(callback: CallbackQuery) -> None:
     await svc.set_opt_out(callback.from_user.id, True)
-    await callback.answer(T.UNSUB_ALERT)
+    await callback.answer(T.UNSUB_ALERT, show_alert=True)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:  # noqa: BLE001 - message too old or already without buttons
@@ -419,7 +419,7 @@ async def cb_cancel(callback: CallbackQuery, callback_data: BcAdm) -> None:
 @admin_router.callback_query(BcAdm.filter(F.a == "del"))
 async def cb_delete(callback: CallbackQuery, callback_data: BcAdm) -> None:
     ok = await svc.delete_draft(callback_data.id)
-    await callback.answer(T.BC_DELETED if ok else T.BC_ALREADY_RUNNING, show_alert=not ok)
+    await callback.answer(T.BC_DELETED if ok else T.BC_ALREADY_RUNNING, show_alert=True)
     await render(callback, *V.listing(await svc.list_broadcasts(20)), answer_callback=False)
 
 

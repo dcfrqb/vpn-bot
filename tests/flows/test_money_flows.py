@@ -189,7 +189,9 @@ async def test_refund_request_flow_and_admin_decision(money_flow, monkeypatch):
     assert RefundReq(pid=rec.id).pack() in [b.callback_data for row in paid.reply_markup.inline_keyboard
                                             for b in row]
     await f.press(RefundReq(pid=rec.id).pack())
-    assert any("Запрос на возврат принят" in (c.text or "") for c in f.session.calls_of("SendMessage"))
+    assert any("Запрос на возврат принят" in (c.params.get("text") or "") and c.params.get("show_alert")
+               for c in f.answers())
+    assert not f.session.calls_of("SendMessage")
     admin_alert = [s for s in f.notifier.to_admins() if "Запрос на возврат" in s.text][0]
     rid = next(iter(f.store.requests))
     assert AdmRefund(a="ok", rid=rid).pack() in [b.callback_data for row in admin_alert.reply_markup.inline_keyboard
@@ -251,7 +253,10 @@ async def test_autopay_stop_button(money_flow):
     f.store.add_sub(f.user.id, autorenew=True)
     await f.press(AutoPay(a="stop").pack())
     assert (await f.store.main_subscription(f.user.id)).autorenew is False
-    assert "Автопродление выключено" in f.session.calls_of("SendMessage")[-1].text
+    assert any("Автопродление выключено" in (c.params.get("text") or "") and c.params.get("show_alert")
+               for c in f.answers())
+    assert not f.session.calls_of("SendMessage")
+    assert "Профиль" in f.session.calls_of("EditMessageText")[-1].text
 
 
 async def test_gifts_hidden_and_refused_when_flag_off(money_flow):

@@ -16,7 +16,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
 from app.bot.callbacks import AutoPay, Gift, Nav, PayCheck, PayStars, Period, Plan
-from app.bot.views import render
+from app.bot.views import render, show_result
 from app.bot.views.money import (
     PeriodOption,
     PlanOption,
@@ -76,7 +76,7 @@ async def _show_periods(cb: CallbackQuery, container: Any, plan: str, *, gift: b
                for mm, a, s in await m.checkout.period_options(cb.from_user.id, plan, gift=gift)]
     if not options:
         text, markup = message_view(T.PLAN_UNAVAILABLE_SCREEN)
-        await render(cb, text, markup)
+        await show_result(cb, text, markup)
         return
     text, markup = periods_view(plan, get_plan_name(plan), get_plan_features(plan), options, gift=gift)
     await render(cb, text, markup)
@@ -165,12 +165,12 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         quote = await m.checkout.quote(tg, plan, months, gift=gift)
     if quote is None:
         text, markup = message_view(T.PLAN_UNAVAILABLE_SCREEN)
-        await render(cb, text, markup)
+        await show_result(cb, text, markup)
         return
     res = await m.checkout.start_checkout(tg, quote, autorenew=autorenew, kind=kind, user=_user(cb))
     if not res.ok:
         if res.error == "busy":
-            await cb.answer(T.PAYMENT_BUSY)
+            await cb.answer(T.PAYMENT_BUSY, show_alert=True)
             return
         if res.error == "obhod_inactive":
             from app.bot.views import kit
@@ -184,7 +184,8 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         else:
             text, markup = message_view(_START_ERROR_SCREENS.get(res.error or "", T.PAYMENT_CREATE_FAILED_SCREEN),
                                         support=support_url(container.settings))
-        await render(cb, text, markup)
+        if await show_result(cb, text, markup):
+            await render(cb, text, markup, answer_callback=False)
         return
     await _save_ctx(tg, quote.plan_code, quote.months, kind)
     autopay_line = None if gift or package or not _flag(container, "AUTOPAY_ENABLED") else bool(res.intent.autorenew)
@@ -220,9 +221,10 @@ async def on_autopay_toggle(cb: CallbackQuery, callback_data: AutoPay, container
 @router.callback_query(AutoPay.filter(F.a == "stop"))
 async def on_autopay_stop(cb: CallbackQuery, container: Any) -> None:
     was_on, until = await money(container).autopay.stop(cb.from_user.id)
-    text = T.autopay_stopped(until) if was_on else T.AUTOPAY_NOTHING_TO_STOP  # result, new message
-    await cb.answer()
-    await cb.message.answer(text)
+    text = T.autopay_stopped(until) if was_on else T.AUTOPAY_NOTHING_TO_STOP
+    if await show_result(cb, text):
+        from app.bot.routers.menu import show_main_screen
+        await show_main_screen(cb, status_service=container.status, promo=container.promo, answer_callback=False)
 
 
 @router.callback_query(AutoPay.filter(F.a == "info"))
@@ -272,7 +274,9 @@ async def on_pay_check(cb: CallbackQuery, callback_data: PayCheck, container: An
     else:
         view = message_view(T.CHECK_ERROR_SCREEN, check_pid=rec.id if rec else None)
     logger.info(f"pay check: tg_id={tg} payment={rec.id if rec else key} outcome={o.value}")
-    await render(cb, *view)
+    shown = await show_result(cb, *view)
+    if shown:
+        await render(cb, *view, answer_callback=False)
 
 
 # --- Telegram Stars ------------------------------------------------------------------------
@@ -292,7 +296,7 @@ async def on_pay_stars(cb: CallbackQuery, callback_data: PayStars, container: An
     if not res.ok:
         await cb.answer(_START_ERRORS.get(res.error or "", T.PAYMENT_CREATE_FAILED), show_alert=True)
         return
-    await cb.answer(T.STARS_INVOICE_SENT)
+    await cb.answer(T.STARS_INVOICE_SENT, show_alert=True)
 
 
 @router.pre_checkout_query()

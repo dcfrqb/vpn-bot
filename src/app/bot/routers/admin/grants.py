@@ -59,7 +59,7 @@ async def cb_request(callback: CallbackQuery, callback_data: Adm, container: Any
         await container.notifier.notify_user(
             uid, TP.ACCESS_REJECTED, html=True,
             reply_markup=kb([[url_btn(TP.BTN_WRITE_ADMIN, f"https://t.me/{support.lstrip('@')}")]]))
-        await callback.answer("Запрос отклонен")
+        await callback.answer("Запрос отклонен", show_alert=True)
         await _mark_processed(callback, "❌ Запрос отклонен.")
         return
     key = callback_data.a.removeprefix("grant_")
@@ -79,7 +79,7 @@ async def cb_request(callback: CallbackQuery, callback_data: Adm, container: Any
     await container.notifier.notify_user(
         uid, TP.access_granted(h(res.label)), html=True,
         reply_markup=kb([[(TP.BTN_CONNECT, Nav(s="connect"))]]))
-    await callback.answer(f"✅ {res.label}: выдано")
+    await callback.answer(f"✅ {res.label}: выдано", show_alert=True)
     await _mark_processed(callback, f"⭐ {h(res.label)}: выдано администратором.")
 
 

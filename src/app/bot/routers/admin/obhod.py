@@ -59,15 +59,15 @@ async def cb_obhod(callback: CallbackQuery, callback_data: Adm) -> None:
             return
         ok = await obhod.apply_package(tg, extra, admin_id=callback.from_user.id)
         await callback.answer(T.DONE if ok else "Не применился: нет активного обхода или идет другая операция",
-                              show_alert=not ok)
+                              show_alert=True)
     elif a == "base":
         ok = await obhod.reset_base(tg)
-        await callback.answer(T.DONE if ok else "Не получилось", show_alert=not ok)
+        await callback.answer(T.DONE if ok else "Не получилось", show_alert=True)
     elif a == "off":
         await render(callback, *V.confirm(f"Выключить обход у <code>{tg}</code>?",
                                           Adm(s="obhod", a="offok", arg=str(tg)), Adm(s="obhod", a="show", arg=str(tg))))
         return
     elif a == "offok":
         ok = await obhod.deactivate(tg)
-        await callback.answer(T.DONE if ok else "Обход и так не активен", show_alert=not ok)
+        await callback.answer(T.DONE if ok else "Обход и так не активен", show_alert=True)
     await _card(callback, tg, answered=a in ("pkg", "base", "offok"))

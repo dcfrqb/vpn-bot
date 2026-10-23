@@ -12,6 +12,7 @@ Buttons carry packed callbacks from app.bot.callbacks, never raw strings.
 from __future__ import annotations
 
 from typing import Any, Iterable, Optional, Sequence, Union
+from html.parser import HTMLParser
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
@@ -46,6 +47,48 @@ def kb(rows: Iterable[Sequence[ButtonSpec]]) -> InlineKeyboardMarkup:
 
 
 _NOT_MODIFIED = "message is not modified"
+
+
+class _PlainResult(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("br", "blockquote"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag == "blockquote":
+            self.parts.append("\n")
+
+
+def result_text(text: str) -> str:
+    """Telegram alerts accept plain text, at most 200 characters."""
+    parser = _PlainResult()
+    parser.feed(text)
+    return "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+
+
+async def show_result(event, text: str, markup=None) -> bool:
+    """Short button results are alerts; longer results/commands use the screen.
+
+    Return True for an alert. Expired callbacks fall back to editing the same
+    message, without repeating the action that produced the result.
+    """
+    plain = result_text(text)
+    if isinstance(event, CallbackQuery) and len(plain) <= 200:
+        try:
+            await event.answer(plain, show_alert=True)
+            return True
+        except TelegramBadRequest:
+            await render(event, text, markup, answer_callback=False)
+            return False
+    await render(event, text, markup)
+    return False
 
 
 async def render(

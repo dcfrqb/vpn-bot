@@ -13,6 +13,7 @@ from aiogram import Router
 from aiogram.types import CallbackQuery
 
 from app.bot.callbacks import AdmRefund, AdmReview
+from app.bot.views import show_result
 from app.domain.texts import checkout as T
 from app.domain.texts import h
 from app.logger import logger
@@ -52,11 +53,12 @@ async def on_review(cb: CallbackQuery, callback_data: AdmReview, container: Any)
     if not _is_admin(container, cb.from_user.id):
         await cb.answer(T.NOT_ADMIN, show_alert=True)
         return
-    await cb.answer("⏳")
     code = await money(container).fulfillment.decide_review(callback_data.pid, cb.from_user.id,
                                                              approve=callback_data.a == "ok")
     logger.info(f"review decision: payment={callback_data.pid} admin={cb.from_user.id} result={code}")
-    await _close(cb, T.REVIEW_TEXT.get(code, code))
+    text = T.REVIEW_TEXT.get(code, code)
+    await show_result(cb, text)
+    await _close(cb, text)
 
 
 @router.callback_query(AdmRefund.filter())
@@ -64,7 +66,6 @@ async def on_refund_decision(cb: CallbackQuery, callback_data: AdmRefund, contai
     if not _is_admin(container, cb.from_user.id):
         await cb.answer(T.NOT_ADMIN, show_alert=True)
         return
-    await cb.answer("⏳")
     code = await money(container).refunds.decide(callback_data.rid, cb.from_user.id,
                                                  approve=callback_data.a == "ok")
     logger.info(f"refund decision: request={callback_data.rid} admin={cb.from_user.id} result={code}")
@@ -83,10 +84,12 @@ async def on_refund_decision(cb: CallbackQuery, callback_data: AdmRefund, contai
     elif code == "not_found":
         text = T.ADMIN_REFUND_NOT_FOUND
     elif code.startswith("failed:"):
-        await cb.message.answer(T.admin_refund_failed(code.partition(":")[2]))
+        await show_result(cb, T.admin_refund_failed(code.partition(":")[2]),
+                          getattr(cb.message, "reply_markup", None))
         return  # keep the buttons: the admin may press «Вернуть» again
     elif code.startswith("already:"):
         text = T.admin_refund_already(code.partition(":")[2])
     else:
         text = code
+    await show_result(cb, text)
     await _close(cb, text)

@@ -19,7 +19,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import Gift, Nav, PromoAct
 from app.bot.middlewares.admin_guard import is_admin_id
-from app.bot.views import kit, render
+from app.bot.views import kit, render, show_result
 from app.bot.views import admin as admin_views
 from app.domain.models import AdminTopic, PromoReward
 from app.domain.plans import get_plan_name
@@ -56,7 +56,11 @@ def _result(screen) -> kit.View:
 async def redeem_and_reply(event: Any, code: str, container: Any, *, source: str) -> PromoReward:
     reward = await get_promo(container).redeem(event.from_user.id, code, source=source)
     text, markup = result_view(code, reward, container)
-    await render(event, text, markup)
+    alerted = await show_result(event, text, markup)
+    if alerted and reward.applied:
+        from app.bot.routers.menu import show_main_screen
+        await show_main_screen(event, status_service=container.status, promo=get_promo(container),
+                               answer_callback=False)
     return reward
 
 
@@ -196,7 +200,7 @@ async def cmd_admin_as_promo(message: Message, container: Any) -> None:
 async def cb_friend_request_legacy(callback: CallbackQuery, callback_data: Nav) -> None:
     """2.x buttons «friend_request_yes/no» from old /friend confirmations."""
     if callback_data.p == "no":
-        await callback.answer()
+        await show_result(callback, T.FRIEND_REQUEST_CANCELLED)
         try:
             await callback.message.edit_text(T.FRIEND_REQUEST_CANCELLED, reply_markup=None)
         except Exception:  # noqa: BLE001 - message too old to edit

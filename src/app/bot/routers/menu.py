@@ -44,7 +44,7 @@ async def show_main_screen(event, *, force: bool = False, answer_callback: bool 
     await render(event, text, markup, answer_callback=answer_callback)
     if notice and isinstance(event, CallbackQuery):
         try:
-            await event.answer(notice)
+            await event.answer(notice, show_alert=True)
         except Exception:  # noqa: BLE001
             pass
 

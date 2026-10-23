@@ -242,7 +242,7 @@ async def test_callback_site_unreachable_fallback_alert_message_unchanged():
          patch.object(site_login, "_get_session", return_value=session):
         await site_login.cb_site_login(callback)
 
-    callback.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_CALLBACK_TEXT, show_alert=False)
+    callback.answer.assert_awaited_once_with(site_login.SITE_UNAVAILABLE_CALLBACK_TEXT, show_alert=True)
     callback.message.edit_text.assert_not_awaited()
 
 
@@ -255,7 +255,7 @@ async def test_callback_empty_token_feature_off_site_never_called():
          patch.object(site_login, "_get_session", return_value=session):
         await site_login.cb_site_login(callback)
 
-    callback.answer.assert_awaited_once_with(site_login.FEATURE_OFF_TEXT, show_alert=False)
+    callback.answer.assert_awaited_once_with(site_login.FEATURE_OFF_TEXT, show_alert=True)
     session.post.assert_not_called()
     callback.message.edit_text.assert_not_awaited()
 
