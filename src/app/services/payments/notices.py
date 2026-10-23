@@ -77,7 +77,13 @@ class FulfillmentNotices:
         store, notifier = self.d.store, self.d.notifier
         if not rec.meta.get(M_NOTIFIED) and await store.patch_meta(rec.id, {}, claim=M_NOTIFIED):
             text, markup = await self._user_message(rec, state)
-            sent = await notifier.notify_user(rec.telegram_id, text, html=True, reply_markup=markup) if text else True
+            extra = {}
+            message_id = rec.meta.get("checkout_message_id")
+            if isinstance(message_id, int) and not isinstance(message_id, bool) and message_id > 0:
+                extra["edit_message_id"] = message_id
+            sent = await notifier.notify_user(
+                rec.telegram_id, text, html=True, reply_markup=markup, **extra,
+            ) if text else True
             if not sent:
                 await store.patch_meta(rec.id, {}, drop=(M_NOTIFIED,))
         if rec.kind == "obhod_package" and rec.meta.get("obhod_package_applied") is False:

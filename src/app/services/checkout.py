@@ -414,13 +414,22 @@ class CheckoutServiceImpl:
                              amount_rub=int(rec.amount), telegram_id=rec.telegram_id, payment_id=rec.id,
                              external_id=rec.external_id, status=status)
 
-    async def check_result(self, telegram_id: int, payment_id: int = 0, *, external_id: str = ""):
+    async def remember_message(self, telegram_id: int, payment_id: int, message_id: int) -> None:
+        """Persist the private checkout card for webhook/check/recovery delivery."""
+        rec = await self.d.store.get(payment_id)
+        if rec and rec.telegram_id == int(telegram_id) and not rec.meta.get("notified"):
+            await self.d.store.patch_meta(rec.id, {"checkout_message_id": message_id})
+
+    async def check_result(self, telegram_id: int, payment_id: int = 0, *, external_id: str = "",
+                           message_id: Optional[int] = None):
         from app.services.fulfillment import FulfilResult, Outcome
 
         store = self.d.store
         rec = await (store.get(int(payment_id)) if payment_id else store.get_by_external(external_id))
         if rec is None or rec.telegram_id != int(telegram_id):
             return FulfilResult(Outcome.NOT_FOUND)
+        if message_id is not None:
+            await self.remember_message(telegram_id, rec.id, message_id)
         return await self.fulfillment.process(rec.id, source="check")
 
     # ------------------------------------------------------------------ Stars pre-checkout

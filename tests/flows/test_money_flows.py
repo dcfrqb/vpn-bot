@@ -116,9 +116,10 @@ async def test_check_payment_pending_then_paid(money_flow):
     f.container.payments.succeed(rec.external_id)
     f.redis.store.clear()  # rate limit window
     await f.press(PayCheck(pid=rec.id).pack())
-    assert "Оплата прошла, подписка активна" in _last_screen(f).text
+    assert "Оплата прошла, подписка активна" in f.answers()[-1].text
     paid_msgs = [s for s in f.notifier.sent if s.kind == "user"]
     assert len(paid_msgs) == 1 and paid_msgs[0].reply_markup is not None
+    assert paid_msgs[0].edit_message_id is not None
     assert len(f.container.provisioning.grants) == 1
 
 
@@ -128,8 +129,39 @@ async def test_legacy_check_payment_button_goes_to_new_check(money_flow):
     rec = next(iter(f.store.payments.values()))
     f.container.payments.succeed(rec.external_id)
     await f.press(f"check_payment:{rec.external_id}")
-    assert "Оплата прошла" in _last_screen(f).text
+    assert "Оплата прошла" in f.answers()[-1].text
     assert f.redis.store.get("legacy_hits:check_payment")
+
+
+@pytest.mark.parametrize("source", ["webhook", "recovery", "check"])
+async def test_payment_replaces_checkout_card_once(money_flow, monkeypatch, source):
+    from app.services.money import build_money
+    from app.services.notifications import TelegramNotifier
+    from tests.fakes.bot import bot_message
+
+    f = money_flow
+    monkeypatch.setattr("app.config.settings.REFUND_24H_ENABLED", True)
+    f.money.deps.notifier = TelegramNotifier(f.bot, f.container.settings)
+    card = bot_message(f.bot, f.user.id)
+    await f.press(Period(c="lite", m=1).pack(), message=card)
+    rec = next(iter(f.store.payments.values()))
+    assert rec.meta["checkout_message_id"] == card.message_id
+    f.container.payments.succeed(rec.external_id)
+    f.session.calls.clear()
+    if source != "check":
+        # A fresh service instance reads the persisted card after a restart.
+        await build_money(f.money.deps).fulfillment.process(rec.id, source=source)
+    await f.press(PayCheck(pid=rec.id).pack(), message=card)
+    f.redis.store.clear()
+    await f.press(PayCheck(pid=rec.id).pack(), message=card)
+    edits = f.session.calls_of("EditMessageText")
+    assert len(edits) == 1 and edits[0].params["message_id"] == card.message_id
+    assert "Оплата прошла, спасибо" in edits[0].text
+    buttons = _buttons(edits[0])
+    assert not [b for b in buttons if b["url"] or (b["data"] or "").startswith("pc:")]
+    assert RefundReq(pid=rec.id).pack() in [b["data"] for b in buttons]
+    assert not [c for c in f.session.calls_of("SendMessage") if c.chat_id == f.user.id]
+    assert len(f.container.provisioning.grants) == 1
 
 
 async def test_check_of_foreign_payment_is_not_found(money_flow):

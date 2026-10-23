@@ -15,6 +15,7 @@ class Sent:
     html: bool
     dedup_key: Optional[str]
     reply_markup: Any = None
+    edit_message_id: Optional[int] = None
 
 
 class RecordingNotifier:
@@ -38,10 +39,11 @@ class RecordingNotifier:
         return 1
 
     async def notify_user(self, telegram_id: int, text: str, *, html: bool = False, reply_markup: Any = None,
-                          dedup_key: Optional[str] = None, dedup_ttl: int = 3600) -> bool:
+                          dedup_key: Optional[str] = None, dedup_ttl: int = 3600,
+                          edit_message_id: Optional[int] = None) -> bool:
         if not self._dedup_ok(dedup_key):
             return False
-        self.sent.append(Sent("user", int(telegram_id), text, html, dedup_key, reply_markup))
+        self.sent.append(Sent("user", int(telegram_id), text, html, dedup_key, reply_markup, edit_message_id))
         return True
 
     def to_admins(self, topic: Optional[AdminTopic] = None) -> list[Sent]:

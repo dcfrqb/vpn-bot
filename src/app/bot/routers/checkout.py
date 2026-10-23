@@ -197,7 +197,10 @@ async def _checkout(cb: CallbackQuery, container: Any, plan: str, months: int, *
         offer_url=getattr(container.settings, "OFFER_URL", None),
         privacy_url=getattr(container.settings, "PRIVACY_URL", None),
     )
-    await render(cb, text, markup)
+    shown = await render(cb, text, markup)
+    msg = shown if isinstance(shown, Message) else cb.message
+    if isinstance(msg, Message) and msg.chat.id == tg:
+        await m.checkout.remember_message(tg, res.intent.payment_id, msg.message_id)
 
 
 @router.callback_query(Period.filter())
@@ -251,12 +254,18 @@ async def on_pay_check(cb: CallbackQuery, callback_data: PayCheck, container: An
         await cb.answer(T.check_rate_limited(wait), show_alert=True)
         return
     m = money(container)
-    result = await m.checkout.check_result(tg, callback_data.pid, external_id=callback_data.ext)
+    message_id = cb.message.message_id if isinstance(cb.message, Message) and cb.message.chat.id == tg else None
+    result = await m.checkout.check_result(tg, callback_data.pid, external_id=callback_data.ext,
+                                           message_id=message_id)
     rec = result.payment
     support = support_url(container.settings)
     o = result.outcome
     if o in (Outcome.FULFILLED, Outcome.ALREADY):
         text = T.CHECK_GIFT_PAID_SCREEN if rec is not None and rec.kind == "gift" else T.CHECK_PAID_SCREEN
+        if rec is not None and message_id is not None and rec.meta.get("checkout_message_id") == message_id:
+            # Fulfillment updates this card with the receipt and its refund/connect buttons.
+            await show_result(cb, *message_view(text, back_to_plans=False, connect=rec.kind != "gift"))
+            return
         view = message_view(text, back_to_plans=False, connect=rec is None or rec.kind != "gift")
     elif o is Outcome.PENDING:
         view = message_view(T.CHECK_PENDING_SCREEN, pay_url=rec.confirmation_url if rec else None,

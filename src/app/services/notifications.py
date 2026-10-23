@@ -17,7 +17,8 @@ Safety:
   - Exception text of a failed send is logged by type only; message text is
     never logged.
 
-No aiogram imports: ``bot`` is anything with an async ``send_message``.
+No aiogram imports: ``bot`` provides async ``send_message`` and, for card
+replacement, ``edit_message_text``.
 Old notify helpers (refunds._notify_admins, the 2.x reconciler loop) keep
 working unchanged; stream E moves callers here.
 """
@@ -134,13 +135,36 @@ class TelegramNotifier:
         reply_markup: Any = None,
         dedup_key: Optional[str] = None,
         dedup_ttl: int = 3600,
+        edit_message_id: Optional[int] = None,
     ) -> bool:
         if not await self._dedup_ok(dedup_key, dedup_ttl):
             return False
         extra: dict[str, Any] = {}
         if reply_markup is not None:
             extra["reply_markup"] = reply_markup
-        ok = await self._send(int(telegram_id), text if html else h(text), **extra)
+        body = text if html else h(text)
+        if edit_message_id is None:
+            ok = await self._send(int(telegram_id), body, **extra)
+        else:
+            try:
+                await self._bot.edit_message_text(
+                    chat_id=int(telegram_id), message_id=edit_message_id, text=body,
+                    parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True,
+                )
+                ok = True
+            except Exception as e:  # noqa: BLE001 - retry delivery without repeating payment
+                error = str(getattr(e, "message", "")).lower()
+                bad_request = type(e).__name__ == "TelegramBadRequest"
+                if bad_request and "message is not modified" in error:
+                    ok = True
+                elif bad_request and any(reason in error for reason in (
+                    "message to edit not found", "message can't be edited", "message_id_invalid",
+                )):
+                    ok = await self._send(int(telegram_id), body, **extra)
+                else:
+                    # Timeout may mean the edit succeeded: never send a duplicate on uncertainty.
+                    logger.warning(f"notifier: edit for {telegram_id} failed ({type(e).__name__})")
+                    ok = False
         if not ok:
             await self._dedup_release(dedup_key)
         return ok

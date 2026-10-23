@@ -119,3 +119,27 @@ async def test_notify_user_escapes_and_never_raises(redis):
     assert s.calls_of("SendMessage")[0].text == "&lt;script&gt;"
     s.fail["SendMessage"] = RuntimeError("forbidden")
     assert await n.notify_user(5, "x") is False
+
+
+@pytest.mark.parametrize('failure,fallback,ok', [
+    (None, False, True),
+    ('message is not modified', False, True),
+    ('message to edit not found', True, True),
+    ("message can't be edited", True, True),
+    ('network', False, False),
+])
+async def test_replace_payment_card_without_duplicate(redis, failure, fallback, ok):
+    from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+    from aiogram.methods import EditMessageText
+
+    bot, session = make_bot()
+    if failure:
+        method = EditMessageText(chat_id=11, message_id=77, text='receipt')
+        cls = TelegramNetworkError if failure == 'network' else TelegramBadRequest
+        session.fail['EditMessageText'] = cls(method=method, message=failure)
+    n = TelegramNotifier(bot, cfg())
+    assert await n.notify_user(11, 'a <b> & c', edit_message_id=77) is ok
+    edits = session.calls_of('EditMessageText')
+    assert len(edits) == 1 and edits[0].params['message_id'] == 77
+    assert edits[0].text == 'a &lt;b&gt; &amp; c'
+    assert bool(session.calls_of('SendMessage')) is fallback

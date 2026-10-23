@@ -281,7 +281,9 @@ class Notifier(Protocol):
         reply_markup: Any = None,
         dedup_key: Optional[str] = None,
         dedup_ttl: int = 3600,
-    ) -> bool: ...
+        edit_message_id: Optional[int] = None,
+    ) -> bool:
+        """With edit_message_id, replace the private card; send only if it cannot be edited."""
 
 
 @runtime_checkable
