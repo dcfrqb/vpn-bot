@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CRS VPN Webhook API",
     description="API для обработки webhook'ов от ЮKassa",
-    version="2.0.0",
+    version="3.0.0",
     lifespan=lifespan,
     # Хотфикс 2.1: /docs, /redoc, /openapi.json были открыты в интернет.
     docs_url=None,

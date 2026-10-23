@@ -19,8 +19,8 @@ async def root():
     return {
         "status": "ok",
         "service": "CRS VPN Webhook API",
-        "version": "2.0.0",
-        "mode": "legacy"
+        "version": "3.0.0",
+        "mode": "r3"
     }
 
 
@@ -85,7 +85,7 @@ async def health_check():
     body = {
         "status": "healthy" if overall_ok else "degraded",
         "components": status_parts,
-        "mode": "legacy",
+        "mode": "r3",
     }
     if not overall_ok:
         return JSONResponse(status_code=503, content=body)
