@@ -264,13 +264,13 @@ class Settings(BaseSettings):
             return default
         return parsed
 
-    @field_validator("AUTOPAY_ENABLED", "TASK_AUTOPAY_ENABLED", mode="after")
+    @field_validator("AUTOPAY_ENABLED", "TASK_AUTOPAY_ENABLED", "STARS_ENABLED", mode="after")
     @classmethod
-    def _autopay_release_hold(cls, v):
-        """Автопродление временно отключено в 3.0 до запуска сайта.
+    def _disabled_release_features(cls, v):
+        """Автопродление и новые платежи Stars отключены в 3.0.
 
-        Возврат функции требует отдельного изменения после согласования
-        ЮKassa и приемки, старое значение true в .env ее не включает.
+        Код и обработка ранее оплаченных счетов сохранены. Возврат функций
+        требует отдельного изменения, старое true в .env их не включает.
         """
         return False
 

@@ -37,12 +37,15 @@ def test_env_parsing(monkeypatch):
     assert s.ADMIN_CHAT_ID is None and s.GRACE_DAYS == 3 and s.ADMIN_TOPIC_ERRORS == 17
 
 
-def test_autopay_release_hold_overrides_old_environment(monkeypatch):
+def test_disabled_payment_features_override_old_environment(monkeypatch):
     monkeypatch.setenv("AUTOPAY_ENABLED", "true")
     monkeypatch.setenv("TASK_AUTOPAY_ENABLED", "true")
+    monkeypatch.setenv("STARS_ENABLED", "true")
+    monkeypatch.setenv("STARS_RATE", "1")
     s = Settings(_env_file=None)
     assert s.AUTOPAY_ENABLED is False
     assert s.TASK_AUTOPAY_ENABLED is False
+    assert s.STARS_ENABLED is False
 
 
 def test_env_example_lists_every_3_0_setting():

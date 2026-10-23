@@ -144,6 +144,17 @@ async def test_stars_disabled_answers_alert(money_flow):
     f = money_flow
     await f.press(PayStars(c="lite", m=1).pack())
     assert f.answers()[-1].params.get("show_alert")
+    assert not f.store.payments
+    assert not f.session.calls_of("SendInvoice")
+
+
+async def test_stars_disabled_rejects_existing_invoice_precheckout(money_flow):
+    f = money_flow
+    await f.dp.feed_update(f.bot, _pre_checkout(f.user, "stars:77", 100))
+    answer = f.session.calls_of("AnswerPreCheckoutQuery")[-1]
+    assert answer.params["ok"] is False
+    assert "недоступна" in answer.params["error_message"]
+    assert not f.container.provisioning.grants
 
 
 def _pre_checkout(u, payload, amount):
@@ -182,6 +193,8 @@ async def test_stars_invoice_precheckout_and_successful_payment(money_flow, monk
     answers = f.session.calls_of("AnswerPreCheckoutQuery")
     assert [a.params["ok"] for a in answers] == [False, True]
 
+    # Уже принятый Telegram платеж исполняется и после отключения новых счетов.
+    monkeypatch.setattr("app.config.settings.STARS_ENABLED", False)
     await f.dp.feed_update(f.bot, _successful(f.user, invoice["payload"], stars, "charge-77"))
     await f.dp.feed_update(f.bot, _successful(f.user, invoice["payload"], stars, "charge-77"))
     assert len(f.container.provisioning.grants) == 1
