@@ -59,3 +59,4 @@ Thumbs.db
 docs/*
 # 3.0: архитектура для потоков лежит в репозитории
 !docs/ARCHITECTURE_3.0.md
+!docs/RELEASE_3.0.md

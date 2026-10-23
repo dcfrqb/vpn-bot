@@ -133,7 +133,7 @@ def outcome_screen(code: str, reward: PromoReward, *, support: Optional[str] = N
                              "Этот промокод только для тех, у кого подписки сейчас нет.")
         return ui.result("warn", "Промокод не подходит", f"Промокод {shown} вам не подходит.")
     if o is PromoOutcome.NOT_FOUND:
-        return ui.result("warn", "Промокод не найден", f"Промокод {shown} не найден.",
+        return ui.result("warn", f"Промокод {h(code)} не найден",
                          hint="Проверьте, нет ли опечатки.")
     if o is PromoOutcome.EXPIRED:
         if code_l.startswith("g_"):

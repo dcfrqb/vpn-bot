@@ -70,7 +70,7 @@ def result_text(text: str) -> str:
     """Telegram alerts accept plain text, at most 200 characters."""
     parser = _PlainResult()
     parser.feed(text)
-    return "\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
+    return "\n\n".join(line.strip() for line in "".join(parser.parts).splitlines() if line.strip())
 
 
 async def show_result(event, text: str, markup=None) -> bool:

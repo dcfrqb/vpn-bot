@@ -462,11 +462,11 @@ def admin_refund_already(status: str) -> str:
 AUTOPAY_INFO_SCREEN = ui.result(
     "info", "Автопродление",
     "Карта сохраняется в ЮKassa при оплате. За день до конца срока спишем цену того же тарифа и срока.",
-    "За 3 дня пришлем напоминание с кнопкой отключения.",
+    "\nЗа 3 дня пришлем напоминание с кнопкой отключения.",
     hint="Если списание не пройдет два раза, автопродление выключится само.",
 )
 AUTOPAY_INFO = AUTOPAY_INFO_SCREEN.html()
-AUTOPAY_UNAVAILABLE = ui.toast("Автопродление сейчас недоступно.")
+AUTOPAY_UNAVAILABLE = ui.toast("Автопродление временно отключено.\n\nПродлевайте подписку вручную в разделе «Подписка».")
 
 
 def autopay_notice_screen(name: str, months: int, amount: Money, charge_on: Optional[datetime] = None) -> ui.Screen:

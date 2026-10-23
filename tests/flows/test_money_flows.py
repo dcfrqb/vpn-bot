@@ -41,6 +41,17 @@ def _buttons(call):
     return [b for row in (call.keyboard or []) for b in row]
 
 
+@pytest.mark.parametrize("action", ["on", "off", "info"])
+async def test_disabled_autopay_old_buttons_do_not_create_payment(money_flow, action):
+    f = money_flow
+    await f.press(AutoPay(a=action).pack())
+    assert "Автопродление временно отключено" in f.answers()[-1].text
+    assert f.answers()[-1].params.get("show_alert") is True
+    assert not f.store.payments
+    assert not f.session.calls_of("SendMessage")
+    assert not f.session.calls_of("EditMessageText")
+
+
 async def test_buy_subscription_alias_opens_plans_and_periods(money_flow):
     f = money_flow
     await f.press("buy_subscription")

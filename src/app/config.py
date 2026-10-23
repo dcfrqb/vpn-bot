@@ -264,6 +264,16 @@ class Settings(BaseSettings):
             return default
         return parsed
 
+    @field_validator("AUTOPAY_ENABLED", "TASK_AUTOPAY_ENABLED", mode="after")
+    @classmethod
+    def _autopay_release_hold(cls, v):
+        """Автопродление временно отключено в 3.0 до запуска сайта.
+
+        Возврат функции требует отдельного изменения после согласования
+        ЮKassa и приемки, старое значение true в .env ее не включает.
+        """
+        return False
+
     @field_validator(*_EMPTY_IS_UNSET_FIELDS, mode="before")
     @classmethod
     def _empty_is_unset(cls, v, info):

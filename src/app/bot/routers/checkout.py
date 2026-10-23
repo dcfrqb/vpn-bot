@@ -228,7 +228,10 @@ async def on_autopay_stop(cb: CallbackQuery, container: Any) -> None:
 
 
 @router.callback_query(AutoPay.filter(F.a == "info"))
-async def on_autopay_info(cb: CallbackQuery) -> None:
+async def on_autopay_info(cb: CallbackQuery, container: Any) -> None:
+    if not _flag(container, "AUTOPAY_ENABLED"):
+        await cb.answer(T.AUTOPAY_UNAVAILABLE, show_alert=True)
+        return
     text, markup = message_view(T.AUTOPAY_INFO_SCREEN)
     await render(cb, text, markup)
 

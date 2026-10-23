@@ -7,7 +7,7 @@ from tests.fakes.bot import callback_update, make_bot, message_update, user
 
 
 def test_result_plain_text_preserves_lines_and_escaped_user_input():
-    assert result_text('<b>Готово</b>\n<blockquote>Код: &lt;promo&gt; &amp; бонус</blockquote>') == 'Готово\nКод: <promo> & бонус'
+    assert result_text('<b>Готово</b>\n<blockquote>Код: &lt;promo&gt; &amp; бонус</blockquote>') == 'Готово\n\nКод: <promo> & бонус'
 
 
 async def test_short_result_is_alert_without_chat_message():
@@ -16,7 +16,7 @@ async def test_short_result_is_alert_without_chat_message():
     assert await show_result(callback, '<b>Готово</b>\nНастройка сохранена.')
     assert [c.method for c in session.calls] == ['AnswerCallbackQuery']
     assert session.calls[0].params['show_alert'] is True
-    assert session.calls[0].text == 'Готово\nНастройка сохранена.'
+    assert session.calls[0].text == 'Готово\n\nНастройка сохранена.'
 
 
 async def test_long_result_edits_screen_without_truncation():
