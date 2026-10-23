@@ -756,7 +756,6 @@ async def test_credit_sweep_alerts_admins_on_failures(monkeypatch):
 # ------------------------------------------------------------------ review money M-1: rollback of one period
 
 async def test_refund_of_one_month_keeps_earlier_paid_months(svc, fake, repo, obhod):
-    until = datetime(2027, 3, 1, tzinfo=timezone.utc)  # 5 paid months + 1 renewal
     base = datetime(2027, 2, 1, tzinfo=timezone.utc)
     fake.add_user(501, "u", telegram_id=7, squads=["pro"], limit=10, expire=iso(base))
     await svc.grant(7, _pay(1, "pro"), trace_id="pay1", months=1)
