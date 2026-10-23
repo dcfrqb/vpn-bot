@@ -82,7 +82,24 @@ async def test_trial_cta_grants_and_opens_connect(flow):
     assert ("start_trial", flow.user.id) in flow.promo.calls
     assert flow.user.id in flow.status.invalidated
     ans = [a.params.get("text") for a in flow.answers()]
-    assert any("Пробный период включен" in (t or "") for t in ans)
+    assert any("Пробный период активирован" in (t or "") for t in ans)
+    alert = next(a for a in flow.answers() if "Пробный период активирован" in (a.params.get("text") or ""))
+    assert alert.params["show_alert"] is True
+    assert "Standard на 5 дней" in alert.params["text"]
+
+
+async def test_trial_success_survives_expired_confirmation(flow):
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import AnswerCallbackQuery
+    from app.domain.texts.connect import TRIAL_STARTED
+
+    flow.promo.available = True
+    flow.session.fail["AnswerCallbackQuery"] = TelegramBadRequest(
+        method=AnswerCallbackQuery(callback_query_id="expired"), message="query is too old")
+    await flow.press(Nav(s="connect", p="trial").pack())
+    assert flow.promo.calls.count(("start_trial", flow.user.id)) == 1
+    assert any(c.text == TRIAL_STARTED for c in flow.session.calls_of("SendMessage"))
+    assert flow.session.calls_of("EditMessageText")
 
 
 async def test_trial_cta_shows_alert_when_already_used(flow):

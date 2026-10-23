@@ -558,7 +558,7 @@ def section_user() -> None:
         ("user.connect.trial_busy", "TRIAL_BUSY", "повторное нажатие кнопки триала, пока он включается"),
     ]:
         add(cid, sec, f"src/app/domain/texts/connect.py:{const}", when, getattr(TCn, const),
-            fmt=FMT_ALERT_SMALL if const == "TRIAL_STARTED" else FMT_ALERT,
+            fmt=FMT_ALERT,
             code=f"src/app/domain/texts/connect.py {const}",
             note="в ответ на /trial (флаг выключен) этот же текст приходит обычным сообщением"
             if const == "TRIAL_UNAVAILABLE" else "")

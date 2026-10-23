@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from app.bot.callbacks import Nav
@@ -106,5 +107,13 @@ async def start_trial(callback: CallbackQuery, callback_data: Nav, **data) -> No
             await status_service.invalidate(user.id)
         except Exception:  # noqa: BLE001
             pass
-    await callback.answer(t.TRIAL_STARTED)
+    try:
+        await callback.answer(t.TRIAL_STARTED, show_alert=True)
+    except TelegramBadRequest:
+        # The grant already succeeded. An expired callback must not turn it
+        # into an apparent activation failure or cause a second grant.
+        chat = getattr(callback.message, "chat", None)
+        await callback.bot.send_message(
+            chat.id if chat is not None else user.id, t.TRIAL_STARTED, parse_mode=None,
+        )
     await show_connect_screen(callback, answer_callback=False, **data)

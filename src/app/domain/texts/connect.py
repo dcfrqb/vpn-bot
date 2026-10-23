@@ -38,7 +38,7 @@ NO_SUBSCRIPTION_NO_TRIAL = NO_SUBSCRIPTION_NO_TRIAL_SCREEN.html()
 ERROR = ERROR_SCREEN.html()
 
 # Toasts (callback alerts).
-TRIAL_STARTED = ui.toast("Пробный период включен на 5 дней. Открываю ссылку подключения.")
+TRIAL_STARTED = "🎁 Пробный период активирован\nТариф: Standard на 5 дней."
 TRIAL_ALREADY_USED = ui.toast("Пробный период уже был использован на этом аккаунте.")
 TRIAL_NOT_ELIGIBLE = ui.toast("Пробный период сейчас недоступен для этого аккаунта.")
 TRIAL_UNAVAILABLE = ui.toast("Пробный период временно недоступен, попробуйте чуть позже.")
