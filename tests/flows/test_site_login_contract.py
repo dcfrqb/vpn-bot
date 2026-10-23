@@ -66,7 +66,7 @@ async def test_site_login_contract(flow, site):
         (200, {"text": "Войти на сайт как @tester?", "buttons": [
             {"text": "Да, это я", "data": "sitelogin:ok:" + "x" * 20},
             {"text": "Нет", "data": "sitelogin:no:" + "x" * 20}]}),
-        (200, {"text": "Готово, вернись на сайт."}),
+        (200, {"text": "Готово, вернитесь на сайт."}),
     ])
     await flow.send(f"/start {payload}")
     await flow.press("sitelogin:ok:" + "x" * 20)

@@ -31,13 +31,13 @@ def reminder_screen(window: str, expires_at=None) -> ui.Screen:
     if window == "3d":
         return ui.push("warn", "Подписка закончится через 3 дня",
                        ui.field("Дата окончания", fmt_date_msk(expires_at)),
-                       hint="Продли сейчас, чтобы не остаться без VPN. Это займет минуту.")
+                       hint="Продлите сейчас, чтобы не остаться без VPN. Это займет минуту.")
     if window == "1d":
         return ui.push("warn", "Подписка заканчивается завтра",
-                       hint="Продли сейчас, чтобы доступ не прервался.")
+                       hint="Продлите сейчас, чтобы доступ не прервался.")
     if window == "0d":
         return ui.push("warn", "Сегодня последний день подписки", "Потом доступ отключится.",
-                       hint="Продли, если хочешь остаться на связи.")
+                       hint="Продлите, если хотите остаться на связи.")
     return ui.push("error", "Подписка закончилась вчера", "Доступ отключен.", hint=_RENEW_HINT)
 
 
@@ -54,10 +54,10 @@ REMIND_AFTER_1D = reminder_text("a1d")
 
 def grace_started_screen(days: int, until, daily_gb: int) -> ui.Screen:
     return ui.push(E.GRACE, "Льготный период",
-                   f"Подписка закончилась, но мы оставили доступ еще на {days_ru(days)}, чтобы ты успел продлить.",
+                   f"Подписка закончилась, но мы оставили доступ еще на {days_ru(days)}, чтобы вы успели продлить.",
                    ui.field("Доступ до", fmt_date_msk(until, with_time=True)) + " (МСК)",
                    f"Работает часть серверов и до {int(daily_gb)} ГБ трафика в сутки.",
-                   hint="Продли, чтобы VPN не отключился.")
+                   hint="Продлите, чтобы VPN не отключился.")
 
 
 def grace_started(days: int, until, daily_gb: int) -> str:
@@ -75,14 +75,14 @@ def device_added_screen(model: Optional[str], used: Optional[int], limit: Option
     if used is not None and limit:
         places = f"Занято {h(used)} из {h(limit)} мест под устройства."
     elif limit:
-        places = f"Лимит на твоем тарифе: {devices_ru(limit)}."
+        places = f"Лимит на вашем тарифе: {devices_ru(limit)}."
     else:
         places = None
     who = h(support) if support else "в поддержку"
     return ui.push(E.DEVICES, "Новое устройство",
                    ui.field("Устройство", model) if model else "К подписке подключилось новое устройство.",
                    places,
-                   hint=f"Если это не ты, напиши {who}, разберемся.")
+                   hint=f"Если это не вы, напишите {who}, разберемся.")
 
 
 def device_added(model: Optional[str], used: Optional[int], limit: Optional[int], support: Optional[str]) -> str:
@@ -90,8 +90,8 @@ def device_added(model: Optional[str], used: Optional[int], limit: Optional[int]
 
 
 NOT_CONNECTED_SCREEN = ui.push(E.CONNECT, "VPN еще не подключен",
-                               "Это делается за пару минут: поставь приложение и добавь в него свою ссылку.",
-                               hint="Нажми кнопку ниже, там ссылка и шаги.")
+                               "Это делается за пару минут: установите приложение и добавьте в него свою ссылку.",
+                               hint="Нажмите кнопку ниже, там ссылка и шаги.")
 NOT_CONNECTED = NOT_CONNECTED_SCREEN.html()
 
 
@@ -112,7 +112,7 @@ def obhod_limited(limit_bytes: Optional[int], can_buy: bool) -> str:
 # Toast (callback alerts are limited to 200 characters).
 MAINTENANCE_SCREEN = ui.toast(
     "Идут технические работы, эта функция временно недоступна. "
-    "VPN у тебя продолжает работать. Попробуй через 10-15 минут."
+    "VPN у вас продолжает работать. Попробуйте через 10-15 минут."
 )
 MAINTENANCE_CHECKOUT_SCREEN = ui.push(
     "info", "Идут технические работы",

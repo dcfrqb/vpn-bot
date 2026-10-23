@@ -217,7 +217,7 @@ async def test_empty_token_feature_off_site_never_called():
 @pytest.mark.asyncio
 async def test_callback_posts_data_and_user_id_then_edits_message():
     callback = _callback("sitelogin:ok:11111111-1111-1111-1111-111111111111")
-    resp_body = {"text": "готово. вернись в браузер, вход уже выполнен."}
+    resp_body = {"text": "готово. вернитесь в браузер, вход уже выполнен."}
     session = _mock_session(_FakeResponse(200, resp_body))
 
     with patch.object(site_login.settings, "SITE_INTERNAL_TOKEN", "shared-secret"), \

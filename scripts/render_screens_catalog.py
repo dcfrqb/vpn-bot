@@ -140,7 +140,7 @@ GLOSSARY = {
     "article_url": "ссылка на статью-инструкцию (CONNECT_ARTICLE_URL)",
     "pay_url": "ссылка на оплату ЮKassa",
     "link": "ссылка-подарок t.me/<бот>?start=g_...",
-    "features": "описание тарифа из каталога: страны с флагами по одной в строке, «📱 До N устройств», «♾ Безлимитный трафик и скорость»",
+    "features": "описание тарифа из каталога: страны с флагами по одной в строке, «📱 До N устройств», «♾ Основной VPN без ограничения трафика»",
     "payment_id": "номер платежа в БД бота",
     "external_id": "ID платежа в ЮKassa",
     "request_id": "номер запроса на возврат",
@@ -896,7 +896,7 @@ def section_promo() -> None:
     applied("promo.applied.sun718", "sun718",
             PromoReward("sun718", PromoOutcome.APPLIED, plan_code="pro", days=5, expires_at=EXP),
             "/sun718 или ?start=sun718: Pro на 5 дней",
-            [(D_EXP, "{date}"), (f"Тебе {days_ru(5)}", "Тебе {days}"), ("@dcfrq", "{support}")])
+            [(D_EXP, "{date}"), (f"Вам {days_ru(5)}", "Вам {days}"), ("@dcfrq", "{support}")])
     applied("promo.applied.code", "AUTUMN7",
             PromoReward("AUTUMN7", PromoOutcome.APPLIED, plan_code="standard", days=7, expires_at=EXP),
             "/promo КОД, ввод кода или ссылка ?start=КОД: код сработал",
@@ -1079,7 +1079,7 @@ def section_notify() -> None:
         VN.devices_kb(), subs=[("Устройство: iPhone 15", "Устройство: {device}"), ("Занято 3 из 5", "Занято {devices_used} из {device_limit}"),
                                ("@dcfrq", "{support}")], code=dcode,
         note="если модель неизвестна, без «: {device}»; если число мест неизвестно, строка «Лимит на твоем тарифе: "
-             "{device_limit}» (со словом «устройств»); без контакта поддержки: «напиши в поддержку»")
+             "{device_limit}» (со словом «устройств»); без контакта поддержки: «напишите в поддержку»")
     add("notify.not_connected", sec, "src/app/domain/texts/notify.py:NOT_CONNECTED",
         "вебхук панели: VPN ни разу не подключался спустя N часов", TN.NOT_CONNECTED, VN.connect_kb(ARTICLE_URL),
         subs=[(ARTICLE_URL, "{article_url}")],
@@ -1857,7 +1857,7 @@ TYPE_DOCS = {
 {эмодзи варианта} <b>{вариант}</b> · {цена} · {метка}
 <blockquote>{только отличия варианта}</blockquote>
 
-<i>{общее для всех вариантов | Выбери ... кнопкой ниже}</i>""",
+<i>{общее для всех вариантов | Выберите ... кнопкой ниже}</i>""",
      "Варианты кнопками («Название · цена»): сроки и пакеты по одному в ряд, тарифы по два в ряд. "
      "Футер: из меню [🏠 В меню], в списке тарифов перед ним доп. действие [🎁 Подарить], "
      "глубже [⬅️ Назад] [🏠 В меню].", "pay.plans"),

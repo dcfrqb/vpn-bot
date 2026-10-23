@@ -47,7 +47,7 @@ async def test_buy_subscription_alias_opens_plans_and_periods(money_flow):
     screen = _last_screen(f)
     datas = [b["data"] for b in _buttons(screen)]
     assert [d for d in datas if d and d.startswith("pl:")] == ["pl:lite", "pl:standard", "pl:pro"]
-    assert "Тарифы CRS VPN" in screen.text and "Во всех тарифах" in screen.text
+    assert "Тарифы CRS VPN" in screen.text and "Основной VPN во всех тарифах без ограничения трафика" in screen.text
     await f.press(Plan(c="pro").pack())
     periods = [b for b in _buttons(_last_screen(f)) if (b["data"] or "").startswith("pe:")]
     assert [b["data"] for b in periods] == ["pe:pro:1", "pe:pro:3", "pe:pro:6", "pe:pro:12"]
@@ -301,7 +301,7 @@ async def test_obhod_package_refused_without_live_obhod(money_flow):
     assert not f.store.payments
     screen = _last_screen(f)
     assert "Обход пока недоступен" in screen.text
-    assert "Оформи или продли" not in screen.text and "Нужен тариф Pro" not in screen.text
+    assert "Оформите или продлите" not in screen.text and "Нужен тариф Pro" not in screen.text
     assert "n:connect:refresh" in [b["data"] for b in _buttons(screen)]
     assert "n:plans:" not in [b["data"] for b in _buttons(screen)]
     assert any(b["url"] == "https://t.me/crs_support" for b in _buttons(screen))

@@ -70,7 +70,7 @@ def test_menu_no_subscription_with_trial_cta():
 
     assert text == (
         "👤 <b>Профиль</b>\n<blockquote>ID: 777\nИмя: Vasya</blockquote>\n\n"
-        "💡 <b>Подписка не оформлена</b>\n<blockquote>Нажми «Подписка», чтобы подключить VPN.</blockquote>\n\n"
+        "💡 <b>Подписка не оформлена</b>\n<blockquote>Нажмите «Подписка», чтобы подключить VPN.</blockquote>\n\n"
         "<i>Есть бесплатный пробный период на 5 дней, без карты.</i>"
     )
     assert _keyboard_texts(kb)[1] == ["🎁 Попробовать 5 дней бесплатно"]
@@ -86,7 +86,7 @@ def test_menu_expired_subscription():
     state = SubscriptionState(telegram_id=1, active=False, expires_at=NOW - timedelta(days=2))
     text, _ = menu_view.render(1, "X", state)
     assert "🔴 <b>Подписка истекла</b>" in text
-    assert "Нажми «Подписка», чтобы продлить доступ." in text
+    assert "Нажмите «Подписка», чтобы продлить доступ." in text
 
 
 # --- Connect -----------------------------------------------------------
@@ -96,7 +96,7 @@ def test_connect_no_subscription_with_trial():
     text, kb = connect_view.no_subscription(trial_available=True, support_handle=None)
     assert text == (
         "ℹ️ <b>Подписка не активна</b>\n<blockquote>Для подключения к VPN нужна активная подписка.</blockquote>\n\n"
-        "<i>Попробуй бесплатно или выбери тариф ниже.</i>"
+        "<i>Попробуйте бесплатно или выберите тариф ниже.</i>"
     )
     assert _keyboard_texts(kb) == [
         ["🎁 Попробовать 5 дней бесплатно"], ["💳 Подписка"],
@@ -106,7 +106,7 @@ def test_connect_no_subscription_with_trial():
 
 def test_connect_no_subscription_without_trial():
     text, kb = connect_view.no_subscription(trial_available=False)
-    assert "Попробуй бесплатно" not in text
+    assert "Попробуйте бесплатно" not in text
     assert _keyboard_texts(kb)[0] == ["💳 Подписка"]
 
 
@@ -119,14 +119,14 @@ def test_connect_success_pro_with_obhod_and_article():
     text, kb = connect_view.success(state, article_url="https://telegra.ph/how-to")
 
     assert text == (
-        "🚀 <b>Подключение VPN</b>\n\n🔗 <b>Твоя ссылка</b>\n<code>https://sub.example/abc</code>\n\n"
-        "💡 <b>Как подключить</b>\n<blockquote>1. Открой ссылку\n2. Скачай подходящий VPN клиент\n"
-        "3. Импортируй ссылку подписки в клиент</blockquote>\n\n"
+        "🚀 <b>Подключение VPN</b>\n\n🔗 <b>Ваша ссылка</b>\n<code>https://sub.example/abc</code>\n\n"
+        "💡 <b>Как подключить</b>\n<blockquote>1. Откройте ссылку\n2. Скачайте подходящий VPN клиент\n"
+        "3. Импортируйте ссылку подписки в клиент</blockquote>\n\n"
         "🛡 <b>Обход блокировок</b>\n"
         "<blockquote>Отдельная ссылка для мобильного интернета, когда оператор пускает только "
         "в белый список сайтов. 150 ГБ в месяц.\nДобавляется так же, как основная. "
-        "Включай обход, когда сайт заблокирован по мобильному интернету, "
-        "и выключай, когда все работает штатно.\nИспользовано: 12\xa0ГБ из 100\xa0ГБ</blockquote>\n\n"
+        "Включайте обход, когда сайт заблокирован по мобильному интернету, "
+        "и выключайте, когда все работает штатно.\nИспользовано: 12\xa0ГБ из 100\xa0ГБ</blockquote>\n\n"
         "<code>https://sub.example/obhod-abc</code>"
     )
     assert _keyboard_texts(kb) == [
@@ -149,7 +149,7 @@ def test_connect_success_pro_obhod_not_ready_yet():
     text, kb = connect_view.success(state)
     assert "Не удалось подтвердить готовность обхода" in text
     assert text.count("Обход блокировок") == 1 and "<code></code>" not in text
-    # the text says «нажми «Обновить»», so the button is there (review UX M2)
+    # the text says «нажмите «Обновить»», so the button is there (review UX M2)
     assert ["🔄 Обновить"] in _keyboard_texts(kb)
 
 
@@ -184,7 +184,7 @@ def test_devices_list_cards():
         "Онлайн: 14\xa0дней назад</blockquote>\n\n"
         "<blockquote>📶 <b>3. Устройство 3</b>\nДобавлено: 25.06.2026\nОнлайн: 45\xa0дней назад\n"
         "⚠️ Давно не выходило на связь</blockquote>\n\n"
-        "<i>Нажми ❌ с номером устройства, чтобы отвязать его. Место освободится сразу, а если устройство "
+        "<i>Нажмите ❌ с номером устройства, чтобы отвязать его. Место освободится сразу, а если устройство "
         "снова подключится, приложение добавит его заново.</i>"
     )
     assert _keyboard_texts(kb) == [["❌ 1", "❌ 2", "❌ 3"], ["🏠 В меню"]]
@@ -227,7 +227,7 @@ def test_devices_unlink_disabled_hides_unlink_buttons_but_keeps_the_list():
     devs = [DeviceInfo(hwid="a" * 16, platform="iOS", updated_at=NOW)]
     text, kb = devices_view.list_screen(devs, device_limit=5, unlink_enabled=False)
     assert "Мои устройства" in text and "1 из 5" in text
-    assert "отвязать" not in text and "напиши в поддержку" in text  # review UX M3
+    assert "отвязать" not in text and "напишите в поддержку" in text  # review UX M3
     assert _keyboard_texts(kb) == [["✍️ Поддержка"], ["🏠 В меню"]]
 
 
@@ -238,14 +238,14 @@ def test_support_screen_with_privacy_link():
     text, kb = support_view.render(support_handle=None, privacy_url="https://example.com/privacy")
     assert text == (
         "ℹ️ <b>Справка по CRS VPN</b>\n\n🔐 <b>Что такое VPN</b>\n"
-        "<blockquote>VPN создает защищенное соединение между твоим устройством и интернетом.</blockquote>\n\n"
+        "<blockquote>VPN создает защищенное соединение между вашим устройством и интернетом.</blockquote>\n\n"
         "❓ <b>Частые вопросы</b>\n<blockquote>"
-        "<b>VPN не подключается:</b> обнови подписку в самом приложении (кнопка обновления или свайп "
-        "вниз по списку серверов) и проверь, что добавлена ссылка из «Подключиться».\n\n"
-        "<b>Сколько устройств можно подключить:</b> смотри в разделе «Мои устройства», лимит зависит от тарифа.\n\n"
-        "<b>Как сменить устройство:</b> напиши в поддержку, освободим место под новое, и подключи его "
+        "<b>VPN не подключается:</b> обновите подписку в самом приложении (кнопка обновления или свайп "
+        "вниз по списку серверов) и проверьте, что добавлена ссылка из «Подключиться».\n\n"
+        "<b>Сколько устройств можно подключить:</b> смотрите в разделе «Мои устройства», лимит зависит от тарифа.\n\n"
+        "<b>Как сменить устройство:</b> напишите в поддержку, освободим место под новое, и подключите его "
         "той же ссылкой."
-        "</blockquote>\n\n<i>Не нашел ответ? Напиши в поддержку.</i>"
+        "</blockquote>\n\n<i>Не нашли ответ? Напишите в поддержку.</i>"
     )
     assert _keyboard_texts(kb) == [
         ["✍️ Поддержка"], ["📄 Оферта"], ["🔒 Политика конфиденциальности"], ["🏠 В меню"],
@@ -263,7 +263,7 @@ def test_support_screen_without_privacy_setting_uses_the_2_1_1_document():
 
 def test_help_promises_unlinking_only_with_the_flag():
     text, _ = support_view.render(unlink_enabled=True)
-    assert "отвяжи старое в «Мои устройства»" in text
+    assert "отвяжите старое в «Мои устройства»" in text
 
 
 # --- review UX: grace, stale, trial, unknown device count ----------------------
@@ -306,7 +306,7 @@ def test_menu_last_day_by_moscow_calendar_says_expires_today():
 
 
 @pytest.mark.parametrize("provisioning,phrase", [
-    ("pending", "Подожди минуту"),
+    ("pending", "Подождите минуту"),
     ("failed", "Не удалось подготовить обход"),
     ("unknown", "Не удалось подтвердить готовность обхода"),
 ])

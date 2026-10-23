@@ -127,7 +127,7 @@ def test_checkout_has_the_offer_line_with_links_from_settings():
     text, _ = money_view.checkout_view(plan_code="lite", name="Lite", months=1, amount_rub=129, payment_id=1,
                                        url="https://pay/x", autorenew=None, stars=None,
                                        offer_url="https://example.com/offer", privacy_url=None)
-    assert "Нажимая «Оплатить», ты принимаешь условия" in text
+    assert "Нажимая «Оплатить», вы принимаете условия" in text
     assert '<a href="https://example.com/offer">оферты</a>' in text
     assert re.search(r'<a href="https://telegra.ph/Politika-konfidencialnosti[^"]*">политики', text)
 

@@ -39,11 +39,11 @@ def subscription_section(state: SubscriptionState) -> ui.Block:
     """Panel status, with disabled and unverified states before expiry or trial."""
     if state.disabled:
         return ui.block(
-            "Доступ отключен. Напиши в поддержку, чтобы уточнить причину и восстановить подключение.",
+            "Доступ отключен. Напишите в поддержку, чтобы уточнить причину и восстановить подключение.",
             title="Подписка отключена", emoji=E.WARN,
         )
     if state.stale and not state.active:
-        return ui.block("Нажми «Обновить» или напиши в поддержку.",
+        return ui.block("Нажмите «Обновить» или напишите в поддержку.",
                         title="Статус подписки не подтвержден", emoji=E.WARN)
     if state.active:
         plan = plan_display(state.plan_code) + (" (пробный)" if state.is_trial else "")
@@ -69,21 +69,21 @@ def subscription_section(state: SubscriptionState) -> ui.Block:
             ui.field("Оплаченный срок закончился", fmt_date_msk(state.expires_at)),
             ui.field("Доступ сохранен до", fmt_date_msk(state.grace_until, with_time=True)) + " (МСК)",
             "Работает часть серверов, трафик в сутки ограничен.",
-            "Продли, чтобы не потерять доступ.",
+            "Продлите, чтобы не потерять доступ.",
             title="Льготный период", emoji=E.GRACE,
         )
 
     if state.expires_at is not None and state.expires_at <= datetime.now(timezone.utc):
         return ui.block(
             f"{E.DATE} " + ui.field("Истекла", fmt_date_msk(state.expires_at)),
-            "Нажми «Подписка», чтобы продлить доступ.",
+            "Нажмите «Подписка», чтобы продлить доступ.",
             title="Подписка истекла", emoji=E.EXPIRED,
         )
 
     if state.has_panel_user or state.expires_at is not None:
-        return ui.block("Нажми «Обновить» или напиши в поддержку.",
+        return ui.block("Нажмите «Обновить» или напишите в поддержку.",
                         title="Статус подписки не подтвержден", emoji=E.WARN)
-    return ui.block("Нажми «Подписка», чтобы подключить VPN.", title="Подписка не оформлена", emoji=E.NONE)
+    return ui.block("Нажмите «Подписка», чтобы подключить VPN.", title="Подписка не оформлена", emoji=E.NONE)
 
 
 def obhod_section(state: SubscriptionState) -> Optional[ui.Block]:

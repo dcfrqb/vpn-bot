@@ -69,7 +69,7 @@ def build_plan_features(meta: dict) -> list[str]:
     lines = [f"{COUNTRIES[c][0]} {COUNTRIES[c][1]}" for c in meta.get("countries") or ()]
     n = int(meta["device_limit"])
     lines.append(f"📱 До {n} " + ("устройства" if n % 10 == 1 and n % 100 != 11 else "устройств"))
-    lines.append("♾ Безлимитный трафик и скорость")
+    lines.append("♾ Основной VPN без ограничения трафика")
     return lines
 
 

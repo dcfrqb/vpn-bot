@@ -203,7 +203,7 @@ async def notify_referral_payment_if_applicable(bot, session, payment: Payment) 
                 f"Целых бонусов всего: <b>{full_after}</b>\n"
                 f"Уже выплачено: <b>{paid_out}</b>\n"
                 f"<b>Доступно к выдаче: {available_after} мес</b>\n\n"
-                f"Выдай в Remna вручную и зафиксируй: "
+                f"Выдайте в Remna вручную и зафиксируйте: "
                 f"<code>/referral_payout sun718 N</code>"
             )
             await _send_to(bot, _admin_ids(), admin_c)

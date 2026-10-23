@@ -10,9 +10,9 @@ from app.domain.texts import ui
 from app.domain.texts.ui import B, E
 
 # Used by app.bot.middlewares.errors: never show exception text to users.
-GENERIC_ERROR_SCREEN = ui.result("error", "Что-то пошло не так", hint="Попробуй еще раз чуть позже.")
+GENERIC_ERROR_SCREEN = ui.result("error", "Что-то пошло не так", hint="Попробуйте еще раз чуть позже.")
 GENERIC_ERROR = GENERIC_ERROR_SCREEN.html()
-GENERIC_ERROR_ALERT = ui.toast("Ошибка, попробуй еще раз")
+GENERIC_ERROR_ALERT = ui.toast("Ошибка, попробуйте еще раз")
 
 # --- Buttons: aliases of the dictionary (app.domain.texts.ui.B) ---
 BTN_CONNECT = B.CONNECT
@@ -47,7 +47,7 @@ def legal_urls(settings=None) -> tuple[str, str]:
 
 def legal_line(offer_url: str = OFFER_URL, privacy_url: str = PRIVACY_URL) -> str:
     """The offer acceptance line under every bill (as in 2.1.1)."""
-    return (f"Нажимая «Оплатить», ты принимаешь условия {ui.link('оферты', offer_url)} "
+    return (f"Нажимая «Оплатить», вы принимаете условия {ui.link('оферты', offer_url)} "
             f"и {ui.link('политики конфиденциальности', privacy_url)}.")
 
 
@@ -71,26 +71,26 @@ def help_screen(unlink_enabled: bool = False) -> ui.Screen:
     """FAQ. Unlinking is promised only when DEVICES_UNLINK_ENABLED is on
     (review UX M3); the refresh tip points at the VPN app, not the bot."""
     change_device = (
-        "<b>Как сменить устройство:</b> отвяжи старое в «Мои устройства» и "
-        "подключи новое той же ссылкой."
+        "<b>Как сменить устройство:</b> отвяжите старое в «Мои устройства» и "
+        "подключите новое той же ссылкой."
         if unlink_enabled else
-        "<b>Как сменить устройство:</b> напиши в поддержку, освободим место под новое, "
-        "и подключи его той же ссылкой."
+        "<b>Как сменить устройство:</b> напишите в поддержку, освободим место под новое, "
+        "и подключите его той же ссылкой."
     )
     return ui.article("Справка по CRS VPN", emoji=E.HELP, sections=[
-        ui.block("VPN создает защищенное соединение между твоим устройством и интернетом.",
+        ui.block("VPN создает защищенное соединение между вашим устройством и интернетом.",
                  title="Что такое VPN", emoji=E.VPN),
         ui.block(
             "\n\n".join((
-                "<b>VPN не подключается:</b> обнови подписку в самом приложении (кнопка обновления "
-                "или свайп вниз по списку серверов) и проверь, что добавлена ссылка из «Подключиться».",
-                "<b>Сколько устройств можно подключить:</b> смотри в разделе «Мои устройства», "
+                "<b>VPN не подключается:</b> обновите подписку в самом приложении (кнопка обновления "
+                "или свайп вниз по списку серверов) и проверьте, что добавлена ссылка из «Подключиться».",
+                "<b>Сколько устройств можно подключить:</b> смотрите в разделе «Мои устройства», "
                 "лимит зависит от тарифа.",
                 change_device,
             )),
             title="Частые вопросы", emoji=E.FAQ,
         ),
-    ], hint="Не нашел ответ? Напиши в поддержку.")
+    ], hint="Не нашли ответ? Напишите в поддержку.")
 
 
 def help_text(unlink_enabled: bool = False) -> str:
@@ -103,12 +103,12 @@ HELP_TEXT = help_text(False)
 # --- fallback router (unknown or retired buttons) and small commands ---
 STALE_BUTTON = ui.toast("Эта кнопка устарела, открыл главное меню")
 UNKNOWN_MESSAGE_SCREEN = ui.result(
-    "info", "Не понял сообщение", "Выбери действие кнопкой ниже или открой помощь.",
+    "info", "Не понял сообщение", "Выберите действие кнопкой ниже или откройте помощь.",
 )
 
 
 def myid_screen(user_id: int, is_admin: bool) -> ui.Screen:
-    return ui.result("info", "Твой Telegram ID", f"<code>{int(user_id)}</code>",
+    return ui.result("info", "Ваш Telegram ID", f"<code>{int(user_id)}</code>",
                      "Статус: администратор" if is_admin else None)
 
 

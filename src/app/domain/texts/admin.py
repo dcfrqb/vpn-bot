@@ -39,10 +39,10 @@ ALREADY_DONE = "Запрос уже обработан"
 IN_PROGRESS = "Этому пользователю уже выдают доступ"
 GRANT_FAILED = "Выдача не удалась, подробности в логах"
 GRANT_UNKNOWN = (
-    "⚠️ Панель не ответила, выдача могла пройти. Проверь срок в панели. "
+    "⚠️ Панель не ответила, выдача могла пройти. Проверьте срок в панели. "
     "Повторить ту же команду безопасно: дни не начислятся дважды."
 )
-NOTHING_TO_EXTEND = "Продлевать нечего: у пользователя нет подписки (укажи тариф)"
+NOTHING_TO_EXTEND = "Продлевать нечего: у пользователя нет подписки (укажите тариф)"
 USE_PANEL = "Такие запросы обрабатываются вручную в Remnawave"
 PROCESSED = "✅ Обработано"
 
@@ -50,7 +50,7 @@ PROCESSED = "✅ Обработано"
 
 REQUEST_TITLE_FRIEND = "Запрос на доступ (/friend)"
 REQUEST_TITLE_ADMIN = "Запрос на доступ (промокод /admin)"
-REQUEST_HINT = "Выдай Pro или отклони запрос."
+REQUEST_HINT = "Выдайте Pro или отклоните запрос."
 
 
 def access_request_alert(title: str, *, name: str, username: "str | None", telegram_id: int) -> str:
@@ -94,9 +94,9 @@ USAGE_STOPLIST = (
 
 BC_STEP_TEXT = (
     "📢 <b>Новая рассылка, шаг 1/6: текст</b>\n\n"
-    "Пришли текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;)."
+    "Пришлите текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;)."
 )
-BC_STEP_PHOTO = "📷 <b>Шаг 2/6: фото</b>\n\nПришли фото или нажми «Без фото»."
+BC_STEP_PHOTO = "📷 <b>Шаг 2/6: фото</b>\n\nПришлите фото или нажмите «Без фото»."
 BC_STEP_BUTTONS = (
     "🔘 <b>Шаг 3/6: кнопки</b>\n\nJSON-массив или «Без кнопок». Пример:\n"
     "<code>[{\"text\": \"Открыть сайт\", \"url\": \"https://example.com\"}]</code>\n"
@@ -104,18 +104,18 @@ BC_STEP_BUTTONS = (
 )
 BC_STEP_SEGMENT = "👥 <b>Шаг 4/6: кому</b>"
 BC_STEP_DAYS = (
-    "Пришли число дней N для «в пределах N дней» (истекает в ближайшие N дней для активных, "
+    "Пришлите число дней N для «в пределах N дней» (истекает в ближайшие N дней для активных, "
     "истекла за последние N дней для истекших, триал за последние N дней) или 0, чтобы без ограничения."
 )
-BC_STEP_IDS = "Пришли Telegram ID через пробел, запятую или с новой строки (до 1000)."
+BC_STEP_IDS = "Пришлите Telegram ID через пробел, запятую или с новой строки (до 1000)."
 BC_STEP_CREDIT = "🎁 <b>Шаг 5/6: подарок</b>\n\nСколько дней начислить каждому, кому сообщение дошло?"
 BC_STEP_SOUND = "🔔 <b>Шаг 6/6: звук</b>"
 BC_CANCELLED = "Создание рассылки отменено."
-BC_EMPTY_TEXT = "Пустой текст, пришли непустое сообщение."
+BC_EMPTY_TEXT = "Пустой текст, пришлите непустое сообщение."
 BC_TOO_LONG = "Слишком длинный текст ({n} симв.), лимит Telegram около 4096."
-BC_BAD_BUTTONS = "Не получилось прочитать кнопки: {err}. Пришли еще раз или нажми «Без кнопок»."
+BC_BAD_BUTTONS = "Не получилось прочитать кнопки: {err}. Пришлите еще раз или нажмите «Без кнопок»."
 BC_BAD_NUMBER = "Нужно целое число от 0 до {max}."
-BC_BAD_IDS = "Не нашел ни одного ID. Пришли числа через пробел."
+BC_BAD_IDS = "Не удалось найти ни одного ID. Пришлите числа через пробел."
 BC_NOT_FOUND = "Рассылка не найдена."
 BC_ALREADY_RUNNING = "Рассылка уже запущена."
 BC_ALREADY_DONE = "Рассылка уже завершена."
@@ -139,13 +139,13 @@ SEGMENT_TITLES = {
 def _stop_done() -> str:
     from app.domain.texts import ui
 
-    return ui.result("ok", "Ты отписан(а) от рассылок",
+    return ui.result("ok", "Вы отписаны от рассылок",
                      "Уведомления об оплате и подписке продолжат приходить.",
                      hint="Подписаться снова: /start").html()
 
 
 STOP_DONE = _stop_done()
-UNSUB_ALERT = "🔕 Ты отписан(а) от рассылок"
+UNSUB_ALERT = "🔕 Вы отписаны от рассылок"
 
 # ----------------------------------------------------------------- screens (release 3.0, kit)
 
@@ -268,7 +268,7 @@ def referral_screen(st: Any) -> ui.Screen:
         top_lines.append(f"• <code>{r.telegram_id}</code>: {r.months} мес ({tag})")
     return ui.admin_screen(
         f"Рефералка /{h(st.code)}", emoji="📊",
-        hint="Выдал бонус? Зафиксируй: /referral_payout sun718 N комментарий",
+        hint="Выдали бонус? Зафиксируйте: /referral_payout sun718 N комментарий",
         sections=[block(*lines), block(*top_lines, title="Топ приглашенных") if top_lines else None],
     )
 
@@ -352,9 +352,9 @@ def bc_note(text: str, *, kind: str = "info") -> ui.Screen:
 
 BC_STEP_TEXT_SCREEN = broadcast_step_screen(
     "Новая рассылка, шаг 1/6: текст",
-    "Пришли текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;).",
+    "Пришлите текст (HTML: &lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;, &lt;blockquote&gt;).",
 )
-BC_STEP_PHOTO_SCREEN = broadcast_step_screen("Шаг 2/6: фото", "Пришли фото или нажми «Без фото».")
+BC_STEP_PHOTO_SCREEN = broadcast_step_screen("Шаг 2/6: фото", "Пришлите фото или нажмите «Без фото».")
 BC_STEP_BUTTONS_SCREEN = broadcast_step_screen(
     "Шаг 3/6: кнопки",
     "JSON-массив или «Без кнопок». Пример:",
@@ -365,11 +365,11 @@ BC_STEP_SEGMENT_SCREEN = broadcast_step_screen("Шаг 4/6: кому")
 BC_STEP_SUBKIND_SCREEN = broadcast_step_screen("Какая подписка?")
 BC_STEP_DAYS_SCREEN = broadcast_step_screen(
     "Шаг 4/6: кому",
-    "Пришли число дней N для «в пределах N дней» (истекает в ближайшие N дней для активных, истекла за "
+    "Пришлите число дней N для «в пределах N дней» (истекает в ближайшие N дней для активных, истекла за "
     "последние N дней для истекших, триал за последние N дней) или 0, чтобы без ограничения.",
 )
 BC_STEP_IDS_SCREEN = broadcast_step_screen(
-    "Шаг 4/6: кому", "Пришли Telegram ID через пробел, запятую или с новой строки (до 1000).",
+    "Шаг 4/6: кому", "Пришлите Telegram ID через пробел, запятую или с новой строки (до 1000).",
 )
 BC_STEP_CREDIT_SCREEN = broadcast_step_screen(
     "Шаг 5/6: подарок", "Сколько дней начислить каждому, кому сообщение дошло?",
