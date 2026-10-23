@@ -8,7 +8,7 @@ from app.utils.preflight import run_preflight_bot
 run_preflight_bot()
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
+from app.infra.telegram import create_bot
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
@@ -83,7 +83,7 @@ async def run_polling():
     """Запускает бота в режиме polling"""
     logger.info("Инициализация бота (polling режим)")
 
-    bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    bot = create_bot(settings.BOT_TOKEN)
     logger.info("Бот создан успешно")
 
     dp = await setup_dispatcher(bot)
@@ -162,7 +162,7 @@ async def run_webhook():
 
     logger.info("Инициализация бота (webhook режим)")
 
-    bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    bot = create_bot(settings.BOT_TOKEN)
     logger.info("Бот создан успешно")
 
     dp = await setup_dispatcher(bot)

@@ -12,8 +12,7 @@ FROZEN seam: новые маршруты подключаются здесь к�
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
+from app.infra.telegram import create_bot
 
 from app.config import settings
 from app.logger import logger
@@ -30,10 +29,7 @@ async def lifespan(app: FastAPI):
         logger.error("BOT_TOKEN не установлен!")
         raise ValueError("BOT_TOKEN должен быть установлен в переменных окружения")
 
-    bot_instance = yookassa_routes.bot_instance = Bot(
-        token=settings.BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode="HTML")
-    )
+    bot_instance = yookassa_routes.bot_instance = create_bot(settings.BOT_TOKEN)
 
     try:
         bot_info = await bot_instance.get_me()

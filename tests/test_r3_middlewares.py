@@ -1,6 +1,6 @@
 """3.0 Foundation: DI, errors and maintenance middlewares (unit level)."""
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import AnswerCallbackQuery
 
 from app.bot.middlewares.di import DIMiddleware
@@ -46,11 +46,11 @@ async def test_errors_middleware_generic_text_for_callback_and_message():
     assert len(notifier.to_admins(AdminTopic.ERRORS)) == 1
 
 
-async def test_errors_middleware_reraises_telegram_errors():
+async def test_errors_middleware_reraises_forbidden():
     async def tg(event, data):
-        raise TelegramBadRequest(method=AnswerCallbackQuery(callback_query_id="1"), message="bad")
+        raise TelegramForbiddenError(method=AnswerCallbackQuery(callback_query_id="1"), message="bad")
 
-    with pytest.raises(TelegramBadRequest):
+    with pytest.raises(TelegramForbiddenError):
         await ErrorsMiddleware()(tg, object(), {})
 
 

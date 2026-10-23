@@ -1,26 +1,15 @@
-"""
-Global error handler для aiogram Dispatcher.
+"""Global fallback: acknowledge errors without replaying business operations.
 
-Покрывает три класса Telegram ошибок:
-- `TelegramRetryAfter` — flood-control, ждем `retry_after` и отпускаем update
-  (без re-dispatch, т.к. Telegram сам повторит при polling/webhook).
-- `TelegramForbiddenError` — юзер заблокировал бота → помечаем
-  `telegram_users.is_active=False`, чтобы broadcast/уведомления его пропускали.
-- `TelegramBadRequest` — логируем и подавляем (чаще всего "message is not modified",
-  "message to edit not found" — безвредные гонки UI).
-
-Прочие ошибки прокидываются дальше, чтобы aiogram сам их залогировал с трассой.
+Rate-limit retries happen at the outgoing session, not at the update handler.
+Only unchanged-message errors are silently ignored.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from aiogram import Router
 from aiogram.exceptions import (
-    TelegramBadRequest,
     TelegramForbiddenError,
-    TelegramRetryAfter,
 )
 from aiogram.types import ErrorEvent
 
@@ -31,39 +20,26 @@ router = Router(name="tg_errors_global")
 
 
 @router.errors()
-async def global_errors_handler(event: ErrorEvent) -> bool:
+async def global_errors_handler(event: ErrorEvent, **data: Any) -> bool:
+    from app.bot.middlewares.errors import ErrorsMiddleware, is_unchanged_message
+
     exc = event.exception
     update = event.update
-
-    if isinstance(exc, TelegramRetryAfter):
-        logger.warning(
-            f"TelegramRetryAfter: ждем {exc.retry_after}s перед следующим апдейтом "
-            f"(update_id={getattr(update, 'update_id', None)})"
-        )
-        try:
-            await asyncio.sleep(exc.retry_after + 1)
-        except asyncio.CancelledError:
-            raise
+    if is_unchanged_message(exc):
         return True
-
     if isinstance(exc, TelegramForbiddenError):
         user_id = _extract_user_id(update)
-        logger.info(
-            f"TelegramForbiddenError: юзер заблокировал бота, tg_id={user_id}"
-        )
-        if user_id:
+        logger.warning(f"TelegramForbiddenError: tg_id={user_id}, update_id={update.update_id}")
+        # Missing permissions in a group/admin chat do not mean the user blocked us.
+        if user_id and any(reason in exc.message.lower() for reason in (
+            "bot was blocked by the user", "user is deactivated",
+        )):
             await _mark_inactive(user_id)
         return True
 
-    if isinstance(exc, TelegramBadRequest):
-        logger.warning(
-            f"TelegramBadRequest (подавлено): {exc} "
-            f"update_id={getattr(update, 'update_id', None)}"
-        )
-        return True
-
-    # Остальные исключения — дать aiogram их отлогировать как unhandled.
-    return False
+    target = update.callback_query or update.pre_checkout_query or update.message
+    await ErrorsMiddleware.report(target, exc, data)
+    return True
 
 
 def _extract_user_id(update: Any) -> int | None:
