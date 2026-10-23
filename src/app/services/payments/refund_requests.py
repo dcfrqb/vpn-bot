@@ -65,7 +65,7 @@ class RefundRequests:
         now = self.d.clock().replace(tzinfo=None)
         return paid is not None and now - paid <= REFUND_WINDOW
 
-    async def request(self, telegram_id: int, payment_id: int) -> str:
+    async def request(self, telegram_id: int, payment_id: int, *, message_id: Optional[int] = None) -> str:
         """-> requested | already | not_eligible"""
         if not self.enabled():
             return "not_eligible"
@@ -73,6 +73,8 @@ class RefundRequests:
         rec = await store.get(int(payment_id))
         if not self.eligible(rec, telegram_id):
             return "not_eligible"
+        if type(message_id) is int and message_id > 0:
+            await store.patch_meta(rec.id, {"refund_message_id": message_id})
         rr, created = await store.create_refund_request(rec.id, rec.telegram_id, amount=rec.amount,
                                                        reason=REASON_NOT_CONNECTED)
         if not created:
@@ -100,8 +102,10 @@ class RefundRequests:
             rr = await store.transition_refund_request(request_id, ("pending",), "rejected", decided_by=admin_id)
             if rr is None:
                 return await self._already(request_id)
+            rec = await store.get(rr.payment_id)
             await self.d.notifier.notify_user(rr.telegram_id, T.refund_rejected(support_contact(self.d.settings)),
-                                              html=True)
+                                              html=True, reply_markup=self.d.ui.support(),
+                                              **self._card_options(rec))
             logger.info(f"refund request #{request_id} rejected by {admin_id}")
             return "rejected"
 
@@ -292,9 +296,9 @@ class RefundRequests:
     async def recover_one_notice(self, payment_id):
         """Notice-only outbox: completion is persisted AFTER confirmed delivery.
 
-        Stable notifier dedup limits duplicates after process failure. A crash
-        between delivery and DB acknowledgment can still duplicate a notice;
-        it can never repeat money issuance or access subtraction.
+        Bound cards are edited idempotently after process failure. Legacy
+        payments without a card keep notifier dedup for their send fallback.
+        This can never repeat money issuance or access subtraction.
         """
         owner = uuid.uuid4().hex
         rec = await self.d.store.claim_refund_notice(payment_id, owner=owner, now=self.d.clock(),
@@ -313,13 +317,25 @@ class RefundRequests:
                     dedup_key=f"rr_alert:{rid}:{phase}", dedup_ttl=300)
                 admin_ok = bool(count)
             if not user_ok:
+                options = self._card_options(rec)
+                if not options:
+                    options = {"dedup_key": f"rr_notice:{rid}:{phase}", "dedup_ttl": 300}
                 user_ok = await self.d.notifier.notify_user(rec.telegram_id, self._notice_text(rec, phase),
-                    html=True, dedup_key=f"rr_notice:{rid}:{phase}", dedup_ttl=300)
+                    html=True, reply_markup=self.d.ui.support(), **options)
         except Exception as exc:
             logger.warning(f"refund notice payment={rec.id}: {type(exc).__name__}")
         await self.d.store.finish_refund_notice(rec.id, owner=owner, phase=phase, user_delivered=bool(user_ok),
                                                admin_delivered=bool(admin_ok), now=self.d.clock())
         return bool(user_ok and admin_ok)
+
+    @staticmethod
+    def _card_options(rec):
+        if rec is not None:
+            for key in ("refund_message_id", "checkout_message_id"):
+                value = rec.meta.get(key)
+                if type(value) is int and value > 0:
+                    return {"edit_message_id": value}
+        return {}
 
     def _notice_text(self, rec, phase):
         marker = rec.meta.get("refund_24h") or {}

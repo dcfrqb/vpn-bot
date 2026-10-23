@@ -143,3 +143,11 @@ async def test_replace_payment_card_without_duplicate(redis, failure, fallback, 
     assert len(edits) == 1 and edits[0].params['message_id'] == 77
     assert edits[0].text == 'a &lt;b&gt; &amp; c'
     assert bool(session.calls_of('SendMessage')) is fallback
+
+
+@pytest.mark.parametrize('forum', [False, True])
+async def test_own_promo_report_skips_only_actor_dm(redis, forum):
+    bot, session = make_bot()
+    n = TelegramNotifier(bot, cfg(ADMINS=[11, 22], ADMIN_CHAT_ID=-100 if forum else None))
+    assert await n.notify_admins(AdminTopic.PROMO, 'activated', exclude_telegram_id=11) == 1
+    assert [c.chat_id for c in session.calls_of('SendMessage')] == ([-100] if forum else [22])

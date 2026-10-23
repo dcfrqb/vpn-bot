@@ -305,7 +305,15 @@ async def process_refund_webhook(webhook_data: Dict[str, Any], bot) -> bool:
     ))
     if user_text:
         try:
-            await bot.send_message(chat_id=tg_id, text=user_text, parse_mode="HTML")
+            from app.services.notifications import TelegramNotifier
+
+            options = {}
+            for key in ("refund_message_id", "checkout_message_id"):
+                value = meta.get(key)
+                if type(value) is int and value > 0:
+                    options["edit_message_id"] = value
+                    break
+            await TelegramNotifier(bot).notify_user(tg_id, user_text, html=True, **options)
         except Exception as e:
             logger.warning(f"refund {refund_id}: user notice to {tg_id} failed: {e}")
     logger.info(

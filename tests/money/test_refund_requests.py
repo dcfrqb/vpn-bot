@@ -450,3 +450,53 @@ async def test_delayed_successful_money_response_rearms_worker_money_review():
     marker = (await deps.store.get(rec.id)).meta["refund_24h"]
     assert marker["access"]["state"] == "applied" and len(deps.provisioning.revokes) == 1
     assert len(deps.payments.refunds) == 1
+
+
+async def test_refund_decision_reuses_bound_card_after_restart():
+    from types import SimpleNamespace
+    from app.services.notifications import TelegramNotifier
+    from tests.fakes.bot import make_bot
+
+    for approve in [False, True]:
+        m, deps = make_money(REFUND_24H_ENABLED=True)
+        rec = await _paid(m, deps)
+        bot, calls = make_bot()
+        deps.notifier = TelegramNotifier(bot, SimpleNamespace(ADMINS=[111], ADMIN_CHAT_ID=None))
+        assert await m.refunds.request(TG, rec.id, message_id=77) == 'requested'
+        rid = next(iter(deps.store.requests))
+        calls.calls.clear()
+        result = await _restart(deps).refunds.decide(rid, 111, approve=approve)
+        assert result.startswith('done') if approve else result == 'rejected'
+        assert len(calls.calls_of('EditMessageText')) == 1
+        assert calls.calls_of('EditMessageText')[0].params['message_id'] == 77
+        assert not [c for c in calls.calls_of('SendMessage') if c.chat_id == TG]
+        await _restart(deps).refunds.decide(rid, 111, approve=approve)
+        await _restart(deps).refunds.recover_access()
+        assert len(calls.calls_of('EditMessageText')) == 1
+        assert not [c for c in calls.calls_of('SendMessage') if c.chat_id == TG]
+        assert len(deps.payments.refunds) == int(approve)
+
+
+async def test_bound_refund_notice_timeout_retries_edit_without_refunding_again():
+    from types import SimpleNamespace
+    from aiogram.exceptions import TelegramNetworkError, TelegramBadRequest
+    from aiogram.methods import EditMessageText
+    from app.services.notifications import TelegramNotifier
+    from tests.fakes.bot import make_bot
+
+    m, deps = make_money(REFUND_24H_ENABLED=True)
+    rec = await _paid(m, deps)
+    bot, calls = make_bot()
+    deps.notifier = TelegramNotifier(bot, SimpleNamespace(ADMINS=[111], ADMIN_CHAT_ID=None))
+    await m.refunds.request(TG, rec.id, message_id=88)
+    rid = next(iter(deps.store.requests))
+    calls.calls.clear()
+    method = EditMessageText(chat_id=TG, message_id=88, text='result')
+    calls.fail['EditMessageText'] = TelegramNetworkError(method=method, message='timeout after delivery')
+    assert await m.refunds.decide(rid, 111, approve=True) == 'done'
+    calls.fail['EditMessageText'] = TelegramBadRequest(method=method, message='message is not modified')
+    deps.clock.advance(minutes=5)
+    assert (await _restart(deps).refunds.recover_access())['notified'] == 1
+    assert len(deps.payments.refunds) == 1 and len(deps.provisioning.rollback_calls) == 1
+    assert len(calls.calls_of('EditMessageText')) == 2
+    assert not [c for c in calls.calls_of('SendMessage') if c.chat_id == TG]

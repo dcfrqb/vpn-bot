@@ -266,6 +266,7 @@ class Notifier(Protocol):
         dedup_ttl: int = 3600,
         reply_markup: Any = None,
         disable_notification: bool = False,
+        exclude_telegram_id: Optional[int] = None,
     ) -> int:
         """Send to the admin forum topic, or DM every admin as a fallback.
         ``html=False`` escapes ``text``; ``html=True`` means the caller built

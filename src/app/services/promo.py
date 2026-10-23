@@ -517,7 +517,7 @@ class PromoEngine:
         text = ui.admin_alert(title, emoji=emoji, who=ui.who_block(name=None, username=None, telegram_id=tg),
                               lines=list(lines)).html()
         try:
-            await self.notifier.notify_admins(AdminTopic.PROMO, text, html=True)
+            await self.notifier.notify_admins(AdminTopic.PROMO, text, html=True, exclude_telegram_id=tg)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"promo alert failed ({type(e).__name__})")
 

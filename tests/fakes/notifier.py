@@ -16,6 +16,7 @@ class Sent:
     dedup_key: Optional[str]
     reply_markup: Any = None
     edit_message_id: Optional[int] = None
+    exclude_telegram_id: Optional[int] = None
 
 
 class RecordingNotifier:
@@ -32,10 +33,12 @@ class RecordingNotifier:
         return True
 
     async def notify_admins(self, topic: AdminTopic, text: str, *, html: bool = False, dedup_key: Optional[str] = None,
-                            dedup_ttl: int = 3600, reply_markup: Any = None, disable_notification: bool = False) -> int:
+                            dedup_ttl: int = 3600, reply_markup: Any = None, disable_notification: bool = False,
+                            exclude_telegram_id: Optional[int] = None) -> int:
         if not self._dedup_ok(dedup_key):
             return 0
-        self.sent.append(Sent("admins", AdminTopic(topic), text, html, dedup_key, reply_markup))
+        self.sent.append(Sent("admins", AdminTopic(topic), text, html, dedup_key, reply_markup,
+                              exclude_telegram_id=exclude_telegram_id))
         return 1
 
     async def notify_user(self, telegram_id: int, text: str, *, html: bool = False, reply_markup: Any = None,

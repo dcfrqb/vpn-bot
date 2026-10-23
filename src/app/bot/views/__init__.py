@@ -87,11 +87,11 @@ async def show_result(event, text: str, markup=None) -> bool:
         except TelegramBadRequest:
             await render(event, text, markup, answer_callback=False)
             return False
-    await render(event, text, markup)
+    await render(event, text, markup, reuse_current=True)
     return False
 
 
-async def render(
+async def _render(
     event: Union[CallbackQuery, Message],
     text: str,
     markup: Optional[InlineKeyboardMarkup] = None,
@@ -139,3 +139,56 @@ async def render(
         text, reply_markup=markup, parse_mode=parse_mode,
         disable_web_page_preview=disable_web_page_preview,
     )
+
+
+def _card_key(event) -> str:
+    uid = event.from_user.id if event.from_user else 0
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    chat_id = msg.chat.id if isinstance(msg, Message) else uid
+    return f"ui:current_card:{event.bot.id}:{chat_id}:{uid}"
+
+
+async def render(event, text, markup=None, *, parse_mode="HTML", disable_web_page_preview=True,
+                 answer_callback=True, reuse_current=False):
+    """Remember UI cards; text-based result flows may reuse the latest card.
+
+    Redis unavailable or a deleted card: the normal send fallback still works.
+    /start and other explicit screens keep their existing behavior by default.
+    """
+    from app.services.cache import get_redis_client
+
+    target = None
+    try:
+        redis = get_redis_client()
+    except Exception:
+        redis = None
+    if reuse_current and isinstance(event, Message) and redis:
+        try:
+            value = await redis.get(_card_key(event))
+            target = int(value) if value else None
+        except Exception:
+            pass  # UI hints must never prevent an operation or its result.
+    options = dict(parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview)
+    if target and target > 0:
+        try:
+            shown = await event.bot.edit_message_text(chat_id=event.chat.id, message_id=target,
+                                                      text=text, reply_markup=markup, **options)
+        except TelegramBadRequest as exc:
+            if _NOT_MODIFIED in str(exc).lower():
+                shown = None
+            elif any(reason in str(exc).lower() for reason in (
+                "message to edit not found", "message can't be edited", "message_id_invalid",
+            )):
+                shown = await _render(event, text, markup, **options, answer_callback=answer_callback)
+            else:
+                raise
+    else:
+        shown = await _render(event, text, markup, **options, answer_callback=answer_callback)
+    msg = shown if isinstance(shown, Message) else event.message if isinstance(event, CallbackQuery) else None
+    message_id = msg.message_id if isinstance(msg, Message) else target
+    if message_id and redis:
+        try:
+            await redis.set(_card_key(event), str(message_id), ex=7 * 24 * 3600)
+        except Exception:
+            pass
+    return shown

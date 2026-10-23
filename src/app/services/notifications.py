@@ -98,6 +98,7 @@ class TelegramNotifier:
         dedup_ttl: int = 3600,
         reply_markup: Any = None,
         disable_notification: bool = False,
+        exclude_telegram_id: Optional[int] = None,
     ) -> int:
         if not await self._dedup_ok(dedup_key, dedup_ttl):
             return 0
@@ -120,6 +121,8 @@ class TelegramNotifier:
 
         delivered = 0
         for admin_id in list(getattr(self.settings, "ADMINS", None) or []):
+            if admin_id == exclude_telegram_id:
+                continue
             if await self._send(int(admin_id), body, **extra):
                 delivered += 1
         if delivered == 0:

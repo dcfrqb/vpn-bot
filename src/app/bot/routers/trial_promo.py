@@ -72,7 +72,7 @@ async def cmd_trial(message: Message, container: Any) -> None:
     if not getattr(container.settings, "PROMO_TRIAL_ENABLED", True):
         from app.domain.texts.connect import TRIAL_UNAVAILABLE_SCREEN
 
-        await render(message, *_result(TRIAL_UNAVAILABLE_SCREEN))  # review UX m12: never a silent command
+        await render(message, *_result(TRIAL_UNAVAILABLE_SCREEN), reuse_current=True)
         return
     await redeem_and_reply(message, "trial", container, source="trial")
 
@@ -105,10 +105,10 @@ async def cmd_promo(message: Message, command: CommandObject, state: FSMContext,
         await redeem_and_reply(message, command.args.split()[0], container, source="command")
         return
     if not _codes_enabled(container):
-        await render(message, *_result(T.CODES_DISABLED_SCREEN))
+        await render(message, *_result(T.CODES_DISABLED_SCREEN), reuse_current=True)
         return
     await state.set_state(PromoInput.code)
-    await render(message, *_result(T.ENTER_CODE_SCREEN))
+    await render(message, *_result(T.ENTER_CODE_SCREEN), reuse_current=True)
 
 
 @router.callback_query(PromoAct.filter(F.a == "enter"))
@@ -123,7 +123,7 @@ async def cb_enter(callback: CallbackQuery, state: FSMContext, container: Any) -
 @router.message(StateFilter(PromoInput.code), Command("cancel"))
 async def cancel_input(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await render(message, *_result(T.ENTER_CANCELLED_SCREEN))
+    await render(message, *_result(T.ENTER_CANCELLED_SCREEN), reuse_current=True)
 
 
 # Commands are never taken as a code (review UX M7): /start, /help etc. go to

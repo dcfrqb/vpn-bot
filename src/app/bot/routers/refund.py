@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from app.bot.callbacks import RefundReq
 from app.bot.views.money import paid_kb
@@ -28,7 +28,8 @@ _TEXTS = {
 
 @router.callback_query(RefundReq.filter())
 async def on_refund_request(cb: CallbackQuery, callback_data: RefundReq, container: Any) -> None:
-    result = await money(container).refunds.request(cb.from_user.id, callback_data.pid)
+    message_id = cb.message.message_id if isinstance(cb.message, Message) and cb.message.chat.id == cb.from_user.id else None
+    result = await money(container).refunds.request(cb.from_user.id, callback_data.pid, message_id=message_id)
     logger.info(f"refund request: tg_id={cb.from_user.id} payment={callback_data.pid} result={result}")
     await show_result(cb, _TEXTS.get(result, T.REFUND_NOT_ELIGIBLE))
     if result in ("requested", "already") and cb.message is not None:

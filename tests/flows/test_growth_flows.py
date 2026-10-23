@@ -393,3 +393,47 @@ async def test_whois_renders_the_card_with_the_way_back(g):
     sent = g.session.calls_of("SendMessage")[-1]
     assert isinstance(sent.text, str) and str(USER) in sent.text
     assert [b["text"] for row in sent.keyboard for b in row] == ["👑 В админку"]
+
+
+async def test_trial_button_has_only_alert_and_updated_card_for_actor(g, monkeypatch):
+    from app.config import settings
+    from app.services.notifications import TelegramNotifier
+
+    monkeypatch.setattr(settings, 'ADMINS', [USER, ADMIN])
+    monkeypatch.setattr(settings, 'ADMIN_CHAT_ID', None)
+    g.engine.notifier = TelegramNotifier(g.bot, settings)
+    await g.press(cb.PromoAct(a='trial').pack())
+    await g.press(cb.PromoAct(a='trial').pack())
+    assert g.prov.effective == 1
+    assert not [c for c in g.session.calls_of('SendMessage') if c.chat_id == USER]
+    assert len([c for c in g.session.calls_of('SendMessage') if c.chat_id == ADMIN]) == 1
+    assert g.session.calls_of('EditMessageText')
+    assert len([c for c in g.answers() if c.params.get('show_alert')]) == 2
+
+
+async def test_text_promo_result_and_cancel_reuse_prompt_card(g):
+    from app.services.promo import PromoCodeSpec
+
+    await g.engine.create_code(PromoCodeSpec(code='autumn', days=3, plan_code='lite'))
+    await g.press(cb.PromoAct(a='enter').pack())
+    prompt = g.session.calls_of('EditMessageText')[-1]
+    g.session.calls.clear()
+    await g.send('AUTUMN')
+    assert not g.session.calls_of('SendMessage')
+    assert len(g.session.calls_of('EditMessageText')) == 1
+    assert g.session.calls_of('EditMessageText')[0].params['message_id'] == prompt.params['message_id']
+    assert g.prov.effective == 1
+    await g.send('/promo')
+    await g.send('/cancel')
+    assert not g.session.calls_of('SendMessage')
+
+
+async def test_trial_command_repeat_uses_same_card(g):
+    await g.send('/trial')
+    first = g.session.calls_of('SendMessage')[-1]
+    await g.send('/trial')
+    assert len(g.session.calls_of('SendMessage')) == 1
+    assert g.session.calls_of('EditMessageText')[-1].params['message_id']
+    assert 'уже был использован' in g.session.calls_of('EditMessageText')[-1].text
+    assert 'Пробный период включен' in first.text
+    assert g.prov.effective == 1
