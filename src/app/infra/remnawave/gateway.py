@@ -121,6 +121,11 @@ class HttpRemnaGateway:
         dto = UserDTO.from_api(data)
         return self._to_panel_user(dto) if dto.id else None
 
+    async def find_user_by_username(self, username: str) -> Optional[PanelUser]:
+        raw = await self._client().get_user_by_username(username)
+        dto = UserDTO.from_api(raw) if raw else None
+        return self._to_panel_user(dto) if dto and dto.id else None
+
     async def find_users_by_telegram_id(self, telegram_id: int) -> list[PanelUser]:
         """Every panel user bound to this Telegram id, primary first
         (ACTIVE, latest expireAt). Errors are raised: [] means "none"."""
