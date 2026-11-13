@@ -173,6 +173,11 @@ class Settings(BaseSettings):
     SITE_INTERNAL_TOKEN: Union[str, None] = None
     # Обратное направление: сайт -> бот, /internal/site/* в webhook-api.
     # Отдельный секрет (у сайта это BOT_API_TOKEN). Пустой = маршруты отвечают 503.
+    SITE_CHECKOUT_ENABLED: bool = False
+    SITE_COMMERCE_RECOVERY_ENABLED: bool = False
+    SITE_PAYMENT_TEST_MODE: bool = True
+    SITE_PUBLIC_ORIGIN: str = "https://vpn.crs-projects.com"
+
     BOT_INTERNAL_TOKEN: Union[str, None] = None
 
     # =====================================================================
