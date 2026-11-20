@@ -116,6 +116,16 @@ class YooKassaGateway:
         return_url = self.settings.YOOKASSA_RETURN_URL
         if not return_url:
             raise ValueError("YOOKASSA_RETURN_URL is not configured")
+        if (metadata or {}).get("site_order_id"):
+            from uuid import UUID
+            from urllib.parse import urlsplit
+            origin = getattr(self.settings, "SITE_PUBLIC_ORIGIN", "https://vpn.crs-projects.com").rstrip("/")
+            parsed = urlsplit(origin)
+            local = getattr(self.settings, "SITE_PAYMENT_TEST_MODE", True) and parsed.hostname in {"localhost", "127.0.0.1"}
+            if ((parsed.scheme != "https" and not (local and parsed.scheme == "http"))
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+                raise ValueError("invalid site origin")
+            return_url = origin + "/checkout/" + str(UUID(str(metadata["site_order_id"])))
         body: dict[str, Any] = {
             "amount": {"value": f"{int(intent.amount_rub)}.00", "currency": "RUB"},
             "capture": True,

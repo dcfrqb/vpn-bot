@@ -232,7 +232,8 @@ class CheckoutServiceImpl:
 
     async def start_checkout(self, telegram_id: int, quote: Any, *, method: str = "yookassa",
                              autorenew: bool = False, kind: str = "subscription",
-                             user: Optional[Mapping[str, Any]] = None) -> StartResult:
+                             user: Optional[Mapping[str, Any]] = None,
+                             site_order_id: Optional[str] = None) -> StartResult:
         from app.infra.redis.locks import user_action_lock
 
         tg = int(telegram_id)
@@ -282,7 +283,8 @@ class CheckoutServiceImpl:
                 tg, plan_code=fresh.plan_code, months=fresh.months, kind=kind, method=method,
                 autorenew=autorenew, since=now - REUSE_WINDOW,
             )
-            if reuse is not None and self._reuse_matches(reuse, fresh, method):
+            if (reuse is not None and self._reuse_matches(reuse, fresh, method)
+                    and reuse.meta.get("site_order_id") == site_order_id):
                 intent = self._intent(reuse, fresh, autorenew)
                 if method == "stars":
                     ok = await self._send_invoice(tg, reuse.id, intent, gift=gift)
@@ -292,7 +294,8 @@ class CheckoutServiceImpl:
                 return StartResult(intent=intent, reused=True)
             if method == "stars":
                 return await self._start_stars(tg, fresh, kind=kind, user=user)
-            return await self._start_yookassa(tg, fresh, kind=kind, autorenew=autorenew, user=user, now=now)
+            return await self._start_yookassa(tg, fresh, kind=kind, autorenew=autorenew, user=user,
+                                              now=now, site_order_id=site_order_id)
 
     @staticmethod
     def _reuse_matches(rec: Any, quote: Any, method: str) -> bool:
@@ -317,7 +320,8 @@ class CheckoutServiceImpl:
         )
 
     async def _start_yookassa(self, tg: int, quote: Any, *, kind: str, autorenew: bool,
-                              user: Optional[Mapping[str, Any]], now=None) -> StartResult:
+                              user: Optional[Mapping[str, Any]], now=None,
+                              site_order_id: Optional[str] = None) -> StartResult:
         from app.domain.models import PaymentIntent, PaymentKind
         from app.domain.texts import months_ru
 
@@ -326,7 +330,9 @@ class CheckoutServiceImpl:
         # (after the old one was paid or expired) must get a NEW payment, so the
         # key is not derived from (user, plan, months): the pending reuse above
         # already covers double clicks.
-        key = f"co:{tg}:{uuid.uuid4().hex}"
+        if site_order_id is not None:
+            site_order_id = str(uuid.UUID(site_order_id))
+        key = "site:" + site_order_id if site_order_id else f"co:{tg}:{uuid.uuid4().hex}"
         description = f"CRS VPN {quote.title}, {months_ru(quote.months)}".replace(" ", " ")
         if kind == "gift":
             description = f"Подарок: {description}"
@@ -334,6 +340,8 @@ class CheckoutServiceImpl:
             "tg_user_id": tg, "plan_code": quote.plan_code, "period_months": quote.months,
             "expected_amount": quote.amount_rub, "kind": kind, "autorenew": int(autorenew),
         }
+        if site_order_id:
+            metadata["site_order_id"] = site_order_id
         intent = PaymentIntent(plan_code=quote.plan_code, months=quote.months, amount_rub=quote.amount_rub,
                                kind=PaymentKind(kind), telegram_id=tg, autorenew=autorenew)
         try:
@@ -347,13 +355,19 @@ class CheckoutServiceImpl:
         if not intent.external_id or not intent.confirmation_url:
             logger.error(f"checkout: provider returned no id/url tg_id={tg}")
             return StartResult(error="create_failed")
+        rec = await self.d.store.get_by_external(intent.external_id)
+        if rec is not None:
+            if rec.telegram_id != tg or rec.meta.get("site_order_id") != site_order_id:
+                return StartResult(error="create_failed")
+            return StartResult(intent=replace(intent, payment_id=rec.id, created_at=rec.created_at), reused=True)
         rec = await self.d.store.create(
             tg, provider="yookassa", external_id=intent.external_id, amount=Decimal(quote.amount_rub),
             currency="RUB", status="pending", plan_code=quote.plan_code, months=quote.months, kind=kind,
             method="yookassa", description=description,
             meta={"plan_code": quote.plan_code, "period_months": quote.months,
                   "expected_amount": quote.amount_rub, "confirmation_url": intent.confirmation_url,
-                  "autorenew": autorenew, "kind": kind, "idempotence_key": key},
+                  "autorenew": autorenew, "kind": kind, "idempotence_key": key,
+                  **({"site_order_id": site_order_id} if site_order_id else {})},
             user=user,
         )
         logger.info(f"checkout: payment created id={rec.id} ext={rec.external_id} tg_id={tg} "

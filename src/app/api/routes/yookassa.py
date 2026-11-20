@@ -205,6 +205,20 @@ async def yookassa_webhook(request: Request):
             logger.error("Бот не инициализирован")
             raise HTTPException(status_code=500, detail="Bot not initialized")
 
+        # The same verified webhook also handles UUID-owned website orders.
+        from app.services.site_commerce import handle_site_notification, SiteCommerceError
+        try:
+            site_result = await handle_site_notification(data)
+        except SiteCommerceError as exc:
+            if exc.status == 409:
+                return JSONResponse(status_code=200, content={"status": "ignored"})
+            return JSONResponse(status_code=503, content={"status": "retry"})
+        except Exception as exc:
+            logger.warning("site webhook failure type={}", type(exc).__name__)
+            return JSONResponse(status_code=503, content={"status": "retry"})
+        if site_result is not None:
+            return JSONResponse(status_code=200, content={"status": "ok", "processed": site_result})
+
         # Обрабатываем в зависимости от события
         if event == "payment.succeeded":
             # 3.0: единая точка обработки оплаты: Fulfillment (сверка с API YooKassa,

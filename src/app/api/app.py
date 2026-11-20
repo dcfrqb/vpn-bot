@@ -49,7 +49,20 @@ async def lifespan(app: FastAPI):
 
     set_container(build_container(bot_instance))
 
-    yield
+    site_worker = None
+    if settings.SITE_COMMERCE_RECOVERY_ENABLED:
+        import asyncio
+        from app.services.site_commerce import commerce, recovery_loop
+        site_worker = asyncio.create_task(recovery_loop(commerce()), name="site-payment-recovery")
+    try:
+        yield
+    finally:
+        if site_worker:
+            import asyncio
+            from contextlib import suppress
+            site_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await site_worker
 
     # Закрытие бота при остановке
     if bot_instance:
@@ -85,3 +98,11 @@ from app.api.routes import remnawave as remnawave_routes  # noqa: E402
 app.include_router(health_routes.router)
 app.include_router(yookassa_routes.router)
 app.include_router(remnawave_routes.router)
+
+# Website checkout is isolated from legacy bot orders and disabled by default.
+from app.api.site_checkout import router as site_checkout_router, error_handler as site_error_handler  # noqa: E402
+from app.services.site_commerce import SiteCommerceError  # noqa: E402
+from app.services.site_store import SiteBusy  # noqa: E402
+app.add_exception_handler(SiteCommerceError, site_error_handler)
+app.add_exception_handler(SiteBusy, site_error_handler)
+app.include_router(site_checkout_router)

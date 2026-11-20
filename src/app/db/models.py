@@ -583,3 +583,28 @@ class Trial(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+
+class SiteCustomer(Base):
+    """Website account identity; no synthetic Telegram users are created."""
+    __tablename__ = "site_customers"
+    account_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    telegram_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, unique=True)
+    backend: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (CheckConstraint("backend IN ('web', 'telegram')", name="ck_site_customer_backend"),)
+
+
+class SiteOrder(Base):
+    __tablename__ = "site_orders"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(36), ForeignKey("site_customers.account_id"), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    __table_args__ = (CheckConstraint(
+        "state IN ('creating','pending','paid','provisioning','fulfilled','canceled','held','failed','refunded','refunding')",
+        name="ck_site_order_state"),)

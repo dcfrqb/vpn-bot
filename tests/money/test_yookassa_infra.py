@@ -205,3 +205,22 @@ async def test_stars_refund_already_refunded_counts_as_done():
 
     assert await TelegramStarsGateway(Bot("Bad Request: CHARGE_ALREADY_REFUNDED")).refund(5, "c") is True
     assert await TelegramStarsGateway(Bot("Bad Request: CHARGE_NOT_FOUND")).refund(5, "c") is False
+
+
+async def test_site_order_returns_to_owned_status_page_without_changing_bot_return():
+    from uuid import uuid4
+    seen = []
+    key = str(uuid4())
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=PAYMENT)
+    settings = _Settings()
+    settings.SITE_PUBLIC_ORIGIN = 'https://vpn.example.com'
+    settings.SITE_PAYMENT_TEST_MODE = True
+    gateway = YooKassaGateway(client_factory=lambda: _client(handler), settings=settings)
+    intent = PaymentIntent(plan_code='lite', months=1, amount_rub=129, kind=PaymentKind.SUBSCRIPTION, telegram_id=5)
+    await gateway.create_payment(intent, description='Site', idempotence_key='site:'+key, metadata={'site_order_id':key})
+    assert seen[-1]['confirmation']['return_url'] == 'https://vpn.example.com/checkout/'+key
+    assert not seen[-1].get('save_payment_method')
+    await gateway.create_payment(intent, description='Bot', idempotence_key='bot:1')
+    assert seen[-1]['confirmation']['return_url'] == settings.YOOKASSA_RETURN_URL
